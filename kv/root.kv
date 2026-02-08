@@ -1,0 +1,48 @@
+# kv/root.kv
+#:import COLORS app.theme.COLORS
+
+FloatLayout:
+    canvas.before:
+        Color:
+            rgba: 0, 0, 0, 1
+        Rectangle:
+            pos: self.pos
+            size: self.size
+
+    # 隐藏的摄像头数据源
+    CameraView:
+        id: camera_view
+        opacity: 0
+
+    # 顶部 HUD 仪表盘
+    GyroPanel:
+        id: gyro_panel
+        size_hint: (1, 0.1)
+        pos_hint: {'top': 1}
+
+    # 中心机器人脸部 (自动关联 camera_view)
+    RobotFace:
+        id: face
+        camera_view: camera_view
+        size_hint: (0.8, 0.6)
+        pos_hint: {'center_x': 0.5, 'center_y': 0.5}
+
+    # 调试面板（隐藏 widget，按钮触发）
+    DebugPanel:
+        id: debug_panel
+
+    # 左下角运行状态浮层
+    RuntimeStatusPanel:
+        id: runtime_status
+        pos_hint: {'x': 0.01, 'y': 0.08}
+    Button:
+        size_hint: None, None
+        size: dp(20), dp(20)  # \u5c04\u5927\u4e24\u500d\uff0c\u66f4\u597d\u89e6\u63a7
+        pos_hint: {'right': 0.98, 'y': 0.06}
+        background_normal: ''
+        background_down: ''
+        on_release: app.root_widget.ids.debug_panel.open_debug()
+        Image:
+            source: 'assets/icon_debug.png'
+            size: self.parent.size
+            pos: self.parent.pos

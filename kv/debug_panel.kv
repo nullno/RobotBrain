@@ -1,0 +1,17 @@
+<DebugPanel>:
+    # 只是占位，实际按钮在 root.kv 中以 ImageButton 形式显示
+
+# 使用可复用样式的按钮（若需要）
+<DebugActionButton@Button>:
+    size_hint: (None, None)
+    size: dp(44), dp(44)
+    background_normal: ''
+    background_down: ''
+
+<TabbedPanelItem>:
+    canvas.before:
+        Color:
+            rgba: 1, 1, 1, 0
+        Rectangle:
+            pos: self.pos
+            size: self.size

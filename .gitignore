@@ -1,0 +1,32 @@
+# Python 编译文件
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 虚拟环境
+venv/
+env/
+.venv/
+
+# IDE / 编辑器
+.vscode/
+.idea/
+*.swp
+
+# 测试 / 覆盖率
+.coverage
+htmlcov/
+.tox/
+.pytest_cache/
+
+# 构建 / 打包
+build/
+dist/
+*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# 操作系统文件
+.DS_Store
+Thumbs.db

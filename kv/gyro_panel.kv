@@ -1,0 +1,25 @@
+#:import COLORS app.theme.COLORS
+
+<GyroPanel>:
+    orientation: "horizontal"
+    spacing: 10
+    padding: 10
+    canvas.before:
+        Color:
+            rgba: COLORS["card"]
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [18]
+
+    Label:
+        text: "{:.1f}".format(root.pitch)
+        color: COLORS["primary"]
+
+    Label:
+        text: "{:.1f}".format(root.roll)
+        color: COLORS["primary"]
+
+    Label:
+        text: "{:.1f}".format(root.yaw)
+        color: COLORS["primary"]

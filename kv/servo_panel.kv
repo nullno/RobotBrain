@@ -1,0 +1,18 @@
+<ServoPanel>:
+    orientation: "vertical"
+    spacing: 6
+    padding: 8
+
+    Label:
+        text: "🦾 Servo Control (1–25)"
+        size_hint_y: None
+        height: 36
+        bold: True
+
+    ScrollView:
+        GridLayout:
+            id: container
+            cols: 1
+            size_hint_y: None
+            height: self.minimum_height
+            spacing: 6
