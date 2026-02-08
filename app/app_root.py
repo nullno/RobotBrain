@@ -76,7 +76,8 @@ class RobotDashboardApp(App):
 
         # ---------- 硬件 ----------
         try:
-            dev_port = "/dev/ttyUSB0" if platform == "android" else "COM3"
+            dev_port = "/dev/ttyUSB0" if platform == "android" else "COM6"
+            self._dev_port = dev_port
             self.servo_bus = ServoBus(port=dev_port)
         except Exception as e:
             print(f"❌ 串口初始化失败: {e}")
@@ -184,6 +185,11 @@ class RobotDashboardApp(App):
         try:
             usb_otg.start_monitor()
             RuntimeStatusLogger.log_info('串口/OTG 监测已启动')
+            try:
+                # 注册 OTG 设备事件回调，热插拔时尝试重建 ServoBus 并刷新 UI
+                usb_otg.register_device_callback(self._on_otg_event)
+            except Exception:
+                pass
         except Exception as e:
             try:
                 RuntimeStatusLogger.log_error(f"OTG 监测启动失败: {e}")
@@ -191,6 +197,101 @@ class RobotDashboardApp(App):
                 print(f"OTG 监测启动失败: {e}")
 
         return self.root_widget
+
+    def _on_otg_event(self, event, device_id):
+        """处理 OTG 插拔事件：在设备插入时尝试重建 ServoBus 并刷新界面；拔出时清理状态。"""
+        try:
+            # 在后台执行 I/O/初始化以避免阻塞主线程
+            def _handle():
+                try:
+                    if event == 'added':
+                        # 解析 device_id 中的实际串口端口名（如 COM6 或 /dev/ttyUSB0）
+                        def _parse_port(dev_id):
+                            try:
+                                if not dev_id:
+                                    return None
+                                if '::' in dev_id:
+                                    return dev_id.split('::', 1)[0]
+                                import re
+                                m = re.search(r'(COM\d+)', dev_id, re.I)
+                                if m:
+                                    return m.group(1)
+                                m = re.search(r'(/dev/tty[^,;\s]+)', dev_id)
+                                if m:
+                                    return m.group(1)
+                                return dev_id
+                            except Exception:
+                                return None
+
+                        port = _parse_port(device_id) or getattr(self, '_dev_port', None) or ("/dev/ttyUSB0" if platform == "android" else "COM6")
+                        # 仅在当前没有可用硬件时尝试重建
+                        if not getattr(self, 'servo_bus', None) or getattr(self.servo_bus, 'is_mock', True):
+                            try:
+                                # 先保存端口以便下次使用
+                                self._dev_port = port
+                                sb = ServoBus(port=port)
+                                # 如果成功连接硬件（非 mock），替换并初始化 motion_controller
+                                if sb and not getattr(sb, 'is_mock', True):
+                                    # 关闭旧实例
+                                    try:
+                                        if getattr(self, 'servo_bus', None) and hasattr(self.servo_bus, 'close'):
+                                            try:
+                                                self.servo_bus.close()
+                                            except Exception:
+                                                pass
+                                    except Exception:
+                                        pass
+                                    self.servo_bus = sb
+                                    try:
+                                        imu = IMUReader(simulate=False)
+                                        imu.start()
+                                        self.motion_controller = MotionController(self.servo_bus.manager, balance_ctrl=self.balance_ctrl, imu_reader=imu, neutral_positions={})
+                                    except Exception:
+                                        self.motion_controller = None
+                                    try:
+                                        RuntimeStatusLogger.log_info(f'检测到 OTG 设备，已连接串口: {port}')
+                                    except Exception:
+                                        pass
+                                    # 刷新调试面板和状态卡片
+                                    try:
+                                        Clock.schedule_once(lambda dt: self.root_widget.ids.debug_panel.refresh_servo_status(), 0)
+                                        Clock.schedule_once(lambda dt: self.root_widget.ids.runtime_status.refresh() if hasattr(self.root_widget.ids.runtime_status, 'refresh') else None, 0)
+                                    except Exception:
+                                        pass
+                            except Exception:
+                                pass
+                    elif event == 'removed':
+                        # 简单清理：优雅关闭 servo_bus 与 motion_controller，并刷新 UI
+                        try:
+                            if getattr(self, 'servo_bus', None) and hasattr(self.servo_bus, 'close'):
+                                try:
+                                    self.servo_bus.close()
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+                        try:
+                            self.servo_bus = None
+                        except Exception:
+                            pass
+                        try:
+                            self.motion_controller = None
+                        except Exception:
+                            pass
+                        try:
+                            RuntimeStatusLogger.log_info(f'串口设备已拔出: {device_id}')
+                        except Exception:
+                            pass
+                        try:
+                            Clock.schedule_once(lambda dt: self.root_widget.ids.debug_panel.refresh_servo_status(), 0)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+            threading.Thread(target=_handle, daemon=True).start()
+        except Exception:
+            pass
 
     # ================== 硬件 ==================
     def _setup_gyroscope(self):

@@ -14,7 +14,7 @@ import serial
 
 
 def main():
-    port = input('Serial port (e.g. COM3) [COM3]: ') or 'COM3'
+    port = input('Serial port (e.g. COM6) [COM6]: ') or 'COM6'
     baud = int(input('Baudrate [115200]: ') or 115200)
     sid = int(input('Servo ID to test [1]: ') or 1)
     try:

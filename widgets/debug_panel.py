@@ -288,6 +288,11 @@ class DebugPanel(Widget):
         sv.add_widget(self._status_grid)
         t_status.add_widget(sv)
         tp.add_widget(t_status)
+        # 添加单舵机独立调试 Tab（不参与主流程）
+        try:
+            self._build_single_servo_tab(tp)
+        except Exception:
+            pass
 
         tp.bind(current_tab=lambda inst, val: self._update_tab_highlight(inst, val))
         Clock.schedule_once(lambda dt: self._update_tab_highlight(tp, tp.current_tab), 0)
@@ -623,6 +628,16 @@ class DebugPanel(Widget):
             self._show_info_popup('MotionController 未初始化或为 MOCK 模式')
             return
 
+        # 在执行任何主流程动作前，确保扭矩已开启
+        try:
+            if hasattr(app, 'servo_bus') and app.servo_bus and not getattr(app.servo_bus, 'is_mock', True):
+                try:
+                    app.servo_bus.set_torque(True)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
         try:
             from widgets.runtime_status import RuntimeStatusLogger
         except:
@@ -657,3 +672,145 @@ class DebugPanel(Widget):
             if RuntimeStatusLogger:
                 RuntimeStatusLogger.log_error(f"动作 {action} 执行失败: {e}")
             self._show_info_popup(f'动作执行失败: {e}')
+
+    # ================= 单舵机快捷调试 =================
+    def _build_single_servo_tab(self, tp):
+        app = App.get_running_app()
+        t_single = TabbedPanelItem(text='单舵机')
+        self._style_tab(t_single)
+
+        box = BoxLayout(orientation='vertical', padding=8, spacing=8)
+
+        # ID 控制行
+        id_row = BoxLayout(size_hint_y=None, height=44, spacing=6)
+        lbl = Label(text='ID:', size_hint_x=None, width=36, color=(0.8, 0.9, 1, 1))
+        self._single_id_label = Label(text='1', size_hint_x=None, width=40)
+        btn_dec = TechButton(text='-')
+        btn_inc = TechButton(text='+')
+        # id_row.add_widget(lbl)
+        id_row.add_widget(btn_dec)
+        id_row.add_widget(self._single_id_label)
+        id_row.add_widget(btn_inc)
+        box.add_widget(id_row)
+
+        # 快捷操作行
+        row = GridLayout(cols=2, spacing=8, size_hint_y=None, height=200)
+        btn_zero = TechButton(text='归零/回中位')
+        btn_60 = TechButton(text='转 60°')
+        btn_360 = TechButton(text='转 360°')
+        btn_read = TechButton(text='读取状态')
+        btn_torque_on = TechButton(text='扭矩 ON')
+        btn_torque_off = TechButton(text='扭矩 OFF')
+
+        row.add_widget(btn_zero)
+        row.add_widget(btn_read)
+        row.add_widget(btn_60)
+        row.add_widget(btn_360)
+        row.add_widget(btn_torque_on)
+        row.add_widget(btn_torque_off)
+
+        box.add_widget(row)
+        t_single.add_widget(box)
+        tp.add_widget(t_single)
+
+        # helpers
+        def _get_sid():
+            try:
+                return int(self._single_id_label.text)
+            except Exception:
+                return 1
+
+        def _set_sid(n):
+            n = max(1, min(250, n))
+            self._single_id_label.text = str(n)
+
+        def _inc(_):
+            _set_sid(_get_sid() + 1)
+
+        def _dec(_):
+            _set_sid(_get_sid() - 1)
+
+        def _ensure_torque():
+            app = App.get_running_app()
+            try:
+                if hasattr(app, 'servo_bus') and app.servo_bus and not getattr(app.servo_bus, 'is_mock', True):
+                    app.servo_bus.set_torque(True)
+                    return True
+            except Exception:
+                pass
+            return False
+
+        def _move_to_angle(angle_deg):
+            app = App.get_running_app()
+            sid = _get_sid()
+            if not hasattr(app, 'servo_bus') or not app.servo_bus or getattr(app.servo_bus, 'is_mock', True):
+                self._show_info_popup('未连接舵机或为 MOCK 模式')
+                return
+            def _do():
+                try:
+                    _ensure_torque()
+                    mgr = app.servo_bus.manager
+                    pos = int(angle_deg / 360.0 * 4095)
+                    mgr.set_position_time(sid, pos, time_ms=400)
+                    Clock.schedule_once(lambda dt: self._show_info_popup(f'ID {sid} 转到 {angle_deg}°'))
+                except Exception as e:
+                    msg = f'移动失败: {e}'
+                    Clock.schedule_once(lambda dt, m=msg: self._show_info_popup(m))
+            threading.Thread(target=_do, daemon=True).start()
+
+        def _move_zero(_):
+            _move_to_angle(0)
+
+        def _move_60(_):
+            _move_to_angle(60)
+
+        def _move_360(_):
+            _move_to_angle(360)
+
+        def _read_status(_):
+            app = App.get_running_app()
+            sid = _get_sid()
+            if not hasattr(app, 'servo_bus') or not app.servo_bus or getattr(app.servo_bus, 'is_mock', True):
+                self._show_info_popup('未连接舵机或为 MOCK 模式')
+                return
+            def _do_read():
+                try:
+                    mgr = app.servo_bus.manager
+                    pos = mgr.read_data_by_name(sid, 'CURRENT_POSITION')
+                    temp = mgr.read_data_by_name(sid, 'CURRENT_TEMPERATURE')
+                    volt = mgr.read_data_by_name(sid, 'CURRENT_VOLTAGE')
+                    Clock.schedule_once(lambda dt: self._show_info_popup(f'ID {sid} -> pos:{pos} temp:{temp}C volt:{volt}V'))
+                except Exception as e:
+                    Clock.schedule_once(lambda dt: self._show_info_popup(f'读取失败: {e}'))
+            threading.Thread(target=_do_read, daemon=True).start()
+
+        def _torque_on(_):
+            app = App.get_running_app()
+            try:
+                if hasattr(app, 'servo_bus') and app.servo_bus and not getattr(app.servo_bus, 'is_mock', True):
+                    app.servo_bus.set_torque(True)
+                    self._show_info_popup('已发送：扭矩 ON')
+                else:
+                    self._show_info_popup('ServoBus 未连接')
+            except Exception as e:
+                self._show_info_popup(f'扭矩操作失败: {e}')
+
+        def _torque_off(_):
+            app = App.get_running_app()
+            try:
+                if hasattr(app, 'servo_bus') and app.servo_bus and not getattr(app.servo_bus, 'is_mock', True):
+                    app.servo_bus.set_torque(False)
+                    self._show_info_popup('已发送：扭矩 OFF')
+                else:
+                    self._show_info_popup('ServoBus 未连接')
+            except Exception as e:
+                self._show_info_popup(f'扭矩操作失败: {e}')
+
+        btn_inc.bind(on_release=_inc)
+        btn_dec.bind(on_release=_dec)
+        btn_zero.bind(on_release=_move_zero)
+        btn_60.bind(on_release=_move_60)
+        btn_360.bind(on_release=_move_360)
+        btn_read.bind(on_release=_read_status)
+        btn_torque_on.bind(on_release=_torque_on)
+        btn_torque_off.bind(on_release=_torque_off)

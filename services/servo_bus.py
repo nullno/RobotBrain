@@ -19,6 +19,21 @@ class ServoBus:
             print(f"⚠️  Hardware not found: {e}. Switching to MOCK mode.")
             self.is_mock = True
 
+    def close(self):
+        """优雅关闭串口并切换到 MOCK 模式。"""
+        try:
+            if not self.is_mock and hasattr(self, 'uart') and self.uart:
+                try:
+                    self.uart.close()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
+            self.is_mock = True
+        except Exception:
+            pass
+
     def move(self, sid, position, time_ms=300):
         """单舵机控制 (对应 set_position.py)"""
         if self.is_mock: return

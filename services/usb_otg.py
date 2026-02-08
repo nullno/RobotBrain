@@ -26,6 +26,7 @@ except Exception:
 _monitor_thread = None
 _stop_event = None
 _last_devices = set()
+_callbacks = []
 
 
 def _scan_devices():
@@ -38,7 +39,7 @@ def _scan_devices():
                 from serial.tools import list_ports
                 ports = list_ports.comports()
                 for p in ports:
-                    # 使用 device (例如 COM3) 加上 description 做唯一标识
+                    # 使用 device (例如 COM6) 加上 description 做唯一标识
                     dev_id = f"{p.device}::{p.description}"
                     devices.add(dev_id)
             except Exception:
@@ -98,6 +99,12 @@ def _monitor_loop(poll_interval=1.0):
                     try:
                         if _kivy_platform == 'android':
                             Clock.schedule_once(lambda dt, dev=d: _show_otg_popup(dev))
+                        # 调用注册的回调（主线程）通知应用热插拔事件
+                        for cb in list(_callbacks):
+                            try:
+                                Clock.schedule_once(lambda dt, c=cb, ev='added', dev=d: c(ev, dev))
+                            except Exception:
+                                pass
                     except Exception:
                         pass
             if removed:
@@ -110,6 +117,12 @@ def _monitor_loop(poll_interval=1.0):
                             logging.info(msg)
                     except Exception:
                         pass
+                    # 通知回调（主线程）
+                    for cb in list(_callbacks):
+                        try:
+                            Clock.schedule_once(lambda dt, c=cb, ev='removed', dev=d: c(ev, dev))
+                        except Exception:
+                            pass
             _last_devices = now
         except Exception as e:
             try:
@@ -130,6 +143,23 @@ def start_monitor():
     _stop_event = threading.Event()
     _monitor_thread = threading.Thread(target=_monitor_loop, args=(1.0,), daemon=True)
     _monitor_thread.start()
+
+
+def register_device_callback(cb):
+    """注册一个回调，回调签名为 fn(event, device_id)，event 为 'added' 或 'removed'。"""
+    try:
+        if cb and cb not in _callbacks:
+            _callbacks.append(cb)
+    except Exception:
+        pass
+
+
+def unregister_device_callback(cb):
+    try:
+        if cb in _callbacks:
+            _callbacks.remove(cb)
+    except Exception:
+        pass
 
 
 def stop_monitor():
