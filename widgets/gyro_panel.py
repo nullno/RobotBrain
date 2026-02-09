@@ -42,9 +42,9 @@ class GyroPanel(Widget):
 
         # 新实现（小巧精致版）：去掉边框，绘制旋转的地平线以直观展示前后（pitch）和左右（roll）倾角
         from kivy.metrics import dp
-        max_w = dp(180)  # 扩大显示面积以提高（左右）灵敏度观察
+        max_w = dp(1000)  # 扩大显示面积以提高（左右）灵敏度观察
         w = min(self.width * 0.62, max_w)
-        h = dp(90)  # 也扩大高度
+        h = dp(100)  # 也扩大高度
         x, y = self.center_x - w / 2, self.top - h - dp(6)
         cx, cy = x + w / 2, y + h / 2
 
@@ -70,7 +70,7 @@ class GyroPanel(Widget):
             Rotate(angle=-self.roll, origin=(cx, cy))
 
             Color(NEON_CYAN[0], NEON_CYAN[1], NEON_CYAN[2], 0.95)
-            Line(points=[x - w, cy + pitch_offset, x + w * 2, cy + pitch_offset], width=1.8)
+            Line(points=[x - w, cy + pitch_offset, x + w * 2, cy + pitch_offset], width=0.5)
 
             # 刻度（左右前后提示）
             Color(r, g, b, 0.9)

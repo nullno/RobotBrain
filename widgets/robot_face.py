@@ -3,8 +3,14 @@ import random
 from kivy.uix.widget import Widget
 from kivy.clock import Clock
 from kivy.graphics import (
-    Color, RoundedRectangle, Line, Ellipse,
-    StencilPush, StencilUse, StencilPop, StencilUnUse
+    Color,
+    RoundedRectangle,
+    Line,
+    Ellipse,
+    StencilPush,
+    StencilUse,
+    StencilPop,
+    StencilUnUse,
 )
 from app.theme import COLORS, FONT
 from kivy.core.text import Label as CoreLabel
@@ -29,8 +35,8 @@ class RobotFace(Widget):
         self.eye_open = 1.0
         self.target_eye_open = 1.0
         self.mouth_open = 0.0
-        self.look_x = 0.0   # -1 ~ 1
-        self.look_y = 0.0   # -1 ~ 1
+        self.look_x = 0.0  # -1 ~ 1
+        self.look_y = 0.0  # -1 ~ 1
         self.target_look_x = 0.0
         self.target_look_y = 0.0
         self.breath = 0.0
@@ -54,10 +60,10 @@ class RobotFace(Widget):
         self.bind(pos=self.draw, size=self.draw)
 
         # 说话字母显示缓冲
-        self.speech_text = ''
+        self.speech_text = ""
         self._speech_clear_ev = None
         try:
-            RuntimeStatusLogger.log_info('RobotFace 初始化完成')
+            RuntimeStatusLogger.log_info("RobotFace 初始化完成")
         except Exception:
             pass
 
@@ -66,7 +72,7 @@ class RobotFace(Widget):
         try:
             self.speech_text = str(text)
         except Exception:
-            self.speech_text = ''
+            self.speech_text = ""
         # 重置清除计时
         if self._speech_clear_ev:
             self._speech_clear_ev.cancel()
@@ -74,7 +80,7 @@ class RobotFace(Widget):
         self.draw()
 
     def _clear_speech_text(self, dt=None):
-        self.speech_text = ''
+        self.speech_text = ""
         self._speech_clear_ev = None
         self.draw()
 
@@ -86,24 +92,37 @@ class RobotFace(Widget):
     #     return super().on_touch_down(touch)
 
     def _open_ai_input(self):
-        layout = BoxLayout(orientation='vertical', spacing=8, padding=8)
-        ti = TextInput(hint_text='对机器人说些什么...', size_hint=(1, None), height=120, multiline=True, font_name=FONT)
+        layout = BoxLayout(orientation="vertical", spacing=8, padding=8)
+        ti = TextInput(
+            hint_text="对机器人说些什么...",
+            size_hint=(1, None),
+            height=120,
+            multiline=True,
+            font_name=FONT,
+        )
         btn_bar = BoxLayout(size_hint=(1, None), height=40)
-        send = Button(text='发送')
-        cancel = Button(text='取消')
+        send = Button(text="发送")
+        cancel = Button(text="取消")
         btn_bar.add_widget(cancel)
         btn_bar.add_widget(send)
         layout.add_widget(ti)
         layout.add_widget(btn_bar)
 
-        popup = Popup(title='与机器人对话', content=layout, size_hint=(0.9, None), height=240, background='', background_color=(0, 0, 0, 0))
+        popup = Popup(
+            title="与机器人对话",
+            content=layout,
+            size_hint=(0.9, None),
+            height=240,
+            background="",
+            background_color=(0, 0, 0, 0),
+        )
 
         def _send(*args):
             txt = ti.text.strip()
             if txt:
                 try:
                     app = App.get_running_app()
-                    if hasattr(app, 'ai_core') and app.ai_core:
+                    if hasattr(app, "ai_core") and app.ai_core:
                         app.ai_core.process_input(user_text=txt)
                 except Exception:
                     pass
@@ -117,7 +136,7 @@ class RobotFace(Widget):
     def set_emotion(self, emo):
         self.target_emotion = emo
         try:
-            RuntimeStatusLogger.log_info(f'RobotFace 情绪设为: {emo}')
+            RuntimeStatusLogger.log_info(f"RobotFace 情绪设为: {emo}")
         except Exception:
             pass
 
@@ -197,8 +216,8 @@ class RobotFace(Widget):
             if tex:
                 tw, th = tex.size
                 scale = max(eye_w / tw, eye_h / th)
-                draw_w = tw * scale
-                draw_h = th * scale
+                draw_w = tw * scale * 1.5
+                draw_h = th * scale * 1.5
                 ox = (draw_w - eye_w) / 2
                 oy = (draw_h - eye_h) / 2
 
@@ -214,7 +233,7 @@ class RobotFace(Widget):
                 RoundedRectangle(
                     texture=tex,
                     pos=(ex - ox + shift_x, eye_y - oy + shift_y),
-                    size=(draw_w, draw_h)
+                    size=(draw_w, draw_h),
                 )
             else:
                 self._draw_robot_eye_base(ex, eye_y, eye_w, eye_h, base_color)
@@ -234,13 +253,22 @@ class RobotFace(Widget):
             r_col, g_col, b_col = base_color[0], base_color[1], base_color[2]
             # 外层柔和光（更大宽度、低透明度）
             Color(r_col, g_col, b_col, 0.18)
-            Line(rounded_rectangle=(ex-6, eye_y-6, eye_w+12, eye_h+12, 44), width=20)
+            Line(
+                rounded_rectangle=(ex - 6, eye_y - 6, eye_w + 12, eye_h + 12, 44),
+                width=20,
+            )
             # 中层光晕
             Color(r_col, g_col, b_col, 0.34)
-            Line(rounded_rectangle=(ex-4, eye_y-4, eye_w+8, eye_h+8, 42), width=10)
+            Line(
+                rounded_rectangle=(ex - 4, eye_y - 4, eye_w + 8, eye_h + 8, 42),
+                width=10,
+            )
             # 核心轮廓线（更粗）
             Color(r_col, g_col, b_col, 1.0)
-            Line(rounded_rectangle=(ex-3, eye_y-3, eye_w+6, eye_h+6, 40), width=3.5)
+            Line(
+                rounded_rectangle=(ex - 3, eye_y - 3, eye_w + 6, eye_h + 6, 40),
+                width=3.5,
+            )
 
         # 如果有说话字母，显示在嘴部上方靠中间位置
         if self.speech_text:
@@ -295,9 +323,9 @@ class RobotFace(Widget):
 
         # 眼皮改为不透明以遮挡视频或底图（眨眼时不透明）
         Color(0, 0, 0, 1.0)
-        RoundedRectangle(pos=(ex, ey + eh - cover), size=(ew, cover), radius=[40])
+        RoundedRectangle(pos=(ex, ey + eh - cover), size=(ew, cover), radius=[90])
         Color(0, 0, 0, 1.0)
-        RoundedRectangle(pos=(ex, ey), size=(ew, cover * 0.35), radius=[40])
+        RoundedRectangle(pos=(ex, ey), size=(ew, cover * 0.35), radius=[50])
 
     # ================= 嘴巴系统 =================
     def _draw_mouth(self, x, y, w, h, color):
@@ -330,20 +358,32 @@ class RobotFace(Widget):
 
             elif emo == "angry":
                 pts = [
-                    mx, my,
-                    mx + mw * 0.3, my + 15,
-                    mx + mw * 0.6, my - 15,
-                    mx + mw, my
+                    mx,
+                    my,
+                    mx + mw * 0.3,
+                    my + 15,
+                    mx + mw * 0.6,
+                    my - 15,
+                    mx + mw,
+                    my,
                 ]
 
             elif emo == "surprised":
                 size = mw * (0.3 + open_amt * 0.4)
                 Color(r, g, b, 0.15)
-                Ellipse(pos=(mx + mw * 0.5 - size/2, my - size/2), size=(size, size))
+                Ellipse(
+                    pos=(mx + mw * 0.5 - size / 2, my - size / 2), size=(size, size)
+                )
                 Color(r, g, b, 0.5)
-                Ellipse(pos=(mx + mw * 0.5 - size*0.45, my - size*0.45), size=(size*0.9, size*0.9))
+                Ellipse(
+                    pos=(mx + mw * 0.5 - size * 0.45, my - size * 0.45),
+                    size=(size * 0.9, size * 0.9),
+                )
                 Color(r, g, b, 1.0)
-                Ellipse(pos=(mx + mw * 0.5 - size*0.35, my - size*0.35), size=(size*0.7, size*0.7))
+                Ellipse(
+                    pos=(mx + mw * 0.5 - size * 0.35, my - size * 0.35),
+                    size=(size * 0.7, size * 0.7),
+                )
                 return
 
             elif emo == "sleepy":
@@ -363,8 +403,8 @@ class RobotFace(Widget):
                 pts = [mx, my, mx + mw, my]
 
             Color(r, g, b, 0.15)
-            Line(points=pts, width=G_W, cap='round', joint='round')
+            Line(points=pts, width=G_W, cap="round", joint="round")
             Color(r, g, b, 0.4)
-            Line(points=pts, width=M_W, cap='round', joint='round')
+            Line(points=pts, width=M_W, cap="round", joint="round")
             Color(r, g, b, 1.0)
-            Line(points=pts, width=C_W, cap='round', joint='round')
+            Line(points=pts, width=C_W, cap="round", joint="round")

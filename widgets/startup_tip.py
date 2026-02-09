@@ -50,7 +50,7 @@ class StartupTip(BoxLayout):
         else:
             default_msg = '应用已启动\n按下面板按钮开始调试'
         
-        lbl = Label(text=msg or default_msg, font_size='20sp', halign='center', valign='middle')
+        lbl = Label(text=msg or default_msg, font_size='18sp', halign='center', valign='middle')
         lbl.bind(size=lambda inst, val: setattr(inst, 'text_size', (val[0], None)))
 
         # 底部按钮：在 Android 上增大高度以便触控
