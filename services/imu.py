@@ -55,15 +55,25 @@ class IMUReader:
         # Try plyer/Android sensors (best-effort, may not exist)
         started = False
         try:
-            # plyer.gyroscope/accelerometer may exist on Android builds
-            from plyer import gyroscope
-            try:
-                gyroscope.enable()
-                self._gyroscope = gyroscope
-                self._thread = threading.Thread(target=self._plyer_loop, daemon=True)
-                self._thread.start()
-                started = True
-            except Exception:
+            if _kivy_platform == 'android':
+                try:
+                    # 延迟加载以避免在桌面平台触发 plyer 平台子模块导入错误
+                    import importlib
+                    gyroscope = importlib.import_module('plyer.gyroscope')
+                    try:
+                        gyroscope.enable()
+                        self._gyroscope = gyroscope
+                        self._thread = threading.Thread(target=self._plyer_loop, daemon=True)
+                        self._thread.start()
+                        started = True
+                    except Exception:
+                        started = False
+                except ModuleNotFoundError:
+                    # 在非 Android 环境或缺少实现时安静回退
+                    started = False
+                except Exception:
+                    started = False
+            else:
                 started = False
         except Exception:
             started = False

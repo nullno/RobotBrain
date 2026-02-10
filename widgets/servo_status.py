@@ -13,7 +13,9 @@ class ServoStatus(BoxLayout):
         self.btn = Button(text='刷新状态', size_hint=(1, None), height=36)
         self.btn.bind(on_release=lambda *a: self.refresh())
         self.add_widget(self.btn)
-        Clock.schedule_interval(lambda dt: self.refresh(), 5.0)
+        # 更频繁地刷新以提高界面实时性
+        Clock.schedule_once(lambda dt: self.refresh(), 0)
+        Clock.schedule_interval(lambda dt: self.refresh(), 1.0)
 
     def refresh(self):
         app = App.get_running_app()

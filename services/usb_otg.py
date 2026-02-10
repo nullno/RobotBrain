@@ -39,7 +39,7 @@ def _scan_devices():
                 from serial.tools import list_ports
                 ports = list_ports.comports()
                 for p in ports:
-                    # 使用 device (例如 COM6) 加上 description 做唯一标识
+                    # 使用 device (例如 COM3) 加上 description 做唯一标识
                     dev_id = f"{p.device}::{p.description}"
                     devices.add(dev_id)
             except Exception:

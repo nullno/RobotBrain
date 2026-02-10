@@ -926,15 +926,19 @@ class DebugPanel(Widget):
         btn_read = SquareTechButton(text="读取状态")
         btn_60 = SquareTechButton(text="转动60°")
         btn_360 = SquareTechButton(text="转动360°")
-        btn_torque_on = SquareTechButton(text="扭矩ON")
-        btn_torque_off = SquareTechButton(text="扭矩OFF")
+        btn_torque_toggle = SquareTechButton(text="扭矩: ?")
+        btn_spin = SquareTechButton(text="间歇旋转")
+        btn_set_id = SquareTechButton(text="设置ID")
+        btn_motor_mode = SquareTechButton(text="电机模式")
 
         grid.add_widget(btn_zero)
         grid.add_widget(btn_read)
         grid.add_widget(btn_60)
         grid.add_widget(btn_360)
-        grid.add_widget(btn_torque_on)
-        grid.add_widget(btn_torque_off)
+        grid.add_widget(btn_torque_toggle)
+        grid.add_widget(btn_spin)
+        grid.add_widget(btn_set_id)
+        grid.add_widget(btn_motor_mode)
 
         grid_anchor = AnchorLayout(anchor_x="center", anchor_y="top", size_hint=(1, None))
         grid_anchor.add_widget(grid)
@@ -1020,9 +1024,8 @@ class DebugPanel(Widget):
                     mgr = app.servo_bus.manager
                     pos = int(angle_deg / 360.0 * 4095)
                     mgr.set_position_time(sid, pos, time_ms=400)
-                    Clock.schedule_once(
-                        lambda dt: self._show_info_popup(f"ID {sid} 转到 {angle_deg}°")
-                    )
+                    msg = f"ID {sid} 转到 {angle_deg}°"
+                    Clock.schedule_once(lambda dt, m=msg: self._show_info_popup(m))
                 except Exception as e:
                     msg = f"移动失败: {e}"
                     Clock.schedule_once(lambda dt, m=msg: self._show_info_popup(m))
@@ -1055,47 +1058,159 @@ class DebugPanel(Widget):
                     pos = mgr.read_data_by_name(sid, "CURRENT_POSITION")
                     temp = mgr.read_data_by_name(sid, "CURRENT_TEMPERATURE")
                     volt = mgr.read_data_by_name(sid, "CURRENT_VOLTAGE")
-                    Clock.schedule_once(
-                        lambda dt: self._show_info_popup(
-                            f"ID {sid} -> pos:{pos} temp:{temp}C volt:{volt}V"
-                        )
-                    )
+                    msg = f"ID {sid} -> pos:{pos} temp:{temp}C volt:{volt}V"
+                    Clock.schedule_once(lambda dt, m=msg: self._show_info_popup(m))
                 except Exception as e:
-                    Clock.schedule_once(
-                        lambda dt: self._show_info_popup(f"读取失败: {e}")
-                    )
+                    msg = f"读取失败: {e}"
+                    Clock.schedule_once(lambda dt, m=msg: self._show_info_popup(m))
 
             threading.Thread(target=_do_read, daemon=True).start()
 
-        def _torque_on(_):
+        # 单一扭矩开关（针对当前选中 ID）
+        def _update_torque_label(dt=None):
             app = App.get_running_app()
+            sid = _get_sid()
             try:
                 if (
                     hasattr(app, "servo_bus")
                     and app.servo_bus
                     and not getattr(app.servo_bus, "is_mock", True)
                 ):
-                    app.servo_bus.set_torque(True)
-                    self._show_info_popup("已发送：扭矩 ON")
+                    mgr = app.servo_bus.manager
+                    val = mgr.read_data_by_name(sid, "TORQUE_ENABLE")
+                    text = "扭矩: ON" if val else "扭矩: OFF"
+                    btn_torque_toggle.text = text
                 else:
-                    self._show_info_popup("ServoBus 未连接")
-            except Exception as e:
-                self._show_info_popup(f"扭矩操作失败: {e}")
+                    btn_torque_toggle.text = "扭矩: ?"
+            except Exception:
+                btn_torque_toggle.text = "扭矩: ?"
 
-        def _torque_off(_):
+        def _toggle_torque(_):
             app = App.get_running_app()
+            sid = _get_sid()
             try:
-                if (
-                    hasattr(app, "servo_bus")
-                    and app.servo_bus
-                    and not getattr(app.servo_bus, "is_mock", True)
-                ):
-                    app.servo_bus.set_torque(False)
-                    self._show_info_popup("已发送：扭矩 OFF")
-                else:
+                if not (hasattr(app, "servo_bus") and app.servo_bus and not getattr(app.servo_bus, "is_mock", True)):
                     self._show_info_popup("ServoBus 未连接")
-            except Exception as e:
-                self._show_info_popup(f"扭矩操作失败: {e}")
+                    return
+                mgr = app.servo_bus.manager
+                cur = mgr.read_data_by_name(sid, "TORQUE_ENABLE")
+                new = 0x01 if not cur else 0x00
+                mgr.write_data_by_name(sid, "TORQUE_ENABLE", new)
+                Clock.schedule_once(lambda dt: _update_torque_label(), 0.2)
+                self._show_info_popup("已切换扭矩")
+            except Exception as ex:
+                self._show_info_popup(f"扭矩操作失败: {ex}")
+
+        # 间歇旋转：在后台线程循环移动，直到停止
+        if not hasattr(self, '_spin_controllers'):
+            self._spin_controllers = {}
+
+        def _spin_toggle(_):
+            sid = _get_sid()
+            ctrl = self._spin_controllers.get(sid)
+            if ctrl and ctrl.get('running'):
+                ctrl['running'] = False
+                self._show_info_popup('停止间歇旋转')
+                return
+
+            app = App.get_running_app()
+            if not (hasattr(app, "servo_bus") and app.servo_bus and not getattr(app.servo_bus, "is_mock", True)):
+                self._show_info_popup('ServoBus 未连接')
+                return
+
+            stop_flag = {'running': True}
+            self._spin_controllers[sid] = stop_flag
+
+            def _run_spin():
+                mgr = app.servo_bus.manager
+                a = 500
+                b = 3500
+                try:
+                    while stop_flag['running']:
+                        try:
+                            mgr.set_position_time(sid, a, time_ms=400)
+                        except Exception:
+                            pass
+                        time.sleep(0.6)
+                        if not stop_flag['running']:
+                            break
+                        try:
+                            mgr.set_position_time(sid, b, time_ms=400)
+                        except Exception:
+                            pass
+                        time.sleep(0.6)
+                finally:
+                    stop_flag['running'] = False
+
+            threading.Thread(target=_run_spin, daemon=True).start()
+            self._show_info_popup('开始间歇旋转')
+
+        def _set_id(_):
+            sid = _get_sid()
+            app = App.get_running_app()
+            if not (hasattr(app, "servo_bus") and app.servo_bus and not getattr(app.servo_bus, "is_mock", True)):
+                self._show_info_popup('ServoBus 未连接')
+                return
+
+            from kivy.uix.textinput import TextInput
+            content = BoxLayout(orientation='vertical', spacing=8, padding=8)
+            ti = TextInput(text=str(sid), multiline=False, input_filter='int')
+            content.add_widget(ti)
+            btn_row = BoxLayout(size_hint_y=None, height=dp(44), spacing=8)
+            ok = TechButton(text='写入')
+            cancel = TechButton(text='取消')
+            btn_row.add_widget(ok)
+            btn_row.add_widget(cancel)
+            content.add_widget(btn_row)
+            popup = Popup(title='设置舵机ID', content=content, size_hint=(None,None), size=(320,160))
+
+            def _do_ok(_):
+                try:
+                    new_id = int(ti.text)
+                    mgr = app.servo_bus.manager
+                    mgr.write_data_by_name(sid, 'SERVO_ID', new_id)
+                    time.sleep(0.2)
+                    ok_ping = mgr.ping(new_id)
+                    popup.dismiss()
+                    self._show_info_popup('写入ID ' + ('成功' if ok_ping else '失败'))
+                except Exception as ex:
+                    popup.dismiss()
+                    self._show_info_popup(f'写ID失败: {ex}')
+
+            def _do_cancel(_):
+                popup.dismiss()
+
+            ok.bind(on_release=_do_ok)
+            cancel.bind(on_release=_do_cancel)
+            popup.open()
+
+        def _set_motor_mode(_):
+            sid = _get_sid()
+            app = App.get_running_app()
+            if not (hasattr(app, "servo_bus") and app.servo_bus and not getattr(app.servo_bus, "is_mock", True)):
+                self._show_info_popup('ServoBus 未连接')
+                return
+            content = BoxLayout(orientation='vertical', spacing=8, padding=8)
+            btn_servo = TechButton(text='舵机模式')
+            btn_dc = TechButton(text='直流电机模式')
+            btn_row = BoxLayout(size_hint_y=None, height=dp(44), spacing=8)
+            btn_row.add_widget(btn_servo)
+            btn_row.add_widget(btn_dc)
+            content.add_widget(btn_row)
+            popup = Popup(title='设置电机模式', content=content, size_hint=(None,None), size=(320,120))
+
+            def _do(mode):
+                try:
+                    mgr = app.servo_bus.manager
+                    mgr.write_data_by_name(sid, 'MOTOR_MODE', mode)
+                    popup.dismiss()
+                    self._show_info_popup('已设置电机模式')
+                except Exception as ex:
+                    popup.dismiss()
+                    self._show_info_popup(f'设置模式失败: {ex}')
+
+            btn_servo.bind(on_release=lambda *_: _do(0x01))
+            btn_dc.bind(on_release=lambda *_: _do(0x00))
 
         btn_inc.bind(on_release=_inc)
         btn_dec.bind(on_release=_dec)
@@ -1103,5 +1218,11 @@ class DebugPanel(Widget):
         btn_60.bind(on_release=_move_60)
         btn_360.bind(on_release=_move_360)
         btn_read.bind(on_release=_read_status)
-        btn_torque_on.bind(on_release=_torque_on)
-        btn_torque_off.bind(on_release=_torque_off)
+        btn_torque_toggle.bind(on_release=_toggle_torque)
+        btn_spin.bind(on_release=_spin_toggle)
+        btn_set_id.bind(on_release=_set_id)
+        btn_motor_mode.bind(on_release=_set_motor_mode)
+
+        # 更新扭矩显示当 ID 变化时，并在创建时立即刷新一次扭矩状态
+        self._single_id_label.bind(text=lambda *_: (_set_sid(_get_sid()), Clock.schedule_once(lambda dt: _update_torque_label(), 0)))
+        Clock.schedule_once(lambda dt: _update_torque_label(), 0)

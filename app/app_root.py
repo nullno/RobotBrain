@@ -26,14 +26,31 @@ from services.motion_controller import MotionController
 from services.imu import IMUReader
 from services.neutral import load_neutral
 from services import usb_otg
+try:
+    # 用于枚举串口设备以便自动检测 CH340 等适配器
+    from serial.tools import list_ports as _list_ports
+except Exception:
+    _list_ports = None
 # AICore 暂时禁用，注释掉导入
 # from services.ai_core import AICore
 import logging
 import pathlib
+import traceback
 
 try:
-    from plyer import gyroscope
-except ImportError:
+    # 仅在 Android 平台尝试延迟导入 plyer.gyroscope，避免在 Windows/macOS 上触发
+    # 因为 plyer 在某些平台上会尝试导入不存在的子模块（如 plyer.platforms.win.gyroscope）
+    if platform == 'android':
+        try:
+            import importlib
+            gyroscope = importlib.import_module('plyer.gyroscope')
+        except ModuleNotFoundError:
+            gyroscope = None
+        except Exception:
+            gyroscope = None
+    else:
+        gyroscope = None
+except Exception:
     gyroscope = None
 
 
@@ -76,12 +93,19 @@ class RobotDashboardApp(App):
 
         # ---------- 硬件 ----------
         try:
-            dev_port = "/dev/ttyUSB0" if platform == "android" else "COM6"
+            dev_port = "/dev/ttyUSB0" if platform == "android" else "COM3"
             self._dev_port = dev_port
             self.servo_bus = ServoBus(port=dev_port)
         except Exception as e:
             print(f"❌ 串口初始化失败: {e}")
             self.servo_bus = None
+
+        # 如果未能通过默认端口连接，尝试自动扫描系统串口并连接 CH340/USB-Serial 设备
+        try:
+            if not self.servo_bus or getattr(self.servo_bus, 'is_mock', True):
+                self._try_auto_connect()
+        except Exception:
+            pass
 
         # 初始化日志
         try:
@@ -170,6 +194,10 @@ class RobotDashboardApp(App):
         Clock.schedule_interval(self._demo_emotion_loop, 4.0)
         Clock.schedule_interval(self._demo_eye_move, 0.05)
 
+        # 用于循环错误节流，避免界面被频繁相同错误刷屏
+        self._last_loop_error = None
+        self._last_loop_error_time = 0
+
         # 初始化运行状态日志记录器
         try:
             runtime_status_panel = self.root_widget.ids.runtime_status
@@ -205,7 +233,7 @@ class RobotDashboardApp(App):
             def _handle():
                 try:
                     if event == 'added':
-                        # 解析 device_id 中的实际串口端口名（如 COM6 或 /dev/ttyUSB0）
+                        # 解析 device_id 中的实际串口端口名（如 COM3 或 /dev/ttyUSB0）
                         def _parse_port(dev_id):
                             try:
                                 if not dev_id:
@@ -223,36 +251,85 @@ class RobotDashboardApp(App):
                             except Exception:
                                 return None
 
-                        port = _parse_port(device_id) or getattr(self, '_dev_port', None) or ("/dev/ttyUSB0" if platform == "android" else "COM6")
-                        # 仅在当前没有可用硬件时尝试重建
+                        # 首先尝试解析 device_id 提供的端口
+                        port = _parse_port(device_id) or getattr(self, '_dev_port', None) or ("/dev/ttyUSB0" if platform == "android" else "COM3")
+                        # 若当前为 mock，则尝试使用可用端口列表连接（优先使用解析到的 port）
                         if not getattr(self, 'servo_bus', None) or getattr(self.servo_bus, 'is_mock', True):
                             try:
-                                # 先保存端口以便下次使用
+                                # 保存首选端口
                                 self._dev_port = port
-                                sb = ServoBus(port=port)
-                                # 如果成功连接硬件（非 mock），替换并初始化 motion_controller
-                                if sb and not getattr(sb, 'is_mock', True):
-                                    # 关闭旧实例
+                                # 优先尝试解析到的端口，然后回退到系统枚举的端口
+                                tried = [port]
+                                connected = False
+                                # 先尝试首选端口
+                                try_ports = list(tried)
+                                # 如果可用，使用 pyserial 列出更多候选端口（包含描述信息），优先匹配 CH340/USB-SERIAL
+                                if _list_ports:
                                     try:
-                                        if getattr(self, 'servo_bus', None) and hasattr(self.servo_bus, 'close'):
+                                        for p in _list_ports.comports():
+                                            dev = p.device
+                                            desc = (p.description or '')
+                                            if dev not in try_ports:
+                                                # 优先选取包含 CH340/USB-SERIAL 的设备
+                                                if 'ch340' in desc.lower() or 'usb-serial' in desc.lower() or 'usb serial' in desc.lower():
+                                                    try_ports.insert(0, dev)
+                                                else:
+                                                    try_ports.append(dev)
+                                    except Exception:
+                                        pass
+
+                                # 等待系统稳固枚举设备再尝试（短延迟），并重试一次以提高热插拔稳定性
+                                import time as _time
+                                _time.sleep(0.2)
+                                # 额外重试一次枚举以捕获延迟出现的 COM 端口
+                                if _list_ports:
+                                    try:
+                                        for p in _list_ports.comports():
+                                            dev = p.device
+                                            if dev not in try_ports:
+                                                try_ports.append(dev)
+                                    except Exception:
+                                        pass
+
+                                for cand in try_ports:
+                                    try:
+                                        sb = ServoBus(port=cand)
+                                        if sb and not getattr(sb, 'is_mock', True):
+                                            # 关闭旧实例
                                             try:
-                                                self.servo_bus.close()
+                                                if getattr(self, 'servo_bus', None) and hasattr(self.servo_bus, 'close'):
+                                                    try:
+                                                        self.servo_bus.close()
+                                                    except Exception:
+                                                        pass
                                             except Exception:
                                                 pass
+                                            self.servo_bus = sb
+                                            # 强制扫描已连接的舵机以确保 manager 有最新的 servo_info_dict
+                                            try:
+                                                if getattr(self.servo_bus, 'manager', None):
+                                                    try:
+                                                        self.servo_bus.manager.servo_scan(list(range(1, 26)))
+                                                    except Exception:
+                                                        pass
+                                            except Exception:
+                                                pass
+                                            connected = True
+                                            try:
+                                                imu = IMUReader(simulate=False)
+                                                imu.start()
+                                                self.motion_controller = MotionController(self.servo_bus.manager, balance_ctrl=self.balance_ctrl, imu_reader=imu, neutral_positions={})
+                                            except Exception:
+                                                self.motion_controller = None
+                                            try:
+                                                RuntimeStatusLogger.log_info(f'检测到 OTG 设备，已连接串口: {cand}')
+                                            except Exception:
+                                                pass
+                                            break
                                     except Exception:
                                         pass
-                                    self.servo_bus = sb
-                                    try:
-                                        imu = IMUReader(simulate=False)
-                                        imu.start()
-                                        self.motion_controller = MotionController(self.servo_bus.manager, balance_ctrl=self.balance_ctrl, imu_reader=imu, neutral_positions={})
-                                    except Exception:
-                                        self.motion_controller = None
-                                    try:
-                                        RuntimeStatusLogger.log_info(f'检测到 OTG 设备，已连接串口: {port}')
-                                    except Exception:
-                                        pass
-                                    # 刷新调试面板和状态卡片
+
+                                if connected:
                                     try:
                                         Clock.schedule_once(lambda dt: self.root_widget.ids.debug_panel.refresh_servo_status(), 0)
                                         Clock.schedule_once(lambda dt: self.root_widget.ids.runtime_status.refresh() if hasattr(self.root_widget.ids.runtime_status, 'refresh') else None, 0)
@@ -292,6 +369,68 @@ class RobotDashboardApp(App):
             threading.Thread(target=_handle, daemon=True).start()
         except Exception:
             pass
+
+    def _try_auto_connect(self, candidate_ports=None):
+        """尝试通过候选端口列表自动连接 ServoBus。
+        若 candidate_ports 为空，则枚举系统串口并优先匹配 CH340/USB-SERIAL 描述。
+        """
+        try:
+            candidates = []
+            if candidate_ports:
+                candidates = list(candidate_ports)
+            else:
+                # 枚举系统串口
+                if _list_ports:
+                    try:
+                        for p in _list_ports.comports():
+                            dev = p.device
+                            desc = (p.description or '')
+                            # 优先把带 CH340/USB-SERIAL 的放前面
+                            if 'ch340' in desc.lower() or 'usb-serial' in desc.lower() or 'usb serial' in desc.lower():
+                                candidates.insert(0, dev)
+                            else:
+                                candidates.append(dev)
+                    except Exception:
+                        pass
+                # 最后加入默认端口作为兜底
+                default = getattr(self, '_dev_port', None) or ("/dev/ttyUSB0" if platform == "android" else "COM3")
+                if default and default not in candidates:
+                    candidates.append(default)
+
+            for cand in candidates:
+                try:
+                    sb = ServoBus(port=cand)
+                    if sb and not getattr(sb, 'is_mock', True):
+                        try:
+                            if getattr(self, 'servo_bus', None) and hasattr(self.servo_bus, 'close'):
+                                try:
+                                    self.servo_bus.close()
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+                        self._dev_port = cand
+                        self.servo_bus = sb
+                        try:
+                            imu = IMUReader(simulate=False)
+                            imu.start()
+                            self.motion_controller = MotionController(self.servo_bus.manager, balance_ctrl=self.balance_ctrl, imu_reader=imu, neutral_positions={})
+                        except Exception:
+                            self.motion_controller = None
+                        try:
+                            RuntimeStatusLogger.log_info(f'自动连接串口成功: {cand}')
+                        except Exception:
+                            pass
+                        try:
+                            Clock.schedule_once(lambda dt: self.root_widget.ids.debug_panel.refresh_servo_status(), 0)
+                        except Exception:
+                            pass
+                        return True
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return False
 
     # ================== 硬件 ==================
     def _setup_gyroscope(self):
@@ -400,7 +539,27 @@ class RobotDashboardApp(App):
                 targets = self.balance_ctrl.compute(p, r, y)
                 self.servo_bus.move_sync(targets, time_ms=100)
         except Exception as e:
-            print(f"Loop Error: {e}")
+            try:
+                now = time.time()
+                tb = traceback.format_exc()
+                # 使用简短的首行作为对比（通常包含异常类型与消息）
+                first_line = tb.splitlines()[-1] if tb else str(e)
+                # 仅当错误信息变化或距离上次记录超过5秒时，才输出到运行面板，避免刷屏
+                if first_line != getattr(self, '_last_loop_error', None) or (now - getattr(self, '_last_loop_error_time', 0)) > 5:
+                    try:
+                        RuntimeStatusLogger.log_error(f"Loop Error: {first_line}")
+                    except Exception:
+                        pass
+                    try:
+                        logging.exception(f"Loop Error: {first_line}")
+                    except Exception:
+                        print(f"Loop Error: {first_line}")
+                    self._last_loop_error = first_line
+                    self._last_loop_error_time = now
+                # 可选：在首次出现时打印完整堆栈以便调试
+                # print(tb)
+            except Exception:
+                pass
 
     # ================== 表情 Demo ==================
     def _demo_emotion_loop(self, dt):

@@ -292,14 +292,21 @@ class UartServoManager:
 		if is_wait:
 			self.wait(servo_id)
 
-	def set_position_time(self, servo_id, position,runtime_ms):
-		'''设置舵机位置及执行时间'''
+	def set_position_time(self, servo_id, position, runtime_ms=None, time_ms=None):
+		"""设置舵机位置及执行时间。
+		支持两种关键字：`runtime_ms`（原名）和 `time_ms`（常见别名），并保持向后兼容。
+		"""
 		position = self.get_legal_position(position)
+		# 兼容 time_ms 参数名
+		if runtime_ms is None and time_ms is not None:
+			runtime_ms = time_ms
+		# 默认 300ms
+		if runtime_ms is None:
+			runtime_ms = 300
 		runtime_ms = int(runtime_ms)
 		address, _ = UART_SERVO_DATA_TABLE['TARGET_POSITION']
 		param_bytes = struct.pack('>BHH', address,  position, runtime_ms)
 		self.send_request(servo_id, self.CMD_TYPE_WRITE_DATA, param_bytes)
-		# self.write_data_by_name(servo_id, "TARGET_POSITION", position)
 		return True
 
 

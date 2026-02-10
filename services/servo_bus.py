@@ -3,7 +3,7 @@ from .uart_servo import UartServoManager
 from .data_table import SERVO_ID_BRODCAST, TORQUE_ENABLE, TORQUE_DISABLE
 
 class ServoBus:
-    def __init__(self, port="COM6", baudrate=115200):
+    def __init__(self, port="COM3", baudrate=115200):
         self.is_mock = False
         try:
             # 参考实例配置：timeout=0 保证 Kivy 界面不卡死
@@ -43,11 +43,29 @@ class ServoBus:
     def move_sync(self, targets: dict, time_ms=300):
         """同步执行 (对应 sync_set_position.py)"""
         if self.is_mock or not targets: return
-        # 1. 批量压入指令
+        # 使用 SDK 提供的 sync_set_position 接口以保证原子同步写入
+        servo_id_list = []
+        position_list = []
+        runtime_ms_list = []
         for sid, pos in targets.items():
-            self.manager.set_position_time(sid, int(pos), time_ms)
-        # 2. 发送同步执行信号
-        self.manager.write_data_by_name(SERVO_ID_BRODCAST, "SYNC_ACTION", 1)
+            servo_id_list.append(int(sid))
+            position_list.append(int(pos))
+            runtime_ms_list.append(int(time_ms))
+        try:
+            self.manager.sync_set_position(servo_id_list, position_list, runtime_ms_list)
+        except Exception:
+            # 兼容：如果 SDK 不支持 sync_set_position（向后兼容），回退到逐个写入并广播 action
+            for sid, pos in targets.items():
+                try:
+                    self.manager.set_position_time(int(sid), int(pos), time_ms)
+                except Exception:
+                    pass
+            try:
+                # 有些实现用 action 触发同步执行
+                if hasattr(self.manager, 'async_action'):
+                    self.manager.async_action()
+            except Exception:
+                pass
 
     def set_torque(self, enable=True):
         """全局扭矩开关 (对应 控制扭矩开关案例.py)"""
