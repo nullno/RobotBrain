@@ -22,9 +22,11 @@ fullscreen = 1
 icon.filename = %(source.dir)s/assets/logo.png
 
 # 启动页
+android.presplash_color = #000000
 presplash.filename = %(source.dir)s/assets/setup.jpg
-android.presplash_color = #212121
-android.presplash_tile_ratio = 0.5
+
+# short_edges: 允许内容扩展到刘海/挖孔区域
+android.window_layout_in_display_cutout_mode = short_edges
 
 # 打包优化
 android.gradle_dependencies = 

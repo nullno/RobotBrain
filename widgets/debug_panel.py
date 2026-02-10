@@ -487,7 +487,7 @@ class DebugPanel(Widget):
         )
 
         # 固定弹窗宽度为 900（高度仍根据屏幕比例限制）
-        popup_width = 920
+        popup_width =dp(920) if platform == "android" else dp(920)
         if Window.width > Window.height:
             popup_height = min(1000, Window.height * 0.85)
         else:

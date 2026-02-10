@@ -84,7 +84,7 @@ class CameraView(Image):
                 camera_started = False
                 
                 # 尝试多个摄像头索引：优先尝试 0/1/2，不指定索引作为最后手段
-                for idx in [0, 1, 2, -1]:
+                for idx in [1, 2, -1]:
                     try:
                         if idx == -1:
                             # 最后尝试不指定index
