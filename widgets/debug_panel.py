@@ -27,8 +27,8 @@ class TechButton(Button):
 
     def __init__(
         self,
-        border_color=(0.2, 0.7, 0.95, 1),
-        fill_color=(0.2, 0.7, 0.95, 0.25),
+        border_color=(0.2, 0.7, 0.95, 0.2),
+        fill_color=(0.2, 0.7, 0.95, 0.1),
         text_color=(0.9, 0.96, 1, 1),
         **kwargs,
     ):
@@ -102,7 +102,7 @@ class SquareTechButton(TechButton):
 
         kwargs.setdefault("halign", "center")
         kwargs.setdefault("valign", "middle")
-        kwargs.setdefault("font_size", "13sp")
+        kwargs.setdefault("font_size", "15sp")
 
         super().__init__(**kwargs)
         self.bind(size=self._update_text_size)
@@ -160,8 +160,8 @@ class ServoStatusCard(FloatLayout):
 
         with self.canvas.before:
             if online:
-                self._bg_color = Color(0.12, 0.16, 0.2, 0.9)
-                self._border_color = Color(0.2, 0.7, 0.95, 0.9)
+                self._bg_color = Color(0.12, 0.16, 0.2, 0.2)
+                self._border_color = Color(0.2, 0.7, 0.95, 0.2)
             else:
                 self._bg_color = Color(0.12, 0.12, 0.15, 0.7)
                 self._border_color = Color(0.4, 0.4, 0.45, 0.6)
@@ -187,7 +187,7 @@ class ServoStatusCard(FloatLayout):
 
         self.lbl_conn = Label(
             text="●",
-            color=(0.3, 0.9, 0.5, 1) if online else (0.6, 0.6, 0.6, 0.6),
+            color=(0.4, 1.0, 0.1, 1) if online else (0.6, 0.6, 0.6, 0.6),
             size_hint=(None, None),
             size=(dp(20), dp(20)),
             halign="right",
@@ -261,7 +261,7 @@ class ServoStatusCard(FloatLayout):
             if data is None:
                 self.lbl_conn.color = (0.6, 0.6, 0.6, 0.6)
             else:
-                self.lbl_conn.color = (0.3, 0.9, 0.5, 1)
+                self.lbl_conn.color = (0.4, 1.0, 0.1, 1)
         except Exception:
             pass
 
@@ -349,7 +349,7 @@ class DebugPanel(Widget):
         sv_actions.do_scroll_x = False
         sv_actions.do_scroll_y = True
 
-        grid = GridLayout(cols=5, padding=dp(5), spacing=dp(15), size_hint=(None, None))
+        grid = GridLayout(cols=5, padding=[dp(5),dp(10),dp(5),dp(5)], spacing=dp(15), size_hint=(None, None))
         grid.bind(minimum_height=grid.setter("height"))
 
         actions_anchor = AnchorLayout(anchor_x="center", anchor_y="top", size_hint=(1, None))
@@ -367,7 +367,7 @@ class DebugPanel(Widget):
         btn_zero_id = SquareTechButton(text="归零写ID")
 
         grid.add_widget(btn_run_demo)
-        grid.add_widget(btn_zero_id)
+        # grid.add_widget(btn_zero_id)
         grid.add_widget(btn_stand)
         grid.add_widget(btn_sit)
         grid.add_widget(btn_walk)
@@ -890,7 +890,7 @@ class DebugPanel(Widget):
             size=(dp(20), common_height),
             halign="center",
             valign="middle",
-            font_size="20sp",
+            font_size="25sp",
         )
 
         btn_dec = TechButton(
@@ -909,7 +909,7 @@ class DebugPanel(Widget):
             size_hint=(None, None),
             size=(dp(80), common_height),
         )
-        btn_inc.font_size = "22sp"
+        btn_inc.font_size = "25sp"
 
         id_row.add_widget(btn_dec)
         id_row.add_widget(self._single_id_label)
@@ -1081,9 +1081,9 @@ class DebugPanel(Widget):
                     text = "扭矩: ON" if val else "扭矩: OFF"
                     btn_torque_toggle.text = text
                 else:
-                    btn_torque_toggle.text = "扭矩: ?"
+                    btn_torque_toggle.text = "扭矩: -"
             except Exception:
-                btn_torque_toggle.text = "扭矩: ?"
+                btn_torque_toggle.text = "扭矩: -"
 
         def _toggle_torque(_):
             app = App.get_running_app()

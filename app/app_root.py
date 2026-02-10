@@ -13,6 +13,7 @@ import os
 import sys
 import subprocess
 import json
+import threading
 
 from widgets.camera_view import CameraView
 from widgets.robot_face import RobotFace
@@ -331,8 +332,7 @@ class RobotDashboardApp(App):
 
                                 if connected:
                                     try:
-                                        Clock.schedule_once(lambda dt: self.root_widget.ids.debug_panel.refresh_servo_status(), 0)
-                                        Clock.schedule_once(lambda dt: self.root_widget.ids.runtime_status.refresh() if hasattr(self.root_widget.ids.runtime_status, 'refresh') else None, 0)
+                                        Clock.schedule_once(self._safe_refresh_ui, 0)
                                     except Exception:
                                         pass
                             except Exception:
@@ -360,7 +360,7 @@ class RobotDashboardApp(App):
                         except Exception:
                             pass
                         try:
-                            Clock.schedule_once(lambda dt: self.root_widget.ids.debug_panel.refresh_servo_status(), 0)
+                            Clock.schedule_once(self._safe_refresh_ui, 0)
                         except Exception:
                             pass
                 except Exception:
@@ -422,7 +422,7 @@ class RobotDashboardApp(App):
                         except Exception:
                             pass
                         try:
-                            Clock.schedule_once(lambda dt: self.root_widget.ids.debug_panel.refresh_servo_status(), 0)
+                            Clock.schedule_once(self._safe_refresh_ui, 0)
                         except Exception:
                             pass
                         return True
@@ -508,6 +508,28 @@ class RobotDashboardApp(App):
         else:
             # 没有缺失权限，仍记录日志
             RuntimeStatusLogger.log_info('权限检查通过')
+
+    def _safe_refresh_ui(self, dt=0):
+        """在主线程安全刷新调试面板与运行面板的辅助方法。"""
+        try:
+            try:
+                dp = None
+                if hasattr(self, 'root_widget') and getattr(self.root_widget, 'ids', None):
+                    dp = self.root_widget.ids.get('debug_panel')
+                if dp and hasattr(dp, 'refresh_servo_status'):
+                    dp.refresh_servo_status()
+            except Exception:
+                pass
+            try:
+                rs = None
+                if hasattr(self, 'root_widget') and getattr(self.root_widget, 'ids', None):
+                    rs = self.root_widget.ids.get('runtime_status')
+                if rs and hasattr(rs, 'refresh'):
+                    rs.refresh()
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     
 
