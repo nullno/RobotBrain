@@ -10,5 +10,5 @@ COLORS = {
     "text": (0.0, 0.9, 1.0, 1),
 }
 
-FONT = "assets/fonts/font.ttc"
+FONT = "assets/fonts/simhei.ttf"
 RADIUS = 18

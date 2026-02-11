@@ -27,6 +27,7 @@ from services.motion_controller import MotionController
 from services.imu import IMUReader
 from services.neutral import load_neutral
 from services import usb_otg
+
 try:
     # 用于枚举串口设备以便自动检测 CH340 等适配器
     from serial.tools import list_ports as _list_ports
@@ -41,10 +42,11 @@ import traceback
 try:
     # 仅在 Android 平台尝试延迟导入 plyer.gyroscope，避免在 Windows/macOS 上触发
     # 因为 plyer 在某些平台上会尝试导入不存在的子模块（如 plyer.platforms.win.gyroscope）
-    if platform == 'android':
+    if platform == "android":
         try:
             import importlib
-            gyroscope = importlib.import_module('plyer.gyroscope')
+
+            gyroscope = importlib.import_module("plyer.gyroscope")
         except ModuleNotFoundError:
             gyroscope = None
         except Exception:
@@ -59,15 +61,19 @@ class RobotDashboardApp(App):
     def build(self):
         # Android权限申请
         if platform == "android":
-            from android.permissions import request_permissions, Permission, check_permission
-            
+            from android.permissions import (
+                request_permissions,
+                Permission,
+                check_permission,
+            )
+
             # 检查并请求权限
             required_perms = [
                 Permission.CAMERA,
                 Permission.WRITE_EXTERNAL_STORAGE,
                 Permission.READ_EXTERNAL_STORAGE,
             ]
-            
+
             # 检查缺失的权限
             missing_perms = []
             for perm in required_perms:
@@ -76,15 +82,16 @@ class RobotDashboardApp(App):
                         missing_perms.append(perm)
                 except Exception:
                     missing_perms.append(perm)
-            
+
             if missing_perms:
+
                 def _perm_callback(permissions, results):
                     if all(results):
                         print("✅ 所有权限申请成功")
                     else:
                         missing = [p for p, r in zip(permissions, results) if not r]
                         print(f"⚠️ 未授予权限: {missing}，部分功能可能受限")
-                
+
                 request_permissions(missing_perms, _perm_callback)
             else:
                 print("✅ 所有权限已获得")
@@ -103,19 +110,25 @@ class RobotDashboardApp(App):
 
         # 如果未能通过默认端口连接，尝试自动扫描系统串口并连接 CH340/USB-Serial 设备
         try:
-            if not self.servo_bus or getattr(self.servo_bus, 'is_mock', True):
+            if not self.servo_bus or getattr(self.servo_bus, "is_mock", True):
                 self._try_auto_connect()
         except Exception:
             pass
 
         # 初始化日志
         try:
-            log_dir = pathlib.Path('logs')
+            log_dir = pathlib.Path("logs")
             log_dir.mkdir(exist_ok=True)
-            logging.basicConfig(level=logging.INFO, filename=str(log_dir / 'robot_dashboard.log'), filemode='a', format='%(asctime)s %(levelname)s: %(message)s')
-            logging.info('App starting')
+            logging.basicConfig(
+                level=logging.INFO,
+                filename=str(log_dir / "robot_dashboard.log"),
+                filemode="a",
+                format="%(asctime)s %(levelname)s: %(message)s",
+            )
+            logging.info("App starting")
             # 将 Python logging 同步到 RuntimeStatusLogger，便于在界面查看日志
             try:
+
                 class _ForwardHandler(logging.Handler):
                     def emit(self, record):
                         try:
@@ -138,24 +151,26 @@ class RobotDashboardApp(App):
                 import sys
 
                 class _StdForward:
-                    def __init__(self, level='info'):
+                    def __init__(self, level="info"):
                         self._level = level
+
                     def write(self, s):
                         try:
                             s = s.strip()
                             if not s:
                                 return
-                            if self._level == 'error':
+                            if self._level == "error":
                                 logging.getLogger().error(s)
                             else:
                                 logging.getLogger().info(s)
                         except Exception:
                             pass
+
                     def flush(self):
                         pass
 
-                sys.stdout = _StdForward('info')
-                sys.stderr = _StdForward('error')
+                sys.stdout = _StdForward("info")
+                sys.stderr = _StdForward("error")
             except Exception:
                 pass
         except Exception:
@@ -170,23 +185,33 @@ class RobotDashboardApp(App):
             neutral = {i: 2048 for i in range(1, 26)}
 
         self.balance_ctrl = BalanceController(neutral, is_landscape=True)
-        self._setup_gyroscope()
+        # 尝试初始化陀螺仪（延迟导入并兼容多种 plyer 导入失败场景）
+        try:
+            self._setup_gyroscope()
+        except Exception:
+            # 忽略初始化失败，后续权限通过时会重试
+            pass
 
         # AI 核心暂时禁用（不初始化 AICore）
         self.ai_core = None
-        self._ai_speech_buf = ''
+        self._ai_speech_buf = ""
         self._ai_speech_clear_ev = None
 
         # MotionController 集成（若有 ServoBus）
         try:
-            if self.servo_bus and not getattr(self.servo_bus, 'is_mock', True):
+            if self.servo_bus and not getattr(self.servo_bus, "is_mock", True):
                 imu = IMUReader(simulate=False)
                 imu.start()
-                self.motion_controller = MotionController(self.servo_bus.manager, balance_ctrl=self.balance_ctrl, imu_reader=imu, neutral_positions=neutral)
+                self.motion_controller = MotionController(
+                    self.servo_bus.manager,
+                    balance_ctrl=self.balance_ctrl,
+                    imu_reader=imu,
+                    neutral_positions=neutral,
+                )
             else:
                 self.motion_controller = None
         except Exception as e:
-            logging.exception('MotionController init failed')
+            logging.exception("MotionController init failed")
             self.motion_controller = None
 
         # ---------- Demo 动画 ----------
@@ -213,7 +238,7 @@ class RobotDashboardApp(App):
         # 启动 OTG / 串口监测（跨平台：Android / PC / macOS / Linux）
         try:
             usb_otg.start_monitor()
-            RuntimeStatusLogger.log_info('串口/OTG 监测已启动')
+            RuntimeStatusLogger.log_info("串口/OTG 监测已启动")
             try:
                 # 注册 OTG 设备事件回调，热插拔时尝试重建 ServoBus 并刷新 UI
                 usb_otg.register_device_callback(self._on_otg_event)
@@ -233,19 +258,20 @@ class RobotDashboardApp(App):
             # 在后台执行 I/O/初始化以避免阻塞主线程
             def _handle():
                 try:
-                    if event == 'added':
+                    if event == "added":
                         # 解析 device_id 中的实际串口端口名（如 COM3 或 /dev/ttyUSB0）
                         def _parse_port(dev_id):
                             try:
                                 if not dev_id:
                                     return None
-                                if '::' in dev_id:
-                                    return dev_id.split('::', 1)[0]
+                                if "::" in dev_id:
+                                    return dev_id.split("::", 1)[0]
                                 import re
-                                m = re.search(r'(COM\d+)', dev_id, re.I)
+
+                                m = re.search(r"(COM\d+)", dev_id, re.I)
                                 if m:
                                     return m.group(1)
-                                m = re.search(r'(/dev/tty[^,;\s]+)', dev_id)
+                                m = re.search(r"(/dev/tty[^,;\s]+)", dev_id)
                                 if m:
                                     return m.group(1)
                                 return dev_id
@@ -253,9 +279,15 @@ class RobotDashboardApp(App):
                                 return None
 
                         # 首先尝试解析 device_id 提供的端口
-                        port = _parse_port(device_id) or getattr(self, '_dev_port', None) or ("/dev/ttyUSB0" if platform == "android" else "COM3")
+                        port = (
+                            _parse_port(device_id)
+                            or getattr(self, "_dev_port", None)
+                            or ("/dev/ttyUSB0" if platform == "android" else "COM3")
+                        )
                         # 若当前为 mock，则尝试使用可用端口列表连接（优先使用解析到的 port）
-                        if not getattr(self, 'servo_bus', None) or getattr(self.servo_bus, 'is_mock', True):
+                        if not getattr(self, "servo_bus", None) or getattr(
+                            self.servo_bus, "is_mock", True
+                        ):
                             try:
                                 # 保存首选端口
                                 self._dev_port = port
@@ -269,10 +301,14 @@ class RobotDashboardApp(App):
                                     try:
                                         for p in _list_ports.comports():
                                             dev = p.device
-                                            desc = (p.description or '')
+                                            desc = p.description or ""
                                             if dev not in try_ports:
                                                 # 优先选取包含 CH340/USB-SERIAL 的设备
-                                                if 'ch340' in desc.lower() or 'usb-serial' in desc.lower() or 'usb serial' in desc.lower():
+                                                if (
+                                                    "ch340" in desc.lower()
+                                                    or "usb-serial" in desc.lower()
+                                                    or "usb serial" in desc.lower()
+                                                ):
                                                     try_ports.insert(0, dev)
                                                 else:
                                                     try_ports.append(dev)
@@ -281,6 +317,7 @@ class RobotDashboardApp(App):
 
                                 # 等待系统稳固枚举设备再尝试（短延迟），并重试一次以提高热插拔稳定性
                                 import time as _time
+
                                 _time.sleep(0.2)
                                 # 额外重试一次枚举以捕获延迟出现的 COM 端口
                                 if _list_ports:
@@ -295,10 +332,12 @@ class RobotDashboardApp(App):
                                 for cand in try_ports:
                                     try:
                                         sb = ServoBus(port=cand)
-                                        if sb and not getattr(sb, 'is_mock', True):
+                                        if sb and not getattr(sb, "is_mock", True):
                                             # 关闭旧实例
                                             try:
-                                                if getattr(self, 'servo_bus', None) and hasattr(self.servo_bus, 'close'):
+                                                if getattr(
+                                                    self, "servo_bus", None
+                                                ) and hasattr(self.servo_bus, "close"):
                                                     try:
                                                         self.servo_bus.close()
                                                     except Exception:
@@ -308,9 +347,13 @@ class RobotDashboardApp(App):
                                             self.servo_bus = sb
                                             # 强制扫描已连接的舵机以确保 manager 有最新的 servo_info_dict
                                             try:
-                                                if getattr(self.servo_bus, 'manager', None):
+                                                if getattr(
+                                                    self.servo_bus, "manager", None
+                                                ):
                                                     try:
-                                                        self.servo_bus.manager.servo_scan(list(range(1, 26)))
+                                                        self.servo_bus.manager.servo_scan(
+                                                            list(range(1, 26))
+                                                        )
                                                     except Exception:
                                                         pass
                                             except Exception:
@@ -319,28 +362,63 @@ class RobotDashboardApp(App):
                                             try:
                                                 imu = IMUReader(simulate=False)
                                                 imu.start()
-                                                self.motion_controller = MotionController(self.servo_bus.manager, balance_ctrl=self.balance_ctrl, imu_reader=imu, neutral_positions={})
+                                                self.motion_controller = (
+                                                    MotionController(
+                                                        self.servo_bus.manager,
+                                                        balance_ctrl=self.balance_ctrl,
+                                                        imu_reader=imu,
+                                                        neutral_positions={},
+                                                    )
+                                                )
                                             except Exception:
                                                 self.motion_controller = None
                                             try:
-                                                RuntimeStatusLogger.log_info(f'检测到 OTG 设备，已连接串口: {cand}')
+                                                RuntimeStatusLogger.log_info(
+                                                    f"检测到 OTG 设备，已连接串口: {cand}"
+                                                )
                                             except Exception:
                                                 pass
                                             break
                                     except Exception:
                                         pass
 
+                                # 如果连接成功则刷新 UI；若未成功且为 Android，则提示用户在手机端用我们的应用连接
                                 if connected:
                                     try:
                                         Clock.schedule_once(self._safe_refresh_ui, 0)
                                     except Exception:
                                         pass
+                                else:
+                                    try:
+                                        if platform == "android":
+                                            def _show_connect_tip(dt):
+                                                try:
+                                                    content = BoxLayout(orientation="vertical", spacing=8, padding=8)
+                                                    content.add_widget(Label(text="检测到手机连接但未找到 USB 串口。请在手机上打开本应用并启用 USB/OTG 串口模式进行连接。"))
+                                                    btn = Button(text="我知道了", size_hint_y=None, height=40)
+                                                    popup = Popup(title="请在手机上启用串口连接", content=content, size_hint=(0.9, None), height=200)
+                                                    def _close(instance):
+                                                        try:
+                                                            popup.dismiss()
+                                                        except Exception:
+                                                            pass
+                                                    btn.bind(on_release=_close)
+                                                    content.add_widget(btn)
+                                                    popup.open()
+                                                except Exception:
+                                                    pass
+
+                                            Clock.schedule_once(_show_connect_tip, 0)
+                                    except Exception:
+                                        pass
                             except Exception:
                                 pass
-                    elif event == 'removed':
+                    elif event == "removed":
                         # 简单清理：优雅关闭 servo_bus 与 motion_controller，并刷新 UI
                         try:
-                            if getattr(self, 'servo_bus', None) and hasattr(self.servo_bus, 'close'):
+                            if getattr(self, "servo_bus", None) and hasattr(
+                                self.servo_bus, "close"
+                            ):
                                 try:
                                     self.servo_bus.close()
                                 except Exception:
@@ -356,7 +434,7 @@ class RobotDashboardApp(App):
                         except Exception:
                             pass
                         try:
-                            RuntimeStatusLogger.log_info(f'串口设备已拔出: {device_id}')
+                            RuntimeStatusLogger.log_info(f"串口设备已拔出: {device_id}")
                         except Exception:
                             pass
                         try:
@@ -384,25 +462,33 @@ class RobotDashboardApp(App):
                     try:
                         for p in _list_ports.comports():
                             dev = p.device
-                            desc = (p.description or '')
+                            desc = p.description or ""
                             # 优先把带 CH340/USB-SERIAL 的放前面
-                            if 'ch340' in desc.lower() or 'usb-serial' in desc.lower() or 'usb serial' in desc.lower():
+                            if (
+                                "ch340" in desc.lower()
+                                or "usb-serial" in desc.lower()
+                                or "usb serial" in desc.lower()
+                            ):
                                 candidates.insert(0, dev)
                             else:
                                 candidates.append(dev)
                     except Exception:
                         pass
                 # 最后加入默认端口作为兜底
-                default = getattr(self, '_dev_port', None) or ("/dev/ttyUSB0" if platform == "android" else "COM3")
+                default = getattr(self, "_dev_port", None) or (
+                    "/dev/ttyUSB0" if platform == "android" else "COM3"
+                )
                 if default and default not in candidates:
                     candidates.append(default)
 
             for cand in candidates:
                 try:
                     sb = ServoBus(port=cand)
-                    if sb and not getattr(sb, 'is_mock', True):
+                    if sb and not getattr(sb, "is_mock", True):
                         try:
-                            if getattr(self, 'servo_bus', None) and hasattr(self.servo_bus, 'close'):
+                            if getattr(self, "servo_bus", None) and hasattr(
+                                self.servo_bus, "close"
+                            ):
                                 try:
                                     self.servo_bus.close()
                                 except Exception:
@@ -414,11 +500,16 @@ class RobotDashboardApp(App):
                         try:
                             imu = IMUReader(simulate=False)
                             imu.start()
-                            self.motion_controller = MotionController(self.servo_bus.manager, balance_ctrl=self.balance_ctrl, imu_reader=imu, neutral_positions={})
+                            self.motion_controller = MotionController(
+                                self.servo_bus.manager,
+                                balance_ctrl=self.balance_ctrl,
+                                imu_reader=imu,
+                                neutral_positions={},
+                            )
                         except Exception:
                             self.motion_controller = None
                         try:
-                            RuntimeStatusLogger.log_info(f'自动连接串口成功: {cand}')
+                            RuntimeStatusLogger.log_info(f"自动连接串口成功: {cand}")
                         except Exception:
                             pass
                         try:
@@ -434,27 +525,56 @@ class RobotDashboardApp(App):
 
     # ================== 硬件 ==================
     def _setup_gyroscope(self):
-        if platform == "android" and gyroscope:
+        # 延迟导入 plyer.gyroscope，兼容 importlib 与直接 from-import 两种情形
+        global gyroscope
+        if platform == "android":
             try:
-                gyroscope.enable()
+                # 优先使用直接导入
                 try:
-                    RuntimeStatusLogger.log_info('Android 陀螺仪已激活')
+                    from plyer import gyroscope as _gyro
+                except Exception:
+                    try:
+                        import importlib
+
+                        _gyro = importlib.import_module("plyer.gyroscope")
+                    except Exception:
+                        _gyro = None
+
+                if not _gyro:
+                    try:
+                        RuntimeStatusLogger.log_error("未检测到 plyer.gyroscope；无法启用陀螺仪")
+                    except Exception:
+                        pass
+                    return
+
+                # 将成功导入的模块保存在全局变量，供 _get_gyro_data 使用
+                try:
+                    gyroscope = _gyro
+
                 except Exception:
                     pass
-                print("✅ Android 陀螺仪已激活")
-            except Exception as e:
+
                 try:
-                    RuntimeStatusLogger.log_error(f'无法激活陀螺仪: {e}')
-                except Exception:
-                    pass
-                print(f"❌ 无法激活陀螺仪: {e}")
+                    _gyro.enable()
+                    try:
+                        RuntimeStatusLogger.log_info("Android 陀螺仪已激活")
+                    except Exception:
+                        pass
+                except Exception as e:
+                    try:
+                        RuntimeStatusLogger.log_error(f"无法激活陀螺仪: {e}")
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
     def _check_android_permissions(self):
         """返回缺失的权限列表（Android）"""
-        if platform != 'android':
+        if platform != "android":
             return []
         try:
             from android.permissions import check_permission, Permission
+
             required_perms = [
                 Permission.CAMERA,
                 Permission.WRITE_EXTERNAL_STORAGE,
@@ -488,17 +608,24 @@ class RobotDashboardApp(App):
                 missing_now = self._check_android_permissions()
                 if not missing_now:
                     # 权限已授予，关闭提示并重新初始化必要组件
-                    try:
-                        if hasattr(self, '_startup_tip') and self._startup_tip._popup:
-                            self._startup_tip._popup.dismiss()
-                    except Exception:
-                        pass
-                    RuntimeStatusLogger.log_info('权限已授予，正在重新初始化授权依赖模块')
+                    # try:
+                    #     if hasattr(self, '_startup_tip') and self._startup_tip._popup:
+                    #         self._startup_tip._popup.dismiss()
+                    # except Exception:
+                    #     pass
+                    RuntimeStatusLogger.log_info(
+                        "权限已授予，正在重新初始化授权依赖模块"
+                    )
                     # 触发 CameraView 重试（如果存在）
                     try:
-                        cam = self.root_widget.ids.get('camera_view')
-                        if cam and hasattr(cam, '_start_android'):
+                        cam = self.root_widget.ids.get("camera_view")
+                        if cam and hasattr(cam, "_start_android"):
                             cam._start_android()
+                    except Exception:
+                        pass
+                    # 权限通过后，重试初始化陀螺仪
+                    try:
+                        self._setup_gyroscope()
                     except Exception:
                         pass
                     return False
@@ -507,31 +634,33 @@ class RobotDashboardApp(App):
             Clock.schedule_interval(_watch, 1.0)
         else:
             # 没有缺失权限，仍记录日志
-            RuntimeStatusLogger.log_info('权限检查通过')
+            RuntimeStatusLogger.log_info("权限检查通过")
 
     def _safe_refresh_ui(self, dt=0):
         """在主线程安全刷新调试面板与运行面板的辅助方法。"""
         try:
             try:
                 dp = None
-                if hasattr(self, 'root_widget') and getattr(self.root_widget, 'ids', None):
-                    dp = self.root_widget.ids.get('debug_panel')
-                if dp and hasattr(dp, 'refresh_servo_status'):
+                if hasattr(self, "root_widget") and getattr(
+                    self.root_widget, "ids", None
+                ):
+                    dp = self.root_widget.ids.get("debug_panel")
+                if dp and hasattr(dp, "refresh_servo_status"):
                     dp.refresh_servo_status()
             except Exception:
                 pass
             try:
                 rs = None
-                if hasattr(self, 'root_widget') and getattr(self.root_widget, 'ids', None):
-                    rs = self.root_widget.ids.get('runtime_status')
-                if rs and hasattr(rs, 'refresh'):
+                if hasattr(self, "root_widget") and getattr(
+                    self.root_widget, "ids", None
+                ):
+                    rs = self.root_widget.ids.get("runtime_status")
+                if rs and hasattr(rs, "refresh"):
                     rs.refresh()
             except Exception:
                 pass
         except Exception:
             pass
-
-    
 
     def _get_gyro_data(self):
         p, r, y = 0, 0, 0
@@ -567,7 +696,10 @@ class RobotDashboardApp(App):
                 # 使用简短的首行作为对比（通常包含异常类型与消息）
                 first_line = tb.splitlines()[-1] if tb else str(e)
                 # 仅当错误信息变化或距离上次记录超过5秒时，才输出到运行面板，避免刷屏
-                if first_line != getattr(self, '_last_loop_error', None) or (now - getattr(self, '_last_loop_error_time', 0)) > 5:
+                if (
+                    first_line != getattr(self, "_last_loop_error", None)
+                    or (now - getattr(self, "_last_loop_error_time", 0)) > 5
+                ):
                     try:
                         RuntimeStatusLogger.log_error(f"Loop Error: {first_line}")
                     except Exception:
@@ -585,7 +717,16 @@ class RobotDashboardApp(App):
 
     # ================== 表情 Demo ==================
     def _demo_emotion_loop(self, dt):
-        faces = ["normal", "happy", "sad", "angry", "surprised", "sleepy", "thinking", "wink"]
+        faces = [
+            "normal",
+            "happy",
+            "sad",
+            "angry",
+            "surprised",
+            "sleepy",
+            "thinking",
+            "wink",
+        ]
         emo = faces[self._demo_step % len(faces)]
         self._demo_step += 1
 
@@ -618,7 +759,7 @@ class RobotDashboardApp(App):
 
     def _on_ai_speech(self, instance, text):
         # 接收逐块/逐字的 speech 输出，传递给 RobotFace 做显示
-        face = self.root_widget.ids.get('face')
+        face = self.root_widget.ids.get("face")
         if face:
             try:
                 face.show_speaking_text(text)
@@ -635,13 +776,14 @@ class RobotDashboardApp(App):
 
     def _ai_speak_final(self, dt):
         txt = self._ai_speech_buf.strip()
-        self._ai_speech_buf = ''
+        self._ai_speech_buf = ""
         self._ai_speech_clear_ev = None
         if not txt:
             return
         # 尝试使用 plyer tts（优先，支持 Android/iOS），失败则回退到桌面 TTS（pyttsx3）
         try:
             from plyer import tts
+
             try:
                 tts.speak(txt)
                 return
@@ -654,18 +796,21 @@ class RobotDashboardApp(App):
         try:
             # 确保 comtypes 有一个可写的缓存目录，避免权限错误
             try:
-                cache_dir = os.environ.get('COMTYPES_CACHE_DIR') or os.path.join(os.path.expanduser('~'), '.comtypes_cache')
+                cache_dir = os.environ.get("COMTYPES_CACHE_DIR") or os.path.join(
+                    os.path.expanduser("~"), ".comtypes_cache"
+                )
                 os.makedirs(cache_dir, exist_ok=True)
-                os.environ['COMTYPES_CACHE_DIR'] = cache_dir
+                os.environ["COMTYPES_CACHE_DIR"] = cache_dir
             except Exception as _e:
                 print(f"Warning: cannot create comtypes cache dir: {_e}")
 
             import pyttsx3
+
             try:
                 engine = pyttsx3.init()
                 # 调整语速与音量为适中
                 try:
-                    engine.setProperty('rate', 150)
+                    engine.setProperty("rate", 150)
                 except Exception:
                     pass
                 engine.say(txt)
@@ -676,9 +821,11 @@ class RobotDashboardApp(App):
                 # Windows 特殊回退到 SAPI（win32com）尝试
                 try:
                     import platform as _plat
-                    if _plat.system().lower().startswith('win'):
+
+                    if _plat.system().lower().startswith("win"):
                         try:
                             import win32com.client
+
                             sapi = win32com.client.Dispatch("SAPI.SpVoice")
                             sapi.Speak(txt)
                             return
@@ -686,9 +833,17 @@ class RobotDashboardApp(App):
                             print(f"TTS (win32com SAPI) play failed: {e2}")
                             # PowerShell SAPI 直接调用回退（避开 comtypes 生成），可在多数 Windows 上工作
                             try:
-                                if sys.platform.startswith('win'):
+                                if sys.platform.startswith("win"):
                                     ps_cmd = f"Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak({json.dumps(txt)})"
-                                    subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd], check=True)
+                                    subprocess.run(
+                                        [
+                                            "powershell",
+                                            "-NoProfile",
+                                            "-Command",
+                                            ps_cmd,
+                                        ],
+                                        check=True,
+                                    )
                                     return
                             except Exception as e3:
                                 print(f"TTS (PowerShell) play failed: {e3}")

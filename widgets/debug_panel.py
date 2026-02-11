@@ -342,7 +342,7 @@ class DebugPanel(Widget):
             tp.tab_height = 42
 
         # ---------- 动作 Tab ----------
-        t_actions = TabbedPanelItem(text="动作")
+        t_actions = TabbedPanelItem(text="快捷动作",font_size=18)
         self._style_tab(t_actions)
 
         sv_actions = ScrollView(size_hint=(1, 1))
@@ -410,7 +410,7 @@ class DebugPanel(Widget):
         tp.add_widget(t_actions)
 
         # ---------- ✅ 舵机状态 Tab（宽度自适应 + 无抖动最终版） ----------
-        t_status = TabbedPanelItem(text="舵机状态")
+        t_status = TabbedPanelItem(text="连接状态",font_size=18)
         self._style_tab(t_status)
 
         sv = ScrollView(size_hint=(1, 1))
@@ -558,7 +558,7 @@ class DebugPanel(Widget):
         btn_close.bind(on_release=lambda *a: popup.dismiss())
 
         def _on_tab_switch(instance, value):
-            if value and getattr(value, "text", "") == "舵机状态":
+            if value and getattr(value, "text", "") == "连接状态":
                 threading.Thread(target=self.refresh_servo_status, daemon=True).start()
 
         tp.bind(current_tab=_on_tab_switch)
@@ -858,7 +858,7 @@ class DebugPanel(Widget):
     # ================= 单舵机快捷调试 =================
     def _build_single_servo_tab(self, tp):
         app = App.get_running_app()
-        t_single = TabbedPanelItem(text="单舵机")
+        t_single = TabbedPanelItem(text="舵机调试",font_size=18)
         self._style_tab(t_single)
 
         sv = ScrollView(size_hint=(1, 1))
