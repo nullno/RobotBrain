@@ -61,10 +61,24 @@ class RobotDashboardApp(App):
     def build(self):
         # Android权限申请
         if platform == "android":
+            from jnius import autoclass
             from android.permissions import (
                 request_permissions,
                 Permission,
                 check_permission,
+            )
+
+            # 获取 Android 的 Activity
+            PythonActivity = autoclass("org.kivy.android.PythonActivity")
+            activity = PythonActivity.mActivity
+            View = autoclass("android.view.View")
+            decor_view = activity.getWindow().getDecorView()
+
+            # 隐藏状态栏
+            decor_view.setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_FULLSCREEN
+                | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
             )
 
             # 检查并请求权限
@@ -391,17 +405,37 @@ class RobotDashboardApp(App):
                                 else:
                                     try:
                                         if platform == "android":
+
                                             def _show_connect_tip(dt):
                                                 try:
-                                                    content = BoxLayout(orientation="vertical", spacing=8, padding=8)
-                                                    content.add_widget(Label(text="检测到手机连接但未找到 USB 串口。请在手机上打开本应用并启用 USB/OTG 串口模式进行连接。"))
-                                                    btn = Button(text="我知道了", size_hint_y=None, height=40)
-                                                    popup = Popup(title="请在手机上启用串口连接", content=content, size_hint=(0.9, None), height=200)
+                                                    content = BoxLayout(
+                                                        orientation="vertical",
+                                                        spacing=8,
+                                                        padding=8,
+                                                    )
+                                                    content.add_widget(
+                                                        Label(
+                                                            text="检测到手机连接但未找到 USB 串口。请在手机上打开本应用并启用 USB/OTG 串口模式进行连接。"
+                                                        )
+                                                    )
+                                                    btn = Button(
+                                                        text="我知道了",
+                                                        size_hint_y=None,
+                                                        height=40,
+                                                    )
+                                                    popup = Popup(
+                                                        title="请在手机上启用串口连接",
+                                                        content=content,
+                                                        size_hint=(0.9, None),
+                                                        height=200,
+                                                    )
+
                                                     def _close(instance):
                                                         try:
                                                             popup.dismiss()
                                                         except Exception:
                                                             pass
+
                                                     btn.bind(on_release=_close)
                                                     content.add_widget(btn)
                                                     popup.open()
@@ -542,7 +576,9 @@ class RobotDashboardApp(App):
 
                 if not _gyro:
                     try:
-                        RuntimeStatusLogger.log_error("未检测到 plyer.gyroscope；无法启用陀螺仪")
+                        RuntimeStatusLogger.log_error(
+                            "未检测到 plyer.gyroscope；无法启用陀螺仪"
+                        )
                     except Exception:
                         pass
                     return

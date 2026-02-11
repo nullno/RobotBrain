@@ -56,7 +56,7 @@ class GyroPanel(Widget):
         r, g, b = NEON_CYAN
 
         # 由 pitch（前后）决定地平线的垂直偏移；roll 决定旋转角（缩放以便小面板也能明显可见）
-        pitch_offset = (self.pitch / 12.0) * (h * 0.4)  # 提高pitch灵敏度
+        pitch_offset = (self.pitch / 12.0) * (h * 0.5)  # 提高pitch灵敏度
         max_pitch = 45.0
         pitch_offset = max(-h * 0.5, min(h * 0.5, pitch_offset))
 
@@ -70,7 +70,7 @@ class GyroPanel(Widget):
             Rotate(angle=-self.roll, origin=(cx, cy))
 
             Color(NEON_CYAN[0], NEON_CYAN[1], NEON_CYAN[2], 0.95)
-            Line(points=[x - w, cy + pitch_offset, x + w * 2, cy + pitch_offset], width=0.5)
+            Line(points=[x - w, cy + pitch_offset, x + w * 2, cy + pitch_offset], width=1)
 
             # 刻度（左右前后提示）
             Color(r, g, b, 0.9)

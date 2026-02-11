@@ -101,7 +101,7 @@ class CameraView(Image):
                                     self.canvas.clear()
                                     with self.canvas.before:
                                         PushMatrix()
-                                        Scale(1, -1, 1)  # 垂直翻转
+                                        Scale(-1, 1, 1)  # 垂直翻转
                                 self.texture = val
                                 RuntimeStatusLogger.log_info(f'Android 摄像头 texture 就绪 (index={camera_idx})')
                         

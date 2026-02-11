@@ -43,12 +43,8 @@ class TechButton(Button):
         kwargs.setdefault("size_hint_y", None)
 
         if "height" not in kwargs and "size" not in kwargs:
-            try:
-                from kivy.utils import platform
-
-                kwargs.setdefault("height", dp(56) if platform == "android" else 40)
-            except Exception:
-                kwargs.setdefault("height", 40)
+           kwargs.setdefault("height", dp(40))
+           
 
         super().__init__(**kwargs)
 
@@ -96,7 +92,7 @@ class TechButton(Button):
 # ===================== 正方形科技风按钮 (用于 Grid) =====================
 class SquareTechButton(TechButton):
     def __init__(self, **kwargs):
-        side_len = dp(90)
+        side_len = dp(70)
         kwargs["size_hint"] = (None, None)
         kwargs["size"] = (side_len, side_len)
 
@@ -121,12 +117,7 @@ class DangerButton(Button):
         kwargs.setdefault("background_color", (0, 0, 0, 0))
         kwargs.setdefault("color", (1, 1, 1, 1))
         kwargs.setdefault("size_hint_y", None)
-        try:
-            from kivy.utils import platform
-
-            kwargs.setdefault("height", dp(58) if platform == "android" else 42)
-        except Exception:
-            kwargs.setdefault("height", 42)
+        kwargs.setdefault("height", dp(40))
         super().__init__(**kwargs)
 
         with self.canvas.before:
@@ -152,7 +143,7 @@ class ServoStatusCard(FloatLayout):
     def __init__(self, sid, data=None, online=True, **kwargs):
         super().__init__(
             size_hint=(None, None),
-            size=(dp(160), dp(120)),
+            size=(dp(135), dp(100)),
             **kwargs,
         )
 
@@ -327,32 +318,34 @@ class DebugPanel(Widget):
         info = Label(
             text="调试面板 — 谨慎操作舵机。确保周围无人。",
             size_hint_y=None,
-            height=28,
+            height=dp(28),
             color=(0.85, 0.9, 0.98, 1),
         )
         content.add_widget(info)
 
         # ---------------- TabbedPanel ----------------
         tp = TabbedPanel(do_default_tab=False, tab_width=150, size_hint_y=0.78)
-        try:
-            from kivy.utils import platform
-
-            tp.tab_height = dp(56) if platform == "android" else 42
-        except Exception:
-            tp.tab_height = 42
+        tp.tab_height = dp(40)
 
         # ---------- 动作 Tab ----------
-        t_actions = TabbedPanelItem(text="快捷动作",font_size=18)
+        t_actions = TabbedPanelItem(text="快捷动作", font_size=18)
         self._style_tab(t_actions)
 
         sv_actions = ScrollView(size_hint=(1, 1))
         sv_actions.do_scroll_x = False
         sv_actions.do_scroll_y = True
 
-        grid = GridLayout(cols=5, padding=[dp(5),dp(10),dp(5),dp(5)], spacing=dp(15), size_hint=(None, None))
+        grid = GridLayout(
+            cols=5,
+            padding=[dp(5), dp(10), dp(5), dp(5)],
+            spacing=dp(15),
+            size_hint=(None, None),
+        )
         grid.bind(minimum_height=grid.setter("height"))
 
-        actions_anchor = AnchorLayout(anchor_x="center", anchor_y="top", size_hint=(1, None))
+        actions_anchor = AnchorLayout(
+            anchor_x="center", anchor_y="top", size_hint=(1, None)
+        )
 
         btn_run_demo = SquareTechButton(text="运行示例\nDemo")
         btn_stand = SquareTechButton(text="站立")
@@ -383,14 +376,22 @@ class DebugPanel(Widget):
 
         def _reflow_actions(instance, width):
             cols = max(1, grid.cols)
-            spacing = grid.spacing[0] if isinstance(grid.spacing, (list, tuple)) else grid.spacing
-            pad = grid.padding[0] * 2 if isinstance(grid.padding, (list, tuple)) else grid.padding * 2
+            spacing = (
+                grid.spacing[0]
+                if isinstance(grid.spacing, (list, tuple))
+                else grid.spacing
+            )
+            pad = (
+                grid.padding[0] * 2
+                if isinstance(grid.padding, (list, tuple))
+                else grid.padding * 2
+            )
 
             avail = max(dp(200), sv_actions.width - pad)
             item_w = max(dp(80), (avail - spacing * (cols - 1)) / cols)
             item_h = dp(90)
 
-            grid.width = avail*1.01
+            grid.width = avail * 1.01
             grid.size_hint_x = None
             grid.size_hint_y = None
 
@@ -410,7 +411,7 @@ class DebugPanel(Widget):
         tp.add_widget(t_actions)
 
         # ---------- ✅ 舵机状态 Tab（宽度自适应 + 无抖动最终版） ----------
-        t_status = TabbedPanelItem(text="连接状态",font_size=18)
+        t_status = TabbedPanelItem(text="连接状态", font_size=18)
         self._style_tab(t_status)
 
         sv = ScrollView(size_hint=(1, 1))
@@ -421,34 +422,10 @@ class DebugPanel(Widget):
             spacing=dp(12),
             padding=dp(15),
             size_hint=(1, None),
-            cols=1,   # 动态列数
+            cols=5,  # 动态列数
         )
         self._status_grid.bind(minimum_height=self._status_grid.setter("height"))
         sv.add_widget(self._status_grid)
-
-        def _reflow_status(*_):
-            width = sv.width
-            spacing = self._status_grid.spacing
-            pad = self._status_grid.padding
-
-            spacing = spacing[0] if isinstance(spacing, (list, tuple)) else spacing
-            pad = pad[0] * 2 if isinstance(pad, (list, tuple)) else pad * 2
-
-            min_card_w = dp(150)
-            avail = max(dp(200), width - pad)
-            cols = max(1, int(avail // min_card_w))
-            self._status_grid.cols = cols
-
-            card_w = ((avail - spacing * (cols - 1)) / cols)
-            card_h = dp(120)
-
-            for c in self._status_grid.children:
-                c.size_hint = (None, None)
-                c.width = card_w
-                c.height = card_h
-
-        sv.bind(width=_reflow_status)
-        Clock.schedule_once(lambda dt: _reflow_status(), 0)
 
         t_status.add_widget(sv)
         tp.add_widget(t_status)
@@ -459,12 +436,14 @@ class DebugPanel(Widget):
             pass
 
         tp.bind(current_tab=lambda inst, val: self._update_tab_highlight(inst, val))
-        Clock.schedule_once(lambda dt: self._update_tab_highlight(tp, tp.current_tab), 0)
+        Clock.schedule_once(
+            lambda dt: self._update_tab_highlight(tp, tp.current_tab), 0
+        )
 
         content.add_widget(tp)
 
         # ---------------- 底部按钮 ----------------
-        bottom = BoxLayout(size_hint_y=None, height=42, spacing=8)
+        bottom = BoxLayout(size_hint_y=None, height=dp(40), spacing=8)
 
         btn_emergency = DangerButton(text="紧急释放扭矩")
         btn_close = TechButton(
@@ -487,11 +466,8 @@ class DebugPanel(Widget):
         )
 
         # 固定弹窗宽度为 900（高度仍根据屏幕比例限制）
-        popup_width =dp(920) if platform == "android" else dp(920)
-        if Window.width > Window.height:
-            popup_height = min(1000, Window.height * 0.85)
-        else:
-            popup_height = min(1120, Window.height * 0.95)
+        popup_width = dp(800) 
+        popup_height =dp(420)
         popup.size = (popup_width, popup_height)
 
         # ---------------- 事件绑定 ----------------
@@ -505,39 +481,57 @@ class DebugPanel(Widget):
 
         def _stand(_):
             popup.dismiss()
-            threading.Thread(target=self._call_motion, args=("stand",), daemon=True).start()
+            threading.Thread(
+                target=self._call_motion, args=("stand",), daemon=True
+            ).start()
 
         def _sit(_):
             popup.dismiss()
-            threading.Thread(target=self._call_motion, args=("sit",), daemon=True).start()
+            threading.Thread(
+                target=self._call_motion, args=("sit",), daemon=True
+            ).start()
 
         def _walk(_):
             popup.dismiss()
-            threading.Thread(target=self._call_motion, args=("walk",), daemon=True).start()
+            threading.Thread(
+                target=self._call_motion, args=("walk",), daemon=True
+            ).start()
 
         def _wave(_):
             popup.dismiss()
-            threading.Thread(target=self._call_motion, args=("wave",), daemon=True).start()
+            threading.Thread(
+                target=self._call_motion, args=("wave",), daemon=True
+            ).start()
 
         def _dance(_):
             popup.dismiss()
-            threading.Thread(target=self._call_motion, args=("dance",), daemon=True).start()
+            threading.Thread(
+                target=self._call_motion, args=("dance",), daemon=True
+            ).start()
 
         def _jump(_):
             popup.dismiss()
-            threading.Thread(target=self._call_motion, args=("jump",), daemon=True).start()
+            threading.Thread(
+                target=self._call_motion, args=("jump",), daemon=True
+            ).start()
 
         def _turn(_):
             popup.dismiss()
-            threading.Thread(target=self._call_motion, args=("turn",), daemon=True).start()
+            threading.Thread(
+                target=self._call_motion, args=("turn",), daemon=True
+            ).start()
 
         def _squat(_):
             popup.dismiss()
-            threading.Thread(target=self._call_motion, args=("squat",), daemon=True).start()
+            threading.Thread(
+                target=self._call_motion, args=("squat",), daemon=True
+            ).start()
 
         def _kick(_):
             popup.dismiss()
-            threading.Thread(target=self._call_motion, args=("kick",), daemon=True).start()
+            threading.Thread(
+                target=self._call_motion, args=("kick",), daemon=True
+            ).start()
 
         def _emergency(_):
             popup.dismiss()
@@ -783,18 +777,23 @@ class DebugPanel(Widget):
             lbl.bind(size=lbl.setter("text_size"))
             content.add_widget(lbl)
 
+            popup_size = (dp(400), dp(100))
             popup = Popup(
                 title="",
                 title_size=0,
                 separator_height=0,
                 content=content,
                 size_hint=(None, None),
-                size=(400, 100),
+                size=popup_size,
                 auto_dismiss=False,
                 background="",
                 background_color=(0, 0, 0, 0),
                 overlay_color=(0, 0, 0, 0.3),
             )
+
+            # Ensure the content widget matches the popup size on all platforms
+            content.size = popup.size
+            popup.bind(size=lambda inst, val: setattr(content, "size", val))
 
             popup.open()
             Clock.schedule_once(lambda dt: popup.dismiss(), 2.0)
@@ -858,7 +857,7 @@ class DebugPanel(Widget):
     # ================= 单舵机快捷调试 =================
     def _build_single_servo_tab(self, tp):
         app = App.get_running_app()
-        t_single = TabbedPanelItem(text="舵机调试",font_size=18)
+        t_single = TabbedPanelItem(text="舵机调试", font_size=18)
         self._style_tab(t_single)
 
         sv = ScrollView(size_hint=(1, 1))
@@ -880,7 +879,7 @@ class DebugPanel(Widget):
             size_hint=(None, None), width=dp(190), height=dp(42), spacing=dp(10)
         )
 
-        common_height = dp(42)
+        common_height = dp(40)
 
         self._single_id_label = Label(
             text="1",
@@ -919,7 +918,9 @@ class DebugPanel(Widget):
         box.add_widget(id_anchor)
 
         # ---------- 2. 快捷操作行 ----------
-        grid = GridLayout(cols=4, padding=dp(10), spacing=dp(15), size_hint=(None, None))
+        grid = GridLayout(
+            cols=4, padding=dp(10), spacing=dp(15), size_hint=(None, None)
+        )
         grid.bind(minimum_height=grid.setter("height"))
 
         btn_zero = SquareTechButton(text="归零\n(回中位)")
@@ -940,21 +941,31 @@ class DebugPanel(Widget):
         grid.add_widget(btn_set_id)
         grid.add_widget(btn_motor_mode)
 
-        grid_anchor = AnchorLayout(anchor_x="center", anchor_y="top", size_hint=(1, None))
+        grid_anchor = AnchorLayout(
+            anchor_x="center", anchor_y="top", size_hint=(1, None)
+        )
         grid_anchor.add_widget(grid)
         box.add_widget(grid_anchor)
         sv.add_widget(box)
 
         def _reflow_single_grid(instance, width):
             cols = max(1, grid.cols)
-            spacing = grid.spacing[0] if isinstance(grid.spacing, (list, tuple)) else grid.spacing
-            pad = grid.padding[0] * 2 if isinstance(grid.padding, (list, tuple)) else grid.padding * 2
+            spacing = (
+                grid.spacing[0]
+                if isinstance(grid.spacing, (list, tuple))
+                else grid.spacing
+            )
+            pad = (
+                grid.padding[0] * 2
+                if isinstance(grid.padding, (list, tuple))
+                else grid.padding * 2
+            )
 
             avail = max(dp(200), sv.width - pad)
             item_w = max(dp(80), (avail - spacing * (cols - 1)) / cols)
             item_h = dp(90)
 
-            grid.width = avail*1.02
+            grid.width = avail * 1.02
             grid.size_hint_x = None
             grid.size_hint_y = None
 
@@ -1089,7 +1100,11 @@ class DebugPanel(Widget):
             app = App.get_running_app()
             sid = _get_sid()
             try:
-                if not (hasattr(app, "servo_bus") and app.servo_bus and not getattr(app.servo_bus, "is_mock", True)):
+                if not (
+                    hasattr(app, "servo_bus")
+                    and app.servo_bus
+                    and not getattr(app.servo_bus, "is_mock", True)
+                ):
                     self._show_info_popup("ServoBus 未连接")
                     return
                 mgr = app.servo_bus.manager
@@ -1102,23 +1117,27 @@ class DebugPanel(Widget):
                 self._show_info_popup(f"扭矩操作失败: {ex}")
 
         # 间歇旋转：在后台线程循环移动，直到停止
-        if not hasattr(self, '_spin_controllers'):
+        if not hasattr(self, "_spin_controllers"):
             self._spin_controllers = {}
 
         def _spin_toggle(_):
             sid = _get_sid()
             ctrl = self._spin_controllers.get(sid)
-            if ctrl and ctrl.get('running'):
-                ctrl['running'] = False
-                self._show_info_popup('停止间歇旋转')
+            if ctrl and ctrl.get("running"):
+                ctrl["running"] = False
+                self._show_info_popup("停止间歇旋转")
                 return
 
             app = App.get_running_app()
-            if not (hasattr(app, "servo_bus") and app.servo_bus and not getattr(app.servo_bus, "is_mock", True)):
-                self._show_info_popup('ServoBus 未连接')
+            if not (
+                hasattr(app, "servo_bus")
+                and app.servo_bus
+                and not getattr(app.servo_bus, "is_mock", True)
+            ):
+                self._show_info_popup("ServoBus 未连接")
                 return
 
-            stop_flag = {'running': True}
+            stop_flag = {"running": True}
             self._spin_controllers[sid] = stop_flag
 
             def _run_spin():
@@ -1126,13 +1145,13 @@ class DebugPanel(Widget):
                 a = 500
                 b = 3500
                 try:
-                    while stop_flag['running']:
+                    while stop_flag["running"]:
                         try:
                             mgr.set_position_time(sid, a, time_ms=400)
                         except Exception:
                             pass
                         time.sleep(0.6)
-                        if not stop_flag['running']:
+                        if not stop_flag["running"]:
                             break
                         try:
                             mgr.set_position_time(sid, b, time_ms=400)
@@ -1140,42 +1159,52 @@ class DebugPanel(Widget):
                             pass
                         time.sleep(0.6)
                 finally:
-                    stop_flag['running'] = False
+                    stop_flag["running"] = False
 
             threading.Thread(target=_run_spin, daemon=True).start()
-            self._show_info_popup('开始间歇旋转')
+            self._show_info_popup("开始间歇旋转")
 
         def _set_id(_):
             sid = _get_sid()
             app = App.get_running_app()
-            if not (hasattr(app, "servo_bus") and app.servo_bus and not getattr(app.servo_bus, "is_mock", True)):
-                self._show_info_popup('ServoBus 未连接')
+            if not (
+                hasattr(app, "servo_bus")
+                and app.servo_bus
+                and not getattr(app.servo_bus, "is_mock", True)
+            ):
+                self._show_info_popup("ServoBus 未连接")
                 return
 
             from kivy.uix.textinput import TextInput
-            content = BoxLayout(orientation='vertical', spacing=8, padding=8)
-            ti = TextInput(text=str(sid), multiline=False, input_filter='int')
+
+            content = BoxLayout(orientation="vertical", spacing=8, padding=8)
+            ti = TextInput(text=str(sid), multiline=False, input_filter="int")
             content.add_widget(ti)
             btn_row = BoxLayout(size_hint_y=None, height=dp(44), spacing=8)
-            ok = TechButton(text='写入')
-            cancel = TechButton(text='取消')
+            ok = TechButton(text="写入")
+            cancel = TechButton(text="取消")
             btn_row.add_widget(ok)
             btn_row.add_widget(cancel)
             content.add_widget(btn_row)
-            popup = Popup(title='设置舵机ID', content=content, size_hint=(None,None), size=(320,160))
+            popup = Popup(
+                title="设置舵机ID",
+                content=content,
+                size_hint=(None, None),
+                size=(320, 160),
+            )
 
             def _do_ok(_):
                 try:
                     new_id = int(ti.text)
                     mgr = app.servo_bus.manager
-                    mgr.write_data_by_name(sid, 'SERVO_ID', new_id)
+                    mgr.write_data_by_name(sid, "SERVO_ID", new_id)
                     time.sleep(0.2)
                     ok_ping = mgr.ping(new_id)
                     popup.dismiss()
-                    self._show_info_popup('写入ID ' + ('成功' if ok_ping else '失败'))
+                    self._show_info_popup("写入ID " + ("成功" if ok_ping else "失败"))
                 except Exception as ex:
                     popup.dismiss()
-                    self._show_info_popup(f'写ID失败: {ex}')
+                    self._show_info_popup(f"写ID失败: {ex}")
 
             def _do_cancel(_):
                 popup.dismiss()
@@ -1187,27 +1216,36 @@ class DebugPanel(Widget):
         def _set_motor_mode(_):
             sid = _get_sid()
             app = App.get_running_app()
-            if not (hasattr(app, "servo_bus") and app.servo_bus and not getattr(app.servo_bus, "is_mock", True)):
-                self._show_info_popup('ServoBus 未连接')
+            if not (
+                hasattr(app, "servo_bus")
+                and app.servo_bus
+                and not getattr(app.servo_bus, "is_mock", True)
+            ):
+                self._show_info_popup("ServoBus 未连接")
                 return
-            content = BoxLayout(orientation='vertical', spacing=8, padding=8)
-            btn_servo = TechButton(text='舵机模式')
-            btn_dc = TechButton(text='直流电机模式')
+            content = BoxLayout(orientation="vertical", spacing=8, padding=8)
+            btn_servo = TechButton(text="舵机模式")
+            btn_dc = TechButton(text="直流电机模式")
             btn_row = BoxLayout(size_hint_y=None, height=dp(44), spacing=8)
             btn_row.add_widget(btn_servo)
             btn_row.add_widget(btn_dc)
             content.add_widget(btn_row)
-            popup = Popup(title='设置电机模式', content=content, size_hint=(None,None), size=(320,120))
+            popup = Popup(
+                title="设置电机模式",
+                content=content,
+                size_hint=(None, None),
+                size=(320, 120),
+            )
 
             def _do(mode):
                 try:
                     mgr = app.servo_bus.manager
-                    mgr.write_data_by_name(sid, 'MOTOR_MODE', mode)
+                    mgr.write_data_by_name(sid, "MOTOR_MODE", mode)
                     popup.dismiss()
-                    self._show_info_popup('已设置电机模式')
+                    self._show_info_popup("已设置电机模式")
                 except Exception as ex:
                     popup.dismiss()
-                    self._show_info_popup(f'设置模式失败: {ex}')
+                    self._show_info_popup(f"设置模式失败: {ex}")
 
             btn_servo.bind(on_release=lambda *_: _do(0x01))
             btn_dc.bind(on_release=lambda *_: _do(0x00))
@@ -1224,5 +1262,10 @@ class DebugPanel(Widget):
         btn_motor_mode.bind(on_release=_set_motor_mode)
 
         # 更新扭矩显示当 ID 变化时，并在创建时立即刷新一次扭矩状态
-        self._single_id_label.bind(text=lambda *_: (_set_sid(_get_sid()), Clock.schedule_once(lambda dt: _update_torque_label(), 0)))
+        self._single_id_label.bind(
+            text=lambda *_: (
+                _set_sid(_get_sid()),
+                Clock.schedule_once(lambda dt: _update_torque_label(), 0),
+            )
+        )
         Clock.schedule_once(lambda dt: _update_torque_label(), 0)

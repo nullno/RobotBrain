@@ -17,8 +17,8 @@ version = 0.3
 requirements = python3,kivy==2.3.0,pyjnius,plyer,requests,pyserial,android
 
 # UI配置
-orientation = landscape
 fullscreen = 1
+orientation = landscape
 icon.filename = %(source.dir)s/assets/logo.png
 
 # 启动页
