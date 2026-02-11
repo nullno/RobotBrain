@@ -1,20 +1,27 @@
 import serial
+import os
 from .uart_servo import UartServoManager
 from .data_table import SERVO_ID_BRODCAST, TORQUE_ENABLE, TORQUE_DISABLE
 
 class ServoBus:
-    def __init__(self, port="COM3", baudrate=115200):
+    def __init__(self, port="COM6", baudrate=115200):
         self.is_mock = False
         try:
-            # 参考实例配置：timeout=0 保证 Kivy 界面不卡死
-            self.uart = serial.Serial(
-                port=port, baudrate=baudrate,
-                parity=serial.PARITY_NONE, stopbits=1,
-                bytesize=8, timeout=0
-            )
-            # 默认管理 1-25 号舵机
-            self.manager = UartServoManager(self.uart, servo_id_list=list(range(1, 26)))
-            print(f"✅ JOHO SDK Link Start! Port: {port}")
+            # 若传入的是一个已打开的 uart-like 对象（Android 情况），则直接使用它
+            if not isinstance(port, (str, bytes, os.PathLike)) and hasattr(port, 'write') and hasattr(port, 'readall'):
+                self.uart = port
+                self.manager = UartServoManager(self.uart, servo_id_list=list(range(1, 26)))
+                print(f"✅ JOHO SDK Link Start! (android usb wrapper)")
+            else:
+                # 参考实例配置：timeout=0 保证 Kivy 界面不卡死
+                self.uart = serial.Serial(
+                    port=port, baudrate=baudrate,
+                    parity=serial.PARITY_NONE, stopbits=1,
+                    bytesize=8, timeout=0
+                )
+                # 默认管理 1-25 号舵机
+                self.manager = UartServoManager(self.uart, servo_id_list=list(range(1, 26)))
+                print(f"✅ JOHO SDK Link Start! Port: {port}")
         except Exception as e:
             print(f"⚠️  Hardware not found: {e}. Switching to MOCK mode.")
             self.is_mock = True

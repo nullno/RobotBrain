@@ -77,34 +77,45 @@ class CameraView(Image):
     def _start_android(self):
         from kivy.uix.camera import Camera
         from kivy.clock import Clock
-
         def start_camera():
             try:
                 self.camera = None
                 camera_started = False
-                
-                # 尝试多个摄像头索引：优先尝试 0/1/2，不指定索引作为最后手段
+
+                # 尝试多个摄像头索引：优先尝试 1/2/不指定索引作为最后手段
                 for idx in [1, 2, -1]:
                     try:
                         if idx == -1:
-                            # 最后尝试不指定index
                             self.camera = Camera(play=True, resolution=(640, 480))
                         else:
                             self.camera = Camera(index=idx, play=True, resolution=(640, 480))
-                        
-                        # 绑定texture，前置摄像头需要翻转
-                        def _on_text(inst, val, camera_idx=idx):
-                            if val:
-                                # 前置摄像头(index=1)通常是上下倒置的，需要翻转
-                                if camera_idx == 1:
-                                    from kivy.graphics import PushMatrix, PopMatrix, Scale
-                                    self.canvas.clear()
+
+                        # 仅在首次确定需要翻转时，设置一次 canvas 转换指令，避免每帧清理画布导致闪烁
+                        if idx == 1:
+                            try:
+                                from kivy.graphics import PushMatrix, PopMatrix, Scale
+                                # 在 canvas.before/after 中添加变换指令
+                                if not getattr(self, '_camera_flip_installed', False):
                                     with self.canvas.before:
                                         PushMatrix()
-                                        Scale(-1, 1, 1)  # 垂直翻转
-                                self.texture = val
-                                RuntimeStatusLogger.log_info(f'Android 摄像头 texture 就绪 (index={camera_idx})')
-                        
+                                        Scale(-1, 1, 1)
+                                    with self.canvas.after:
+                                        PopMatrix()
+                                    self._camera_flip_installed = True
+                            except Exception:
+                                pass
+
+                        # 绑定 texture 回调 —— 回调只负责替换 texture，不进行 canvas 操作
+                        def _on_text(inst, val, camera_idx=idx):
+                            try:
+                                if val:
+                                    self.texture = val
+                                    RuntimeStatusLogger.log_info(
+                                        f'Android 摄像头 texture 就绪 (index={camera_idx})'
+                                    )
+                            except Exception:
+                                pass
+
                         self.camera.bind(texture=_on_text)
                         self._camera_index = idx
                         camera_started = True
@@ -115,7 +126,7 @@ class CameraView(Image):
                         print(f"⚠️ 尝试摄像头 index={idx} 失败: {e}")
                         self.camera = None
                         continue
-                
+
                 if not camera_started:
                     RuntimeStatusLogger.log_error("无法启动任何摄像头")
                     print("❌ 无法启动任何摄像头")

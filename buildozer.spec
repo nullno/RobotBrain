@@ -30,15 +30,18 @@ include_statusbar = False
 android.window_layout_in_display_cutout_mode = short_edges
 
 # 打包优化
-android.gradle_dependencies = 
 android.add_src = 
 
 # 权限配置
 # CAMERA - 摄像头
+# USB_PERMISSION - USB
 # INTERNET - 网络连接
 # ACCESS_NETWORK_STATE - 网络状态
 # WRITE/READ_EXTERNAL_STORAGE - 文件访问
-android.permissions = INTERNET,ACCESS_NETWORK_STATE,CAMERA,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE
+android.add_xml = android_usb/device_filter.xml
+android.manifest.intent_filters = android_usb/intent-filter.xml
+android.permissions = USB_PERMISSION,INTERNET,ACCESS_NETWORK_STATE,CAMERA,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE
+android.gradle_dependencies = com.github.mik3y:usb-serial-for-android:3.5.1
 
 # Android版本配置
 android.api = 31
@@ -50,6 +53,8 @@ android.archs = arm64-v8a
 
 # 隐私政策（可选但推荐）
 android.privacy_policy = 
+
+
 
 [buildozer]
 log_level = 2

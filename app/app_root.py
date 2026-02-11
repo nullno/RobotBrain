@@ -115,7 +115,7 @@ class RobotDashboardApp(App):
 
         # ---------- 硬件 ----------
         try:
-            dev_port = "/dev/ttyUSB0" if platform == "android" else "COM3"
+            dev_port = "/dev/ttyUSB0" if platform == "android" else "COM6"
             self._dev_port = dev_port
             self.servo_bus = ServoBus(port=dev_port)
         except Exception as e:
@@ -273,81 +273,23 @@ class RobotDashboardApp(App):
             def _handle():
                 try:
                     if event == "added":
-                        # 解析 device_id 中的实际串口端口名（如 COM3 或 /dev/ttyUSB0）
-                        def _parse_port(dev_id):
-                            try:
-                                if not dev_id:
-                                    return None
-                                if "::" in dev_id:
-                                    return dev_id.split("::", 1)[0]
-                                import re
+                        # 解析 device_id 中的实际串口端口名（如 COM6 或 /dev/ttyUSB0）
+                        # Android 特殊处理：尝试通过 usb-serial-for-android 打开设备（Pyjnius）
+                        try:
+                            if platform == "android":
+                                try:
+                                    from services.android_serial import (
+                                        open_first_usb_serial,
+                                    )
 
-                                m = re.search(r"(COM\d+)", dev_id, re.I)
-                                if m:
-                                    return m.group(1)
-                                m = re.search(r"(/dev/tty[^,;\s]+)", dev_id)
-                                if m:
-                                    return m.group(1)
-                                return dev_id
-                            except Exception:
-                                return None
-
-                        # 首先尝试解析 device_id 提供的端口
-                        port = (
-                            _parse_port(device_id)
-                            or getattr(self, "_dev_port", None)
-                            or ("/dev/ttyUSB0" if platform == "android" else "COM3")
-                        )
-                        # 若当前为 mock，则尝试使用可用端口列表连接（优先使用解析到的 port）
-                        if not getattr(self, "servo_bus", None) or getattr(
-                            self.servo_bus, "is_mock", True
-                        ):
-                            try:
-                                # 保存首选端口
-                                self._dev_port = port
-                                # 优先尝试解析到的端口，然后回退到系统枚举的端口
-                                tried = [port]
-                                connected = False
-                                # 先尝试首选端口
-                                try_ports = list(tried)
-                                # 如果可用，使用 pyserial 列出更多候选端口（包含描述信息），优先匹配 CH340/USB-SERIAL
-                                if _list_ports:
+                                    usb_wrapper = open_first_usb_serial(baud=115200)
+                                except Exception:
+                                    usb_wrapper = None
+                                if usb_wrapper:
                                     try:
-                                        for p in _list_ports.comports():
-                                            dev = p.device
-                                            desc = p.description or ""
-                                            if dev not in try_ports:
-                                                # 优先选取包含 CH340/USB-SERIAL 的设备
-                                                if (
-                                                    "ch340" in desc.lower()
-                                                    or "usb-serial" in desc.lower()
-                                                    or "usb serial" in desc.lower()
-                                                ):
-                                                    try_ports.insert(0, dev)
-                                                else:
-                                                    try_ports.append(dev)
-                                    except Exception:
-                                        pass
-
-                                # 等待系统稳固枚举设备再尝试（短延迟），并重试一次以提高热插拔稳定性
-                                import time as _time
-
-                                _time.sleep(0.2)
-                                # 额外重试一次枚举以捕获延迟出现的 COM 端口
-                                if _list_ports:
-                                    try:
-                                        for p in _list_ports.comports():
-                                            dev = p.device
-                                            if dev not in try_ports:
-                                                try_ports.append(dev)
-                                    except Exception:
-                                        pass
-
-                                for cand in try_ports:
-                                    try:
-                                        sb = ServoBus(port=cand)
+                                        sb = ServoBus(port=usb_wrapper)
                                         if sb and not getattr(sb, "is_mock", True):
-                                            # 关闭旧实例
+                                            # 成功连接，替换旧实例并刷新 UI
                                             try:
                                                 if getattr(
                                                     self, "servo_bus", None
@@ -359,7 +301,6 @@ class RobotDashboardApp(App):
                                             except Exception:
                                                 pass
                                             self.servo_bus = sb
-                                            # 强制扫描已连接的舵机以确保 manager 有最新的 servo_info_dict
                                             try:
                                                 if getattr(
                                                     self.servo_bus, "manager", None
@@ -372,81 +313,187 @@ class RobotDashboardApp(App):
                                                         pass
                                             except Exception:
                                                 pass
-                                            connected = True
                                             try:
-                                                imu = IMUReader(simulate=False)
-                                                imu.start()
-                                                self.motion_controller = (
-                                                    MotionController(
-                                                        self.servo_bus.manager,
-                                                        balance_ctrl=self.balance_ctrl,
-                                                        imu_reader=imu,
-                                                        neutral_positions={},
-                                                    )
-                                                )
-                                            except Exception:
-                                                self.motion_controller = None
-                                            try:
-                                                RuntimeStatusLogger.log_info(
-                                                    f"检测到 OTG 设备，已连接串口: {cand}"
+                                                Clock.schedule_once(
+                                                    self._safe_refresh_ui, 0
                                                 )
                                             except Exception:
                                                 pass
-                                            break
+                                            return
                                     except Exception:
                                         pass
+                        except Exception:
+                            pass
 
-                                # 如果连接成功则刷新 UI；若未成功且为 Android，则提示用户在手机端用我们的应用连接
-                                if connected:
-                                    try:
-                                        Clock.schedule_once(self._safe_refresh_ui, 0)
-                                    except Exception:
-                                        pass
-                                else:
-                                    try:
-                                        if platform == "android":
+                    def _parse_port(dev_id):
+                        try:
+                            if not dev_id:
+                                return None
+                            if "::" in dev_id:
+                                return dev_id.split("::", 1)[0]
+                            import re
 
-                                            def _show_connect_tip(dt):
+                            m = re.search(r"(COM\d+)", dev_id, re.I)
+                            if m:
+                                return m.group(1)
+                            m = re.search(r"(/dev/tty[^,;\s]+)", dev_id)
+                            if m:
+                                return m.group(1)
+                            return dev_id
+                        except Exception:
+                            return None
+
+                    # 首先尝试解析 device_id 提供的端口
+                    port = (
+                        _parse_port(device_id)
+                        or getattr(self, "_dev_port", None)
+                        or ("/dev/ttyUSB0" if platform == "android" else "COM6")
+                    )
+                    # 若当前为 mock，则尝试使用可用端口列表连接（优先使用解析到的 port）
+                    if not getattr(self, "servo_bus", None) or getattr(
+                        self.servo_bus, "is_mock", True
+                    ):
+                        try:
+                            # 保存首选端口
+                            self._dev_port = port
+                            # 优先尝试解析到的端口，然后回退到系统枚举的端口
+                            tried = [port]
+                            connected = False
+                            # 先尝试首选端口
+                            try_ports = list(tried)
+                            # 如果可用，使用 pyserial 列出更多候选端口（包含描述信息），优先匹配 CH340/USB-SERIAL
+                            if _list_ports:
+                                try:
+                                    for p in _list_ports.comports():
+                                        dev = p.device
+                                        desc = p.description or ""
+                                        if dev not in try_ports:
+                                            # 优先选取包含 CH340/USB-SERIAL 的设备
+                                            if (
+                                                "ch340" in desc.lower()
+                                                or "usb-serial" in desc.lower()
+                                                or "usb serial" in desc.lower()
+                                            ):
+                                                try_ports.insert(0, dev)
+                                            else:
+                                                try_ports.append(dev)
+                                except Exception:
+                                    pass
+
+                            # 等待系统稳固枚举设备再尝试（短延迟），并重试一次以提高热插拔稳定性
+                            import time as _time
+
+                            _time.sleep(0.2)
+                            # 额外重试一次枚举以捕获延迟出现的 COM 端口
+                            if _list_ports:
+                                try:
+                                    for p in _list_ports.comports():
+                                        dev = p.device
+                                        if dev not in try_ports:
+                                            try_ports.append(dev)
+                                except Exception:
+                                    pass
+
+                            for cand in try_ports:
+                                try:
+                                    sb = ServoBus(port=cand)
+                                    if sb and not getattr(sb, "is_mock", True):
+                                        # 关闭旧实例
+                                        try:
+                                            if getattr(
+                                                self, "servo_bus", None
+                                            ) and hasattr(self.servo_bus, "close"):
                                                 try:
-                                                    content = BoxLayout(
-                                                        orientation="vertical",
-                                                        spacing=8,
-                                                        padding=8,
-                                                    )
-                                                    content.add_widget(
-                                                        Label(
-                                                            text="检测到手机连接但未找到 USB 串口。请在手机上打开本应用并启用 USB/OTG 串口模式进行连接。"
-                                                        )
-                                                    )
-                                                    btn = Button(
-                                                        text="我知道了",
-                                                        size_hint_y=None,
-                                                        height=40,
-                                                    )
-                                                    popup = Popup(
-                                                        title="请在手机上启用串口连接",
-                                                        content=content,
-                                                        size_hint=(0.9, None),
-                                                        height=200,
-                                                    )
-
-                                                    def _close(instance):
-                                                        try:
-                                                            popup.dismiss()
-                                                        except Exception:
-                                                            pass
-
-                                                    btn.bind(on_release=_close)
-                                                    content.add_widget(btn)
-                                                    popup.open()
+                                                    self.servo_bus.close()
                                                 except Exception:
                                                     pass
+                                        except Exception:
+                                            pass
+                                        self.servo_bus = sb
+                                        # 强制扫描已连接的舵机以确保 manager 有最新的 servo_info_dict
+                                        try:
+                                            if getattr(self.servo_bus, "manager", None):
+                                                try:
+                                                    self.servo_bus.manager.servo_scan(
+                                                        list(range(1, 26))
+                                                    )
+                                                except Exception:
+                                                    pass
+                                        except Exception:
+                                            pass
+                                        connected = True
+                                        try:
+                                            imu = IMUReader(simulate=False)
+                                            imu.start()
+                                            self.motion_controller = MotionController(
+                                                self.servo_bus.manager,
+                                                balance_ctrl=self.balance_ctrl,
+                                                imu_reader=imu,
+                                                neutral_positions={},
+                                            )
+                                        except Exception:
+                                            self.motion_controller = None
+                                        try:
+                                            RuntimeStatusLogger.log_info(
+                                                f"检测到 OTG 设备，已连接串口: {cand}"
+                                            )
+                                        except Exception:
+                                            pass
+                                        break
+                                except Exception:
+                                    pass
 
-                                            Clock.schedule_once(_show_connect_tip, 0)
-                                    except Exception:
-                                        pass
-                            except Exception:
-                                pass
+                            # 如果连接成功则刷新 UI；若未成功且为 Android，则提示用户在手机端用我们的应用连接
+                            if connected:
+                                try:
+                                    Clock.schedule_once(self._safe_refresh_ui, 0)
+                                except Exception:
+                                    pass
+                            else:
+                                try:
+                                    if platform == "android":
+
+                                        def _show_connect_tip(dt):
+                                            try:
+                                                content = BoxLayout(
+                                                    orientation="vertical",
+                                                    spacing=8,
+                                                    padding=8,
+                                                )
+                                                content.add_widget(
+                                                    Label(
+                                                        text="检测到手机连接但未找到 USB 串口。请在手机上打开本应用并启用 USB/OTG 串口模式进行连接。"
+                                                    )
+                                                )
+                                                btn = Button(
+                                                    text="我知道了",
+                                                    size_hint_y=None,
+                                                    height=40,
+                                                )
+                                                popup = Popup(
+                                                    title="请在手机上启用串口连接",
+                                                    content=content,
+                                                    size_hint=(0.9, None),
+                                                    height=200,
+                                                )
+
+                                                def _close(instance):
+                                                    try:
+                                                        popup.dismiss()
+                                                    except Exception:
+                                                        pass
+
+                                                btn.bind(on_release=_close)
+                                                content.add_widget(btn)
+                                                popup.open()
+                                            except Exception:
+                                                pass
+
+                                        Clock.schedule_once(_show_connect_tip, 0)
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
                     elif event == "removed":
                         # 简单清理：优雅关闭 servo_bus 与 motion_controller，并刷新 UI
                         try:
@@ -510,7 +557,7 @@ class RobotDashboardApp(App):
                         pass
                 # 最后加入默认端口作为兜底
                 default = getattr(self, "_dev_port", None) or (
-                    "/dev/ttyUSB0" if platform == "android" else "COM3"
+                    "/dev/ttyUSB0" if platform == "android" else "COM6"
                 )
                 if default and default not in candidates:
                     candidates.append(default)

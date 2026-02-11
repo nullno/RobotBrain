@@ -15,7 +15,7 @@ class StartupTip(BoxLayout):
         super().__init__(orientation='vertical', spacing=8, padding=12, size_hint=(None, None), **kwargs)
         self.width = dp(400)  # 适合手机屏幕的宽度
         # 根据平台调整高度：Android需要权限提示文本
-        self.height = dp(200) if platform == 'android' else dp(200)
+        self.height = dp(200)
 
         with self.canvas.before:
             # 外层荧光边框（略大于内层）
@@ -34,27 +34,27 @@ class StartupTip(BoxLayout):
         icon_path = kwargs.pop('icon_path', 'assets/icon_tip.png')
         if os.path.exists(icon_path):
             try:
-                icon_widget = Image(source=icon_path, size_hint=(None, None), size=(48, 48))
+                icon_widget = Image(source=icon_path, size_hint=(None, None), size=(dp(48), dp(48)))
             except Exception:
                 icon_widget = None
 
         if not icon_widget:
-            icon_widget = Label(text=icon, font_size='32sp', size_hint=(None, None), size=(48, 48), halign='center', valign='middle')
+            icon_widget = Label(text=icon, font_size='32sp', size_hint=(None, None), size=(dp(48), dp(48)), halign='center', valign='middle')
             icon_widget.bind(size=lambda inst, val: setattr(inst, 'text_size', (val[0], val[1])))
 
-        icon_container = AnchorLayout(anchor_x='center', anchor_y='center', size_hint=(1, None), height=56)
+        icon_container = AnchorLayout(anchor_x='center', anchor_y='center', size_hint=(1, None), height=dp(56))
         icon_container.add_widget(icon_widget)
         # 居中提示文字 - 根据平台显示不同内容
         if platform == 'android':
             default_msg = '请允许摄像头麦克风权限\n点击"允许"完成权限申请\n确保 USB OTG 转接板已牢固连接'
         else:
-            default_msg = '应用已启动\n按下面板按钮开始调试'
+            default_msg = '应用已启动\n请确保 USB OTG 转接板已牢固连接'
         
         lbl = Label(text=msg or default_msg, font_size='18sp', halign='center', valign='middle')
         lbl.bind(size=lambda inst, val: setattr(inst, 'text_size', (val[0], None)))
 
         # 底部按钮：在 Android 上增大高度以便触控
-        btn_height = dp(56) if platform == 'android' else dp(40)
+        btn_height = dp(40)
         btn = Button(text='知道了', size_hint=(1, None), height=btn_height, background_normal='')
         btn.background_color = (1, 1, 1, 0.08)
         btn.color = (1, 1, 1, 1)
