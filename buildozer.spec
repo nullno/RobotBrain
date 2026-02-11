@@ -42,6 +42,8 @@ android.add_xml = android_usb/device_filter.xml
 android.manifest.intent_filters = android_usb/intent-filter.xml
 android.permissions = USB_PERMISSION,INTERNET,ACCESS_NETWORK_STATE,CAMERA,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE
 android.gradle_dependencies = com.github.mik3y:usb-serial-for-android:3.5.1
+android.gradle_repositories = maven { url "https://jitpack.io" }
+android.enable_androidx = True
 
 # Android版本配置
 android.api = 31
