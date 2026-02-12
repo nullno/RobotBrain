@@ -14,7 +14,8 @@ version = 0.1
 # - pyjnius: Python-Java接口（Android权限和功能）
 # - plyer: 跨平台设备功能API
 # - requests: HTTP库
-requirements = python3,kivy==2.3.0,pyjnius,plyer,requests,pyserial,android
+# - opencv, numpy: 视觉处理
+requirements = python3,kivy==2.3.0,pyjnius,plyer,requests,pyserial,android,opencv,numpy
 
 # 修复 Colab 上的 AIDL 错误
 # android.skip_update = False

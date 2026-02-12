@@ -51,7 +51,7 @@ jobs:
       - name: Install Python deps
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          python -m pip install --no-cache-dir buildozer==1.7.0 cython==0.29.33
+          python -m pip install --no-cache-dir buildozer cython
 
       - name: Build APK with buildozer
         env:
@@ -59,7 +59,7 @@ jobs:
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
           ANDROID_NDK_HOME: $HOME/Android/ndk/25.2.9519653
         run: |
-          buildozer -v android debug
+          buildozer android debug
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
