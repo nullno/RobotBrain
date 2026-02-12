@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<activity>
-    <intent-filter>
-        <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
-    </intent-filter>
-    <meta-data android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
-               android:resource="@xml/device_filter" />
-</activity>
