@@ -46,8 +46,8 @@ android.accept_sdk_license = True
 # WRITE/READ_EXTERNAL_STORAGE - 文件访问
 
 android.permissions = USB_PERMISSION,INTERNET,ACCESS_NETWORK_STATE,CAMERA,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE
-android.add_xml = android/usb/device_filter.xml
-android.manifest.intent_filters = android/usb/intent-filter.xml
+android.add_xml = android/usb/device_filter.xml:device_filter.xml
+android.manifest.intent_filters = android/usb/intent_filter.xml
 android.add_libs = android/libs/usb-serial-for-android-3.5.1.aar
 android.enable_androidx = True
 android.gradle_args = -Xmx4g
