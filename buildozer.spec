@@ -47,9 +47,9 @@ android.accept_sdk_license = True
 # (注意：USB_PERMISSION 是代码中的 Intent Action，不是 Manifest 权限，已移除)
 
 android.permissions = INTERNET,ACCESS_NETWORK_STATE,CAMERA,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE
-
-# android.manifest.intent_filters = android/usb/intent_filter.xml
-# android.extra_res_dirs = android/res
+android.features = android.hardware.usb.host
+android.extra_res_dirs = android_res
+android.manifest.intent_filters = android/usb/intent_filter.xml
 
 # 使用本地 aar 库（最稳妥的方式，避免 Maven 仓库连接问题）
 android.add_libs = android/libs/usb-serial-for-android-3.5.1.aar
@@ -60,7 +60,7 @@ android.enable_androidx = True
 android.gradle_args = -Xmx4g
 
 # Android版本配置
-android.api = 33
+android.api = 31
 android.minapi = 21
 android.ndk = 25c
 
