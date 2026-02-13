@@ -15,7 +15,7 @@ version = 0.1
 # - plyer: 跨平台设备功能API
 # - requests: HTTP库
 # - opencv, numpy: 视觉处理
-requirements = python3,kivy==2.3.0,pyjnius,plyer,requests,pyserial,android,numpy,opencv
+requirements = python3,kivy==2.3.0,pyjnius,plyer,requests,pyserial,android
 
 # 修复 Colab 上的 AIDL 错误
 # android.skip_update = False
@@ -47,11 +47,12 @@ android.accept_sdk_license = True
 # (注意：USB_PERMISSION 是代码中的 Intent Action，不是 Manifest 权限，已移除)
 
 android.permissions = INTERNET,ACCESS_NETWORK_STATE,CAMERA,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE
-android.add_xml = android/usb/device_filter.xml:xml/device_filter.xml
+# android.add_xml IS NOT SUPPORTED. We use a local library project to inject resources.
 android.manifest.intent_filters = android/usb/intent_filter.xml
 
 # 使用本地 aar 库（最稳妥的方式，避免 Maven 仓库连接问题）
-android.add_libs = android/libs/usb-serial-for-android-3.5.1.aar
+# Also including android/usb_lib to provide res/xml/device_filter.xml
+android.add_libs = android/libs/usb-serial-for-android-3.5.1.aar, android/usb_lib
 # android.gradle_dependencies = com.github.mik3y:usb-serial-for-android:3.5.1
 android.enable_androidx = True
 android.gradle_args = -Xmx4g
