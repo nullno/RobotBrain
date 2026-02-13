@@ -54,11 +54,11 @@ android.enable_androidx = True
 android.gradle_args = -Xmx4g
 
 # Android版本配置
-android.api = 33
+android.api = 34
 android.minapi = 21
-android.ndk = 25b
+android.ndk = 25c
 
-# 架构配置（仅支持64位）
+# 架构配置（增加 32位 支持以兼容旧设备armeabi-v7a）
 android.archs = arm64-v8a
 
 # 隐私政策（可选但推荐）
