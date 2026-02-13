@@ -52,7 +52,8 @@ android.manifest.intent_filters = android/usb/intent_filter.xml
 
 # 使用本地 aar 库（最稳妥的方式，避免 Maven 仓库连接问题）
 # Also including android (as a library project) to provide res/xml/device_filter.xml
-android.add_libs = android/libs/usb-serial-for-android-3.5.1.aar,android
+android.add_libs = android/libs/usb-serial-for-android-3.5.1.aar
+android.add_src = android
 # android.gradle_dependencies = com.github.mik3y:usb-serial-for-android:3.5.1
 android.enable_androidx = True
 android.gradle_args = -Xmx4g
