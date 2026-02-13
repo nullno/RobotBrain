@@ -47,16 +47,15 @@ android.accept_sdk_license = True
 # (注意：USB_PERMISSION 是代码中的 Intent Action，不是 Manifest 权限，已移除)
 
 android.permissions = INTERNET,ACCESS_NETWORK_STATE,CAMERA,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE
-# android.add_xml IS NOT SUPPORTED. We use a local library project to inject resources.
+
 android.manifest.intent_filters = android/usb/intent_filter.xml
+android.extra_res_dirs = android/res
 
 # 使用本地 aar 库（最稳妥的方式，避免 Maven 仓库连接问题）
 android.add_libs = android/libs/usb-serial-for-android-3.5.1.aar
-# android.add_src = android
-
-# 指定资源目录，将 device_filter.xml 复制到主应用的 res/xml/
-android.res_dir = android/src/main/res
 # android.gradle_dependencies = com.github.mik3y:usb-serial-for-android:3.5.1
+
+
 android.enable_androidx = True
 android.gradle_args = -Xmx4g
 
