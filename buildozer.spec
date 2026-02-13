@@ -41,25 +41,28 @@ android.accept_sdk_license = True
 
 # 权限配置
 # CAMERA - 摄像头
-# USB_PERMISSION - USB
 # INTERNET - 网络连接
 # ACCESS_NETWORK_STATE - 网络状态
 # WRITE/READ_EXTERNAL_STORAGE - 文件访问
+# (注意：USB_PERMISSION 是代码中的 Intent Action，不是 Manifest 权限，已移除)
 
-android.permissions = USB_PERMISSION,INTERNET,ACCESS_NETWORK_STATE,CAMERA,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE
+android.permissions = INTERNET,ACCESS_NETWORK_STATE,CAMERA,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE
 android.add_xml = android/usb/device_filter.xml:xml/device_filter.xml
 android.manifest.intent_filters = android/usb/intent_filter.xml
-android.add_libs = android/libs/usb-serial-for-android-3.5.1.aar
+
+# 使用本地 aar 库（最稳妥的方式，避免 Maven 仓库连接问题）
+# android.add_libs = android/libs/usb-serial-for-android-3.5.1.aar
+android.gradle_dependencies = com.github.mik3y:usb-serial-for-android:3.5.1
 android.enable_androidx = True
 android.gradle_args = -Xmx4g
 
 # Android版本配置
-android.api = 34
+android.api = 33
 android.minapi = 21
 android.ndk = 25c
 
-# 架构配置（增加 32位 支持以兼容旧设备armeabi-v7a）
-android.archs = arm64-v8a
+# 架构配置（增加 32位 支持以兼容旧设备）
+android.archs = arm64-v8a, armeabi-v7a
 
 # 隐私政策（可选但推荐）
 android.privacy_policy = 
