@@ -48,8 +48,8 @@ android.accept_sdk_license = True
 
 android.permissions = INTERNET,ACCESS_NETWORK_STATE,CAMERA,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE
 
-android.manifest.intent_filters = android/usb/intent_filter.xml
-android.extra_res_dirs = android/res
+# android.manifest.intent_filters = android/usb/intent_filter.xml
+# android.extra_res_dirs = android/res
 
 # 使用本地 aar 库（最稳妥的方式，避免 Maven 仓库连接问题）
 android.add_libs = android/libs/usb-serial-for-android-3.5.1.aar
