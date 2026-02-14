@@ -109,6 +109,12 @@ class CameraView(Image):
                         def _on_text(inst, val, camera_idx=idx):
                             try:
                                 if val:
+                                    # 修复: Android 前置摄像头(idx=1)画面上下颠倒的问题
+                                    # 配合 canvas 的 Scale(-1, 1, 1) 实现正确的镜像与正立显示
+                                    if camera_idx == 1 and not getattr(val, '__flipped__', False):
+                                        val.flip_vertical()
+                                        val.__flipped__ = True
+                                        
                                     self.texture = val
                                     RuntimeStatusLogger.log_info(
                                         f'Android 摄像头 texture 就绪 (index={camera_idx})'

@@ -57,7 +57,58 @@ except Exception:
     gyroscope = None
 
 
+if platform == 'android':
+    try:
+        from android.runnable import run_on_ui_thread
+    except ImportError:
+        def run_on_ui_thread(f):
+            return f
+else:
+    def run_on_ui_thread(f):
+        return f
+
+
 class RobotDashboardApp(App):
+    def on_start(self):
+        if platform == 'android':
+            Clock.schedule_once(lambda dt: self.update_android_flags(), 0)
+
+    def on_resume(self):
+        if platform == 'android':
+            Clock.schedule_once(lambda dt: self.update_android_flags(), 0)
+
+    @run_on_ui_thread
+    def update_android_flags(self):
+        try:
+            from jnius import autoclass
+            PythonActivity = autoclass("org.kivy.android.PythonActivity")
+            activity = PythonActivity.mActivity
+            View = autoclass("android.view.View")
+            window = activity.getWindow()
+            decor_view = window.getDecorView()
+
+            # 组合标志位: 全屏 + 隐藏导航栏 + 沉浸模式 + 内容延伸且稳定
+            flags = (
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE |
+                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION |
+                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN |
+                View.SYSTEM_UI_FLAG_HIDE_NAVIGATION |
+                View.SYSTEM_UI_FLAG_FULLSCREEN |
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+            )
+            decor_view.setSystemUiVisibility(flags)
+
+            # 适配刘海屏/挖孔屏 (Android 9.0+, API 28+)
+            Build = autoclass("android.os.Build")
+            if Build.VERSION.SDK_INT >= 28:
+                LayoutParams = autoclass("android.view.WindowManager$LayoutParams")
+                # LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES = 1
+                params = window.getAttributes()
+                params.layoutInDisplayCutoutMode = 1
+                window.setAttributes(params)
+        except Exception as e:
+            print(f"⚠️ Android UI Flags 设置失败: {e}")
+
     def build(self):
         # Android权限申请
         if platform == "android":
@@ -69,37 +120,8 @@ class RobotDashboardApp(App):
                     check_permission,
                 )
 
-                # 获取 Android 的 Activity
-                PythonActivity = autoclass("org.kivy.android.PythonActivity")
-                activity = PythonActivity.mActivity
-                View = autoclass("android.view.View")
-                decor_view = activity.getWindow().getDecorView()
-
-                # 隐藏状态栏并设置沉浸式模式
-                # 增加 LAYOUT_FULLSCREEN/LAYOUT_HIDE_NAVIGATION 确保内容延伸到底层
-                decor_view.setSystemUiVisibility(
-                    View.SYSTEM_UI_FLAG_FULLSCREEN
-                    | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                    | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                    | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                    | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                    | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                )
-
-                # 适配刘海屏/挖孔屏 (Android 9.0+, API 28+)
-                # 强制允许内容绘制到挖孔区域
-                try:
-                    Build = autoclass("android.os.Build")
-                    if Build.VERSION.SDK_INT >= 28:
-                        LayoutParams = autoclass("android.view.WindowManager$LayoutParams")
-                        window = activity.getWindow()
-                        params = window.getAttributes()
-                        params.layoutInDisplayCutoutMode = (
-                            LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-                        )
-                        window.setAttributes(params)
-                except Exception as e:
-                    print(f"⚠️ 刘海屏适配设置失败: {e}")
+                # 初始化 UI 状态 (全屏、沉浸式、挖孔屏适配)
+                Clock.schedule_once(lambda dt: self.update_android_flags(), 0)
 
                 # 检查并请求权限
                 required_perms = [

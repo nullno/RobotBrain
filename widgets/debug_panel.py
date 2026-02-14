@@ -143,7 +143,7 @@ class ServoStatusCard(FloatLayout):
     def __init__(self, sid, data=None, online=True, **kwargs):
         super().__init__(
             size_hint=(None, None),
-            size=(dp(135), dp(100)),
+            size=(dp(95), dp(90)),
             **kwargs,
         )
 
@@ -158,7 +158,7 @@ class ServoStatusCard(FloatLayout):
                 self._border_color = Color(0.4, 0.4, 0.45, 0.6)
             self._bg_rect = RoundedRectangle(radius=[self.radius])
             self._border_line = Line(
-                rounded_rectangle=(0, 0, 100, 100, self.radius), width=1.2
+                rounded_rectangle=(0, 0, 90, 90, self.radius), width=1.2
             )
 
         self.bind(pos=self._update, size=self._update)
@@ -171,7 +171,7 @@ class ServoStatusCard(FloatLayout):
             size=(dp(60), dp(20)),
             halign="left",
             valign="middle",
-            pos_hint={"x": -0.02, "y": 0.8},
+            pos_hint={"x": -0.12, "y": 0.8},
         )
         self.lbl_id.bind(size=self.lbl_id.setter("text_size"))
         self.add_widget(self.lbl_id)
@@ -180,10 +180,10 @@ class ServoStatusCard(FloatLayout):
             text="●",
             color=(0.4, 1.0, 0.1, 1) if online else (0.6, 0.6, 0.6, 0.6),
             size_hint=(None, None),
-            size=(dp(20), dp(20)),
+            size=(dp(10), dp(10)),
             halign="right",
             valign="top",
-            font_size="18sp",
+            font_size="10sp",
             pos_hint={"right": 0.98, "top": 0.98},
         )
         self.lbl_conn.bind(size=self.lbl_conn.setter("text_size"))
@@ -214,18 +214,18 @@ class ServoStatusCard(FloatLayout):
     def update_data(self, data):
         self.body.clear_widgets()
         fields = [
-            ("角度", "-" if not data else str(data.get("pos", 0))),
+            ("角度", "20" if not data else str(data.get("pos", 0))),
             ("温度", "-" if not data else f"{data.get('temp',0)}°C"),
             ("电压", "-" if not data else f"{data.get('volt',0)}V"),
-            ("扭矩", "-" if not data else ("ON" if data.get("torque") else "OFF")),
+            ("扭矩", "20" if not data else ("ON" if data.get("torque") else "OFF")),
         ]
 
         for key, val in fields:
             cell = BoxLayout(
                 orientation="vertical",
                 size_hint=(1, None),
-                height=dp(40),
-                padding=(4, 2),
+                height=dp(30),
+                padding=(2, 2),
             )
             lbl_k = Label(
                 text=key,
@@ -316,7 +316,7 @@ class DebugPanel(Widget):
         content.bind(pos=_update_rect, size=_update_rect)
 
         info = Label(
-            text="调试面板 — 谨慎操作关节注意夹手",
+            text="调试面板 — 谨慎操作注意夹手",
             size_hint_y=None,
             height=dp(28),
             color=(0.85, 0.9, 0.98, 1),
@@ -324,11 +324,11 @@ class DebugPanel(Widget):
         content.add_widget(info)
 
         # ---------------- TabbedPanel ----------------
-        tp = TabbedPanel(do_default_tab=False, tab_width=150, size_hint_y=0.78)
+        tp = TabbedPanel(do_default_tab=False, tab_width=dp(100), size_hint_y=0.78)
         tp.tab_height = dp(40)
 
         # ---------- 动作 Tab ----------
-        t_actions = TabbedPanelItem(text="快捷动作", font_size=18)
+        t_actions = TabbedPanelItem(text="快捷动作", font_size="15sp")
         self._style_tab(t_actions)
 
         sv_actions = ScrollView(size_hint=(1, 1))
@@ -337,8 +337,8 @@ class DebugPanel(Widget):
 
         grid = GridLayout(
             cols=5,
-            padding=[dp(5), dp(10), dp(5), dp(5)],
-            spacing=dp(15),
+            padding=[dp(10), dp(15), dp(5), dp(5)],
+            spacing=dp(10),
             size_hint=(None, None),
         )
         grid.bind(minimum_height=grid.setter("height"))
@@ -391,7 +391,7 @@ class DebugPanel(Widget):
             item_w = max(dp(80), (avail - spacing * (cols - 1)) / cols)
             item_h = dp(90)
 
-            grid.width = avail * 1.01
+            grid.width = avail
             grid.size_hint_x = None
             grid.size_hint_y = None
 
@@ -401,7 +401,7 @@ class DebugPanel(Widget):
 
             for c in grid.children:
                 c.size_hint = (None, None)
-                c.width = item_w
+                c.width = item_w*0.96
                 c.height = item_h
 
         sv_actions.bind(width=_reflow_actions)
@@ -411,7 +411,7 @@ class DebugPanel(Widget):
         tp.add_widget(t_actions)
 
         # ---------- ✅ 舵机状态 Tab（宽度自适应 + 无抖动最终版） ----------
-        t_status = TabbedPanelItem(text="连接状态", font_size=18)
+        t_status = TabbedPanelItem(text="连接状态", font_size="15sp")
         self._style_tab(t_status)
 
         sv = ScrollView(size_hint=(1, 1))
@@ -465,8 +465,8 @@ class DebugPanel(Widget):
             background_color=(0, 0, 0, 0),
         )
 
-        # 固定弹窗宽度为 900（高度仍根据屏幕比例限制）
-        popup_width = dp(800) 
+        # 固定弹窗宽度为 600（高度仍根据屏幕比例限制）
+        popup_width = dp(600) 
         popup_height =dp(420)
         popup.size = (popup_width, popup_height)
 
@@ -857,7 +857,7 @@ class DebugPanel(Widget):
     # ================= 单舵机快捷调试 =================
     def _build_single_servo_tab(self, tp):
         app = App.get_running_app()
-        t_single = TabbedPanelItem(text="关节调试", font_size=18)
+        t_single = TabbedPanelItem(text="关节调试", font_size="15sp")
         self._style_tab(t_single)
 
         sv = ScrollView(size_hint=(1, 1))
@@ -1068,7 +1068,7 @@ class DebugPanel(Widget):
             item_w = max(dp(80), (avail - spacing * (cols - 1)) / cols)
             item_h = dp(90)
 
-            grid.width = avail * 1.02
+            grid.width = avail
             grid.size_hint_x = None
             grid.size_hint_y = None
 
@@ -1078,7 +1078,7 @@ class DebugPanel(Widget):
 
             for c in grid.children:
                 c.size_hint = (None, None)
-                c.width = item_w
+                c.width = item_w * 0.96
                 c.height = item_h
 
         sv.bind(width=_reflow_single_grid)
