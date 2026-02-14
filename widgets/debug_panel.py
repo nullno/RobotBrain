@@ -465,9 +465,9 @@ class DebugPanel(Widget):
             background_color=(0, 0, 0, 0),
         )
 
-        # 固定弹窗宽度为 600（高度仍根据屏幕比例限制）
+        # 固定弹窗宽度为 600
         popup_width = dp(600) 
-        popup_height =dp(420)
+        popup_height =dp(380)
         popup.size = (popup_width, popup_height)
 
         # ---------------- 事件绑定 ----------------

@@ -12,16 +12,39 @@ class GyroPanel(Widget):
         self.pitch = 0
         self.roll = 0
         self.yaw = 0
+        # 增加平滑缓冲变量
+        self._target_pitch = 0
+        self._target_roll = 0
+        self._target_yaw = 0
+        
         self.bind(pos=self.draw, size=self.draw)
         try:
             RuntimeStatusLogger.log_info('GyroPanel 初始化')
         except Exception:
             pass
+        
+        # 启动动画循环用于平滑过渡
+        from kivy.clock import Clock
+        Clock.schedule_interval(self._animate_smooth, 1.0 / 60.0)
+
+    def _animate_smooth(self, dt):
+        # 简单的线性插值平滑处理 (Lerp)，平滑系数 0.15
+        alpha = 0.15
+        if abs(self.pitch - self._target_pitch) > 0.01:
+            self.pitch += (self._target_pitch - self.pitch) * alpha
+        if abs(self.roll - self._target_roll) > 0.01:
+            self.roll += (self._target_roll - self.roll) * alpha
+        if abs(self.yaw - self._target_yaw) > 0.01:
+            self.yaw += (self._target_yaw - self.yaw) * alpha
+            
+        self.draw()
 
     def update(self, pitch, roll, yaw=0):
-        self.pitch = pitch
-        self.roll = roll
-        self.yaw = yaw
+        # 仅更新目标值，实际绘制由 _animate_smooth 接管
+        self._target_pitch = pitch
+        self._target_roll = roll
+        self._target_yaw = yaw
+        
         global _gyro_logged
         if not _gyro_logged:
             try:
@@ -29,7 +52,7 @@ class GyroPanel(Widget):
             except Exception:
                 pass
             _gyro_logged = True
-        self.draw()
+        # self.draw() # 移出，由 Loop 统一绘制
 
     def _get_text_texture(self, text, color):
         """生成数字纹理"""
@@ -56,29 +79,50 @@ class GyroPanel(Widget):
         r, g, b = NEON_CYAN
 
         # 由 pitch（前后）决定地平线的垂直偏移；roll 决定旋转角（缩放以便小面板也能明显可见）
-        pitch_offset = (self.pitch / 12.0) * (h * 0.5)  # 提高pitch灵敏度
-        max_pitch = 45.0
-        pitch_offset = max(-h * 0.5, min(h * 0.5, pitch_offset))
+        pitch_offset = (self.pitch / 25.0) * (h * 0.5)  # 降低灵敏度，使范围更合理
+        pitch_offset = max(-h * 0.8, min(h * 0.8, pitch_offset))
 
         with self.canvas:
-            # 背景：保持简洁，使用较轻透明度的暗色面板（去除紫色天地填充）
+            # 背景
             Color(0, 0, 0, 0.08)
             Rectangle(pos=(x, y), size=(w, h))
 
-            # 地平线：仅保留旋转的地平线与刻度，不绘制紫色填充
+            # --- 保存当前坐标系状态 ---
             PushMatrix()
-            Rotate(angle=-self.roll, origin=(cx, cy))
+            
+            # --- 裁剪区域 (Stencil)，确保线条不画出框 ---
+            # (Kivy 中标准的 Stencil 指令比较繁琐，这里简化为只在逻辑上限制)
+            
+            # 关键修复：先平移到中心，再旋转，再移回。
+            # 或者直接指定 Rotate origin=center
+            # 这里的逻辑是：地平线是无限远的，Roll 是绕視线中心旋转，Pitch 是地平线上下平移。
+            # 现在的代码是先 Rotate 再画线（带偏移）。
+            # Rotate(origin=(cx, cy)) 变换的是坐标系。
+            # 如果 pitch_offset 存在，线本身就在 cy + offset 处。
+            # 旋转后，线会绕 cx, cy 旋转。
+            # 这在视觉上对于姿态仪是正确的（地平线确实是绕中心视点转的）。
+            
+            # 尝试放大 roll 的显示效果，有些手机传感器数值较小
+            display_roll = self.roll * 1.5 
+            Rotate(angle=display_roll, origin=(cx, cy)) # 注意：方向可能需要反转，视传感器而定
 
+            # 绘制地平线 (加长线条保证旋转后能覆盖屏幕)
+            # 使用相对中心的坐标绘制
             Color(NEON_CYAN[0], NEON_CYAN[1], NEON_CYAN[2], 0.95)
-            Line(points=[x - w, cy + pitch_offset, x + w * 2, cy + pitch_offset], width=1)
+            # 线条更加长，确保旋转大角度时不会露馅
+            Line(points=[cx - w * 1.5, cy + pitch_offset, cx + w * 1.5, cy + pitch_offset], width=1.5)
 
-            # 刻度（左右前后提示）
-            Color(r, g, b, 0.9)
-            for off in range(-3, 4):
-                ly = cy + pitch_offset + off * 18
-                Line(points=[cx - dp(65), ly, cx - dp(38), ly], width=1.2)
-                Line(points=[cx + dp(38), ly, cx + dp(65), ly], width=1.2)
-
+            # 刻度
+            Color(r, g, b, 0.8)
+            # 将刻度也通过偏移绘制，使其跟随地平线移动
+            for off in [-2, -1, 1, 2]: # 简化刻度
+                ly = cy + pitch_offset + off * dp(20)
+                # 刻度线长度随距离缩减，制造透视感
+                scale_w = dp(40) - abs(off) * dp(5)
+                Line(points=[cx - scale_w - dp(10), ly, cx - dp(10), ly], width=1.2)
+                Line(points=[cx + dp(10), ly, cx + scale_w + dp(10), ly], width=1.2)
+                
+            # --- 恢复坐标系 ---
             PopMatrix()
 
             # 中心十字准星（不随旋转），更精致

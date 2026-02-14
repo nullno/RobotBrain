@@ -99,12 +99,19 @@ class RobotDashboardApp(App):
             decor_view.setSystemUiVisibility(flags)
 
             # 适配刘海屏/挖孔屏 (Android 9.0+, API 28+)
-            Build = autoclass("android.os.Build")
-            if Build.VERSION.SDK_INT >= 28:
+            # Build.VERSION 可能无法直接访问，需使用 $VERSION 内部类
+            VERSION = autoclass("android.os.Build$VERSION")
+            if VERSION.SDK_INT >= 28:
                 LayoutParams = autoclass("android.view.WindowManager$LayoutParams")
                 # LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES = 1
+                # 显式获取常量，确保兼容性
+                try:
+                    layout_mode = LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                except Exception:
+                    layout_mode = 1                
+                
                 params = window.getAttributes()
-                params.layoutInDisplayCutoutMode = 1
+                params.layoutInDisplayCutoutMode = layout_mode
                 window.setAttributes(params)
         except Exception as e:
             print(f"⚠️ Android UI Flags 设置失败: {e}")

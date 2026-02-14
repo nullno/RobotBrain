@@ -9,8 +9,11 @@ from widgets.runtime_status import RuntimeStatusLogger
 class CameraView(Image):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.allow_stretch = True
-        self.keep_ratio = True
+        # 使用 fit_mode='cover' 确保护满全屏 (Kivy 2.2+)
+        # 这会自动处理裁剪，覆盖 keep_ratio/allow_stretch
+        self.fit_mode = "cover"
+        # self.allow_stretch = True
+        # self.keep_ratio = True
 
         self.capture = None
         # 可注册回调以获取原始 OpenCV 帧：callback(frame: numpy.ndarray)
@@ -93,27 +96,34 @@ class CameraView(Image):
                         # 仅在首次确定需要翻转时，设置一次 canvas 转换指令，避免每帧清理画布导致闪烁
                         if idx == 1:
                             try:
-                                from kivy.graphics import PushMatrix, PopMatrix, Scale
-                                # 在 canvas.before/after 中添加变换指令
+                                from kivy.graphics import PushMatrix, PopMatrix, Scale, Translate, Rotate
                                 if not getattr(self, '_camera_flip_installed', False):
                                     with self.canvas.before:
                                         PushMatrix()
-                                        Scale(-1, 1, 1)
-                                    with self.canvas.after:
-                                        PopMatrix()
-                                    self._camera_flip_installed = True
+                                        # 移动坐标系圆点到 Widget 中心
+                                        Translate(self.center_x, self.center_y)
+                                        # 旋转 180 度 (解决上下颠倒的问题)
+                                        Rotate(angle=180, axis=(0, 0, 1))
+                                        Scale(1, -1, 1) 
+                                        pass
+                                        
+                                    # with self.canvas.before: ... (移除这段危险代码)
+                                    # self._camera_flip_installed = True
                             except Exception:
                                 pass
 
-                        # 绑定 texture 回调 —— 回调只负责替换 texture，不进行 canvas 操作
+                        # 绑定 texture 回调 —— 回调只负责替换 texture
                         def _on_text(inst, val, camera_idx=idx):
                             try:
                                 if val:
                                     # 修复: Android 前置摄像头(idx=1)画面上下颠倒的问题
-                                    # 配合 canvas 的 Scale(-1, 1, 1) 实现正确的镜像与正立显示
-                                    if camera_idx == 1 and not getattr(val, '__flipped__', False):
-                                        val.flip_vertical()
-                                        val.__flipped__ = True
+                                    # 使用 texture 坐标变换替代 Canvas 变换，避免黑屏和坐标系问题
+                                    if camera_idx == 1:
+                                        # 尝试：强制垂直翻转。
+                                        val.uvpos = (0, 1)
+                                        val.uvsize = (1, -1)
+                                        val.uvpos = (1, 1)
+                                        val.uvsize = (-1, -1)
                                         
                                     self.texture = val
                                     RuntimeStatusLogger.log_info(
