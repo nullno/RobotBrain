@@ -3,13 +3,11 @@ from kivy.clock import Clock
 from kivy.graphics.texture import Texture
 from kivy.utils import platform
 from widgets.runtime_status import RuntimeStatusLogger
-from widgets.runtime_status import RuntimeStatusLogger
 
 
 class CameraView(Image):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-       
         self.allow_stretch = True
         self.keep_ratio = True
 
@@ -25,6 +23,14 @@ class CameraView(Image):
             self._start_desktop()
         else:
             self._start_android()
+
+    def _fix_android_texture_orientation(self, texture):
+        """修正 Android 摄像头纹理上下颠倒问题（仅设置采样坐标，不做逐帧画布变换）"""
+        try:
+            texture.uvpos = (0, 1)
+            texture.uvsize = (1, -1)
+        except Exception:
+            pass
 
     # ---------- Desktop (OpenCV) ----------
     def _start_desktop(self):
@@ -91,38 +97,11 @@ class CameraView(Image):
                         else:
                             self.camera = Camera(index=idx, play=True, resolution=(640, 480))
 
-                        # 仅在首次确定需要翻转时，设置一次 canvas 转换指令，避免每帧清理画布导致闪烁
-                        if idx == 1:
-                            try:
-                                from kivy.graphics import PushMatrix, PopMatrix, Scale, Translate, Rotate
-                                if not getattr(self, '_camera_flip_installed', False):
-                                    with self.canvas.before:
-                                        PushMatrix()
-                                        # 移动坐标系圆点到 Widget 中心
-                                        Translate(self.center_x, self.center_y)
-                                        # 旋转 180 度 (解决上下颠倒的问题)
-                                        Rotate(angle=180, axis=(0, 0, 1))
-                                        Scale(1, -1, 1) 
-                                        pass
-                                        
-                                    # with self.canvas.before: ... (移除这段危险代码)
-                                    # self._camera_flip_installed = True
-                            except Exception:
-                                pass
-
-                        # 绑定 texture 回调 —— 回调只负责替换 texture
+                        # 绑定 texture 回调 —— 回调只负责替换 texture，不进行 canvas 操作
                         def _on_text(inst, val, camera_idx=idx):
                             try:
                                 if val:
-                                    # 修复: Android 前置摄像头(idx=1)画面上下颠倒的问题
-                                    # 使用 texture 坐标变换替代 Canvas 变换，避免黑屏和坐标系问题
-                                    if camera_idx == 1:
-                                        # 尝试：强制垂直翻转。
-                                        val.uvpos = (0, 1)
-                                        val.uvsize = (1, -1)
-                                        val.uvpos = (1, 1)
-                                        val.uvsize = (-1, -1)
-                                        
+                                    self._fix_android_texture_orientation(val)
                                     self.texture = val
                                     RuntimeStatusLogger.log_info(
                                         f'Android 摄像头 texture 就绪 (index={camera_idx})'

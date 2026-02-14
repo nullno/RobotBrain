@@ -19,6 +19,12 @@ import subprocess
 import os
 import sys
 import time
+from widgets.bubble_level import BubbleLevel
+
+try:
+    from widgets.runtime_status import RuntimeStatusLogger
+except Exception:
+    RuntimeStatusLogger = None
 
 
 # ===================== 科技风基础按钮 =====================
@@ -435,6 +441,11 @@ class DebugPanel(Widget):
         except Exception:
             pass
 
+        try:
+            self._build_balance_debug_tab(tp)
+        except Exception:
+            pass
+
         tp.bind(current_tab=lambda inst, val: self._update_tab_highlight(inst, val))
         Clock.schedule_once(
             lambda dt: self._update_tab_highlight(tp, tp.current_tab), 0
@@ -550,6 +561,15 @@ class DebugPanel(Widget):
         btn_zero_id.bind(on_release=_zero_id)
         btn_emergency.bind(on_release=_emergency)
         btn_close.bind(on_release=lambda *a: popup.dismiss())
+
+        def _on_popup_dismiss(*_):
+            try:
+                if hasattr(self, "_balance_level") and self._balance_level:
+                    self._balance_level.stop_tracking()
+            except Exception:
+                pass
+
+        popup.bind(on_dismiss=_on_popup_dismiss)
 
         def _on_tab_switch(instance, value):
             if value and getattr(value, "text", "") == "连接状态":
@@ -853,6 +873,211 @@ class DebugPanel(Widget):
             if RuntimeStatusLogger:
                 RuntimeStatusLogger.log_error(f"动作 {action} 执行失败: {e}")
             self._show_info_popup(f"动作执行失败: {e}")
+
+    # ================= 平衡调试 =================
+    def _build_balance_debug_tab(self, tp):
+        app = App.get_running_app()
+        t_balance = TabbedPanelItem(text="平衡调试", font_size="15sp")
+        self._style_tab(t_balance)
+
+        sv = ScrollView(size_hint=(1, 1))
+        sv.do_scroll_x = False
+        sv.do_scroll_y = True
+
+        root = BoxLayout(
+            orientation="vertical",
+            padding=(dp(12), dp(20), dp(12), dp(12)),
+            spacing=dp(10),
+            size_hint_y=None,
+        )
+        root.bind(minimum_height=root.setter("height"))
+
+        tip = Label(
+            text="实时调节平衡增益（越大越灵敏）：Pitch=gain_p，Roll=gain_r",
+            size_hint_y=None,
+            height=dp(26),
+            color=(0.75, 0.85, 0.95, 1),
+        )
+        root.add_widget(tip)
+
+        def _read_gains():
+            bc = getattr(app, "balance_ctrl", None)
+            if not bc:
+                return 0.0, 0.0
+            try:
+                return float(getattr(bc, "gain_p", 0.0)), float(getattr(bc, "gain_r", 0.0))
+            except Exception:
+                return 0.0, 0.0
+
+        def _apply_gain(attr_name, text_value, lbl):
+            bc = getattr(app, "balance_ctrl", None)
+            if not bc:
+                self._show_info_popup("BalanceController 不存在")
+                return
+            try:
+                val = float(text_value)
+                val = max(0.0, min(20.0, val))
+                setattr(bc, attr_name, val)
+                lbl.text = f"当前: {val:.2f}"
+                try:
+                    RuntimeStatusLogger.log_info(f"平衡参数已更新: {attr_name}={val:.2f}")
+                except Exception:
+                    pass
+                try:
+                    if hasattr(app, "save_balance_tuning"):
+                        app.save_balance_tuning()
+                except Exception:
+                    pass
+            except Exception:
+                self._show_info_popup("请输入有效数字")
+
+        def _step_gain(attr_name, delta, inp, lbl):
+            bc = getattr(app, "balance_ctrl", None)
+            if not bc:
+                self._show_info_popup("BalanceController 不存在")
+                return
+            try:
+                cur = float(getattr(bc, attr_name, 0.0))
+                new_v = max(0.0, min(20.0, cur + delta))
+                setattr(bc, attr_name, new_v)
+                inp.text = f"{new_v:.2f}"
+                lbl.text = f"当前: {new_v:.2f}"
+                try:
+                    RuntimeStatusLogger.log_info(f"平衡参数已更新: {attr_name}={new_v:.2f}")
+                except Exception:
+                    pass
+                try:
+                    if hasattr(app, "save_balance_tuning"):
+                        app.save_balance_tuning()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+        def _make_gain_row(title, attr_name, init_v):
+            row = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(8))
+            lbl_name = Label(
+                text=title,
+                size_hint=(None, 1),
+                width=dp(110),
+                color=(0.3, 0.85, 1, 1),
+                halign="left",
+                valign="middle",
+            )
+            lbl_name.bind(size=lbl_name.setter("text_size"))
+
+            btn_dec = TechButton(
+                text="-",
+                size_hint=(None, None),
+                size=(dp(44), dp(36)),
+                border_color=(1.0, 0.35, 0.35, 1),
+                fill_color=(1.0, 0.35, 0.35, 0.25),
+            )
+            inp = TextInput(
+                text=f"{init_v:.2f}",
+                multiline=False,
+                size_hint=(None, None),
+                size=(dp(90), dp(36)),
+                input_filter="float",
+                halign="center",
+            )
+            btn_inc = TechButton(
+                text="+",
+                size_hint=(None, None),
+                size=(dp(44), dp(36)),
+                border_color=(0.2, 0.9, 0.7, 1),
+                fill_color=(0.2, 0.9, 0.7, 0.25),
+            )
+            btn_apply = TechButton(
+                text="应用",
+                size_hint=(None, None),
+                size=(dp(70), dp(36)),
+            )
+            lbl_cur = Label(
+                text=f"当前: {init_v:.2f}",
+                color=(0.8, 0.9, 1, 1),
+                halign="left",
+                valign="middle",
+            )
+            lbl_cur.bind(size=lbl_cur.setter("text_size"))
+
+            btn_dec.bind(on_release=lambda *_: _step_gain(attr_name, -0.2, inp, lbl_cur))
+            btn_inc.bind(on_release=lambda *_: _step_gain(attr_name, 0.2, inp, lbl_cur))
+            btn_apply.bind(on_release=lambda *_: _apply_gain(attr_name, inp.text, lbl_cur))
+
+            row.add_widget(lbl_name)
+            row.add_widget(btn_dec)
+            row.add_widget(inp)
+            row.add_widget(btn_inc)
+            row.add_widget(btn_apply)
+            row.add_widget(lbl_cur)
+            return row, inp, lbl_cur
+
+        p0, r0 = _read_gains()
+        row_p, inp_p, lbl_p = _make_gain_row("Pitch 增益", "gain_p", p0)
+        row_r, inp_r, lbl_r = _make_gain_row("Roll 增益", "gain_r", r0)
+
+        root.add_widget(row_p)
+        root.add_widget(row_r)
+
+        actions = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(8))
+        btn_refresh = TechButton(text="读取当前")
+        btn_reset = TechButton(text="恢复默认(横屏)")
+
+        def _refresh(*_):
+            p, r = _read_gains()
+            inp_p.text = f"{p:.2f}"
+            inp_r.text = f"{r:.2f}"
+            lbl_p.text = f"当前: {p:.2f}"
+            lbl_r.text = f"当前: {r:.2f}"
+
+        def _reset(*_):
+            bc = getattr(app, "balance_ctrl", None)
+            if not bc:
+                self._show_info_popup("BalanceController 不存在")
+                return
+            try:
+                bc.gain_p = 5.5
+                bc.gain_r = 4.2
+                _refresh()
+                RuntimeStatusLogger.log_info("平衡参数已恢复默认: gain_p=5.50, gain_r=4.20")
+                try:
+                    if hasattr(app, "save_balance_tuning"):
+                        app.save_balance_tuning()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+        btn_refresh.bind(on_release=_refresh)
+        btn_reset.bind(on_release=_reset)
+        actions.add_widget(btn_refresh)
+        actions.add_widget(btn_reset)
+        root.add_widget(actions)
+
+        root.add_widget(BoxLayout(size_hint_y=None, height=dp(6)))
+
+        bubble_anchor = AnchorLayout(
+            anchor_x="center",
+            anchor_y="center",
+            size_hint_y=None,
+            height=dp(190),
+        )
+        self._balance_level = BubbleLevel(
+            size_hint=(None, None),
+            size=(dp(160), dp(160)),
+        )
+        bubble_anchor.add_widget(self._balance_level)
+        root.add_widget(bubble_anchor)
+
+        try:
+            self._balance_level.start_tracking()
+        except Exception:
+            pass
+
+        sv.add_widget(root)
+        t_balance.add_widget(sv)
+        tp.add_widget(t_balance)
 
     # ================= 单舵机快捷调试 =================
     def _build_single_servo_tab(self, tp):

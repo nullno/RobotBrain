@@ -1,6 +1,23 @@
 import threading
 import time
 from kivy.utils import platform
+import logging
+
+_last_status = "init"
+
+
+def get_last_usb_serial_status():
+    """返回最近一次 open_first_usb_serial 的状态字符串，便于上层记录日志。"""
+    return _last_status
+
+
+def _set_status(msg):
+    global _last_status
+    _last_status = msg
+    try:
+        logging.info("android_serial: %s", msg)
+    except Exception:
+        pass
 
 def open_first_usb_serial(baud=115200, open_timeout_ms=1000):
     """尝试使用 usb-serial-for-android 打开第一个检测到的 USB 串口设备。
@@ -8,10 +25,12 @@ def open_first_usb_serial(baud=115200, open_timeout_ms=1000):
     若需要系统授权或未找到设备则返回 None。
     """
     if platform != 'android':
+        _set_status('skip: non-android platform')
         return None
     try:
         from jnius import autoclass, cast
-    except Exception:
+    except Exception as e:
+        _set_status(f'fail: pyjnius import error: {e}')
         return None
 
     try:
@@ -25,6 +44,7 @@ def open_first_usb_serial(baud=115200, open_timeout_ms=1000):
 
         available_drivers = UsbSerialProber.getDefaultProber().findAllDrivers(usb_manager)
         if not available_drivers:
+            _set_status('fail: no usb-serial drivers found')
             return None
 
         driver = available_drivers.get(0)
@@ -35,9 +55,16 @@ def open_first_usb_serial(baud=115200, open_timeout_ms=1000):
             try:
                 PendingIntent = autoclass('android.app.PendingIntent')
                 Intent = autoclass('android.content.Intent')
-                pi = PendingIntent.getBroadcast(activity, 0, Intent('USB_PERMISSION'), 0)
+                flags = 0
+                try:
+                    flags = PendingIntent.FLAG_IMMUTABLE
+                except Exception:
+                    flags = 0
+                pi = PendingIntent.getBroadcast(activity, 0, Intent('USB_PERMISSION'), flags)
                 usb_manager.requestPermission(device, pi)
+                _set_status('wait: usb permission requested')
             except Exception:
+                _set_status('fail: usb permission missing and request failed')
                 pass
             # 尚未获得权限，返回 None，让上层等待或提示
             return None
@@ -53,6 +80,7 @@ def open_first_usb_serial(baud=115200, open_timeout_ms=1000):
                 connection.close()
             except Exception:
                 pass
+            _set_status('fail: open serial port failed')
             return None
 
         class _Wrapper:
@@ -102,6 +130,8 @@ def open_first_usb_serial(baud=115200, open_timeout_ms=1000):
                 except Exception:
                     pass
 
+        _set_status('ok: usb serial opened')
         return _Wrapper(port, connection)
-    except Exception:
+    except Exception as e:
+        _set_status(f'fail: unexpected error: {e}')
         return None

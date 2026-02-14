@@ -90,19 +90,6 @@ class GyroPanel(Widget):
             # --- 保存当前坐标系状态 ---
             PushMatrix()
             
-            # --- 裁剪区域 (Stencil)，确保线条不画出框 ---
-            # (Kivy 中标准的 Stencil 指令比较繁琐，这里简化为只在逻辑上限制)
-            
-            # 关键修复：先平移到中心，再旋转，再移回。
-            # 或者直接指定 Rotate origin=center
-            # 这里的逻辑是：地平线是无限远的，Roll 是绕視线中心旋转，Pitch 是地平线上下平移。
-            # 现在的代码是先 Rotate 再画线（带偏移）。
-            # Rotate(origin=(cx, cy)) 变换的是坐标系。
-            # 如果 pitch_offset 存在，线本身就在 cy + offset 处。
-            # 旋转后，线会绕 cx, cy 旋转。
-            # 这在视觉上对于姿态仪是正确的（地平线确实是绕中心视点转的）。
-            
-            # 尝试放大 roll 的显示效果，有些手机传感器数值较小
             display_roll = self.roll * 1.5 
             Rotate(angle=display_roll, origin=(cx, cy)) # 注意：方向可能需要反转，视传感器而定
 

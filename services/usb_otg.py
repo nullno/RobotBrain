@@ -33,7 +33,35 @@ def _scan_devices():
     """跨平台扫描可用串口/设备端点，返回一个字符串集合表示设备标识。"""
     devices = set()
     try:
-        if sys.platform.startswith('win'):
+        if _kivy_platform == 'android':
+            # Android: 通过 UsbManager 枚举 USB 设备（/dev/tty* 在 Android 上通常不可用）
+            try:
+                from jnius import autoclass, cast
+
+                PythonActivity = autoclass('org.kivy.android.PythonActivity')
+                activity = PythonActivity.mActivity
+                usb_manager = cast(
+                    'android.hardware.usb.UsbManager',
+                    activity.getSystemService(activity.USB_SERVICE)
+                )
+                dev_map = usb_manager.getDeviceList()
+                for dev in dev_map.values().toArray():
+                    try:
+                        name = str(dev.getDeviceName())
+                    except Exception:
+                        name = 'unknown'
+                    try:
+                        vid = int(dev.getVendorId())
+                    except Exception:
+                        vid = -1
+                    try:
+                        pid = int(dev.getProductId())
+                    except Exception:
+                        pid = -1
+                    devices.add(f"{name}::VID={vid}:PID={pid}")
+            except Exception:
+                pass
+        elif sys.platform.startswith('win'):
             # Windows: 使用 pyserial 列出串口设备（COMx）
             try:
                 from serial.tools import list_ports

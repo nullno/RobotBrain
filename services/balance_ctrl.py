@@ -3,8 +3,15 @@ class BalanceController:
     集成了 UVC (Upper body Vertical Control) 的平衡算法
     """
     def __init__(self, neutral_positions: dict, is_landscape=True):
-        # neutral_positions 存储 1-25 号舞機的中位值 (通常为 2048)
-        self.neutral = neutral_positions
+        # neutral_positions 存储 1-25 号舵机的中位值 (通常为 2048)
+        # 为避免缺失键导致 compute() 中 KeyError，这里统一补齐 1-25
+        base = {sid: 2048 for sid in range(1, 26)}
+        try:
+            for sid, pos in (neutral_positions or {}).items():
+                base[int(sid)] = int(pos)
+        except Exception:
+            pass
+        self.neutral = base
         self.is_landscape = is_landscape  # 是否横屏
         
         # --- UVC 补偿增益系数 (需根据实机调试) ---

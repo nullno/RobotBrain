@@ -70,6 +70,58 @@ else:
 
 
 class RobotDashboardApp(App):
+    def _balance_tuning_file(self):
+        try:
+            return pathlib.Path(self.user_data_dir) / "balance_tuning.json"
+        except Exception:
+            return pathlib.Path("data") / "balance_tuning.json"
+
+    def save_balance_tuning(self):
+        """持久化当前平衡参数（gain_p/gain_r）。"""
+        try:
+            bc = getattr(self, "balance_ctrl", None)
+            if not bc:
+                return False
+            fp = self._balance_tuning_file()
+            fp.parent.mkdir(parents=True, exist_ok=True)
+            data = {
+                "gain_p": float(getattr(bc, "gain_p", 5.5)),
+                "gain_r": float(getattr(bc, "gain_r", 4.2)),
+            }
+            with open(fp, "w", encoding="utf8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            return True
+        except Exception:
+            return False
+
+    def load_balance_tuning(self):
+        """加载并应用持久化的平衡参数。"""
+        try:
+            bc = getattr(self, "balance_ctrl", None)
+            if not bc:
+                return False
+            fp = self._balance_tuning_file()
+            if not fp.exists():
+                return False
+            with open(fp, "r", encoding="utf8") as f:
+                obj = json.load(f)
+
+            gp = float(obj.get("gain_p", getattr(bc, "gain_p", 5.5)))
+            gr = float(obj.get("gain_r", getattr(bc, "gain_r", 4.2)))
+            gp = max(0.0, min(20.0, gp))
+            gr = max(0.0, min(20.0, gr))
+            bc.gain_p = gp
+            bc.gain_r = gr
+            try:
+                RuntimeStatusLogger.log_info(
+                    f"已加载平衡参数: gain_p={gp:.2f}, gain_r={gr:.2f}"
+                )
+            except Exception:
+                pass
+            return True
+        except Exception:
+            return False
+
     def on_start(self):
         if platform == 'android':
             Clock.schedule_once(lambda dt: self.update_android_flags(), 0)
@@ -173,11 +225,18 @@ class RobotDashboardApp(App):
         if platform == "android":
             try:
                 # 尝试通过 USB Serial 库连接
-                from services.android_serial import open_first_usb_serial
+                from services.android_serial import (
+                    open_first_usb_serial,
+                    get_last_usb_serial_status,
+                )
                 usb_wrapper = open_first_usb_serial(baud=115200)
                 if usb_wrapper:
                      self.servo_bus = ServoBus(port=usb_wrapper)
                      RuntimeStatusLogger.log_info("启动时已通过 USB 串口连接硬件")
+                else:
+                    RuntimeStatusLogger.log_info(
+                        f"启动时 Android USB Serial 未连接: {get_last_usb_serial_status()}"
+                    )
             except Exception as e:
                 print(f"Android USB Serial init failed: {e}")
         
@@ -272,6 +331,10 @@ class RobotDashboardApp(App):
             neutral = {i: 2048 for i in range(1, 26)}
 
         self.balance_ctrl = BalanceController(neutral, is_landscape=True)
+        try:
+            self.load_balance_tuning()
+        except Exception:
+            pass
         # 尝试初始化陀螺仪（延迟导入并兼容多种 plyer 导入失败场景）
         try:
             self._setup_gyroscope()
@@ -310,6 +373,9 @@ class RobotDashboardApp(App):
         # 用于循环错误节流，避免界面被频繁相同错误刷屏
         self._last_loop_error = None
         self._last_loop_error_time = 0
+        self._latest_pitch = 0.0
+        self._latest_roll = 0.0
+        self._latest_yaw = 0.0
 
         # 初始化运行状态日志记录器
         try:
@@ -353,46 +419,52 @@ class RobotDashboardApp(App):
                                 try:
                                     from services.android_serial import (
                                         open_first_usb_serial,
+                                        get_last_usb_serial_status,
                                     )
 
                                     usb_wrapper = open_first_usb_serial(baud=115200)
                                 except Exception:
                                     usb_wrapper = None
                                 if usb_wrapper:
+                                    sb = ServoBus(port=usb_wrapper)
+                                    if sb and not getattr(sb, "is_mock", True):
+                                        # 成功连接，替换旧实例并刷新 UI
+                                        try:
+                                            if getattr(
+                                                self, "servo_bus", None
+                                            ) and hasattr(self.servo_bus, "close"):
+                                                try:
+                                                    self.servo_bus.close()
+                                                except Exception:
+                                                    pass
+                                        except Exception:
+                                            pass
+                                        self.servo_bus = sb
+                                        try:
+                                            if getattr(
+                                                self.servo_bus, "manager", None
+                                            ):
+                                                try:
+                                                    self.servo_bus.manager.servo_scan(
+                                                        list(range(1, 26))
+                                                    )
+                                                except Exception:
+                                                    pass
+                                        except Exception:
+                                            pass
+                                        try:
+                                            Clock.schedule_once(
+                                                self._safe_refresh_ui, 0
+                                            )
+                                        except Exception:
+                                            pass
+                                        return
+                                else:
                                     try:
-                                        sb = ServoBus(port=usb_wrapper)
-                                        if sb and not getattr(sb, "is_mock", True):
-                                            # 成功连接，替换旧实例并刷新 UI
-                                            try:
-                                                if getattr(
-                                                    self, "servo_bus", None
-                                                ) and hasattr(self.servo_bus, "close"):
-                                                    try:
-                                                        self.servo_bus.close()
-                                                    except Exception:
-                                                        pass
-                                            except Exception:
-                                                pass
-                                            self.servo_bus = sb
-                                            try:
-                                                if getattr(
-                                                    self.servo_bus, "manager", None
-                                                ):
-                                                    try:
-                                                        self.servo_bus.manager.servo_scan(
-                                                            list(range(1, 26))
-                                                        )
-                                                    except Exception:
-                                                        pass
-                                            except Exception:
-                                                pass
-                                            try:
-                                                Clock.schedule_once(
-                                                    self._safe_refresh_ui, 0
-                                                )
-                                            except Exception:
-                                                pass
-                                            return
+                                        RuntimeStatusLogger.log_info(
+                                            "OTG added 事件触发，但 Android USB Serial 未连接: "
+                                            + str(get_last_usb_serial_status())
+                                        )
                                     except Exception:
                                         pass
                         except Exception:
@@ -611,7 +683,10 @@ class RobotDashboardApp(App):
             # Android 专属自动连接逻辑
             if platform == "android" and not candidate_ports:
                 try:
-                    from services.android_serial import open_first_usb_serial
+                    from services.android_serial import (
+                        open_first_usb_serial,
+                        get_last_usb_serial_status,
+                    )
                     # 尝试连接
                     usb_wrapper = open_first_usb_serial(baud=115200)
                     if usb_wrapper:
@@ -629,6 +704,14 @@ class RobotDashboardApp(App):
                             RuntimeStatusLogger.log_info(f"自动连接 Android USB 串口成功")
                             Clock.schedule_once(self._safe_refresh_ui, 0)
                             return True
+                    else:
+                        try:
+                            RuntimeStatusLogger.log_info(
+                                "自动连接 Android USB 串口未成功: "
+                                + str(get_last_usb_serial_status())
+                            )
+                        except Exception:
+                            pass
                 except Exception as e:
                     print(f"Android auto-connect failed: {e}")
             
@@ -856,13 +939,38 @@ class RobotDashboardApp(App):
                 if val[0] is not None:
                     # 原始数据通常基于竖屏坐标系：0=Pitch(X), 1=Roll(Y), 2=Yaw(Z)
                     dx, dy, dz = val[0], val[1], val[2]
-                    
-                    # 针对横屏模式进行坐标系转换
-                    # 假设是标准横屏（Home键在右，顶部在左），此时：
-                    # 屏幕的前后倾斜（Pitch）对应设备的左右翻转（Roll, Y轴）
-                    # 屏幕的左右倾斜（Roll）对应设备的前后翻转（-Pitch, -X轴）
-                    p = dy
-                    r = -dx
+
+                    # 针对不同设备/ROM 的横屏轴差异，自动判定一次映射并锁定
+                    # normal: p=dy, r=-dx
+                    # swapped: p=-dx, r=dy
+                    mode = getattr(self, "_gyro_axis_mode", "auto")
+                    if mode == "auto":
+                        try:
+                            ax, ay = abs(dx), abs(dy)
+                            if max(ax, ay) > 0.8:
+                                if ay > ax * 1.8:
+                                    self._gyro_axis_mode = "swapped"
+                                elif ax > ay * 1.8:
+                                    self._gyro_axis_mode = "normal"
+                            # 超过一定采样仍未判定，使用默认 normal
+                            self._gyro_axis_samples = getattr(self, "_gyro_axis_samples", 0) + 1
+                            if getattr(self, "_gyro_axis_mode", "auto") == "auto" and self._gyro_axis_samples > 120:
+                                self._gyro_axis_mode = "normal"
+                            mode = getattr(self, "_gyro_axis_mode", "normal")
+                            if mode != "auto":
+                                try:
+                                    RuntimeStatusLogger.log_info(f"陀螺仪轴映射模式: {mode}")
+                                except Exception:
+                                    pass
+                        except Exception:
+                            mode = "normal"
+
+                    if mode == "swapped":
+                        p = -dx
+                        r = dy
+                    else:
+                        p = dy
+                        r = -dx
                     y = dz
             except:
                 pass
@@ -876,6 +984,9 @@ class RobotDashboardApp(App):
     def _update_loop(self, dt):
         try:
             p, r, y = self._get_gyro_data()
+            self._latest_pitch = float(p)
+            self._latest_roll = float(r)
+            self._latest_yaw = float(y)
 
             if "gyro_panel" in self.root_widget.ids:
                 self.root_widget.ids.gyro_panel.update(p, r, y)
