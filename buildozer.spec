@@ -22,7 +22,9 @@ requirements = python3,kivy==2.3.0,pyjnius,plyer,requests,pyserial
 
 # UI配置
 fullscreen = 1
-orientation = sensorLandscape
+orientation = landscape
+# 强制由传感器控制横屏方向（左右横屏可自动翻转）
+android.manifest.orientation = sensorLandscape
 icon.filename = %(source.dir)s/assets/logo.png
 
 # 启动页
