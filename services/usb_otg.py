@@ -10,13 +10,9 @@ import os
 import sys
 
 from kivy.clock import Clock
-from kivy.uix.popup import Popup
-from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.label import Label
-from kivy.uix.button import Button
-from kivy.metrics import dp
 from kivy.utils import platform as _kivy_platform
 import logging
+from widgets.universal_tip import UniversalTip
 
 try:
     from widgets.runtime_status import RuntimeStatusLogger
@@ -27,6 +23,23 @@ _monitor_thread = None
 _stop_event = None
 _last_devices = set()
 _callbacks = []
+
+
+def _chip_name_by_vid_pid(vid, pid):
+    try:
+        v = int(vid)
+        p = int(pid)
+    except Exception:
+        return "UNKNOWN"
+    if v == 0x1A86 and p in (0x7523, 0x5523):
+        return "CH34x"
+    if v == 0x10C4:
+        return "CP210x"
+    if v == 0x0403:
+        return "FTDI"
+    if v == 0x067B:
+        return "PL2303"
+    return "UNKNOWN"
 
 
 def _scan_devices():
@@ -58,7 +71,8 @@ def _scan_devices():
                         pid = int(dev.getProductId())
                     except Exception:
                         pid = -1
-                    devices.add(f"{name}::VID={vid}:PID={pid}")
+                    chip = _chip_name_by_vid_pid(vid, pid)
+                    devices.add(f"{chip}::VID={vid}:PID={pid}::{name}")
             except Exception:
                 pass
         elif sys.platform.startswith('win'):
@@ -200,35 +214,26 @@ def _show_otg_popup(device_id=None):
     """在主线程弹出一个简单的提示，允许用户选择直接打开应用。"""
     try:
         title = 'USB 设备已连接'
-        msg = f'检测到设备: {device_id}\n点击"打开应用"以允许本应用访问该设备。'
+        msg = f'检测到设备: {device_id}\n点击“打开应用”以允许本应用访问该设备。'
 
-        content = BoxLayout(orientation='vertical', padding=12, spacing=8)
-        lbl = Label(text=msg, halign='center', valign='middle')
-        lbl.bind(size=lbl.setter('text_size'))
-        btn_row = BoxLayout(size_hint_y=None, height=dp(52), spacing=8)
-        btn_open = Button(text='打开应用', size_hint=(0.5, 1))
-        btn_cancel = Button(text='取消', size_hint=(0.5, 1))
-
-        btn_row.add_widget(btn_open)
-        btn_row.add_widget(btn_cancel)
-
-        content.add_widget(lbl)
-        content.add_widget(btn_row)
-
-        popup = Popup(title=title, content=content, size_hint=(None, None), size=(dp(320), dp(180)), auto_dismiss=True)
-
-        def _open_app(_):
-            popup.dismiss()
-            RuntimeStatusLogger.log_info('用户选择打开应用（尝试通过 Intent 唤起）')
+        def _open_app():
+            if RuntimeStatusLogger:
+                RuntimeStatusLogger.log_info('用户选择打开应用（尝试通过 Intent 唤起）')
             _launch_app_via_intent()
 
-        def _cancel(_):
-            popup.dismiss()
-            RuntimeStatusLogger.log_info('用户取消打开应用')
+        def _cancel():
+            if RuntimeStatusLogger:
+                RuntimeStatusLogger.log_info('用户取消打开应用')
 
-        btn_open.bind(on_release=_open_app)
-        btn_cancel.bind(on_release=_cancel)
-        popup.open()
+        UniversalTip(
+            title=title,
+            message=msg,
+            ok_text='打开应用',
+            cancel_text='取消',
+            on_ok=_open_app,
+            on_cancel=_cancel,
+            icon='🔌',
+        ).open()
     except Exception as e:
         if RuntimeStatusLogger:
             RuntimeStatusLogger.log_error(f"弹窗创建失败: {e}")

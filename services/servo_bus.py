@@ -23,7 +23,7 @@ class ServoBus:
                 self.manager = UartServoManager(self.uart, servo_id_list=list(range(1, 26)))
                 print(f"✅ JOHO SDK Link Start! Port: {port}")
         except Exception as e:
-            print(f"⚠️  Hardware not found: {e}. Switching to MOCK mode.")
+            print(f"⚠  Hardware not found: {e}. Switching to MOCK mode.")
             self.is_mock = True
 
     def close(self):

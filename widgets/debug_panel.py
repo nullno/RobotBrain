@@ -9,7 +9,6 @@ from kivy.uix.button import Button
 from kivy.uix.tabbedpanel import TabbedPanel, TabbedPanelItem
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.textinput import TextInput
-from kivy.core.window import Window
 from kivy.graphics import Color, RoundedRectangle, Line
 from kivy.app import App
 from kivy.clock import Clock
@@ -20,6 +19,7 @@ import os
 import sys
 import time
 from widgets.bubble_level import BubbleLevel
+from widgets.universal_tip import UniversalTip
 
 try:
     from widgets.runtime_status import RuntimeStatusLogger
@@ -764,61 +764,19 @@ class DebugPanel(Widget):
     # ------------------------------------------------------
 
     def _show_info_popup(self, text):
-        def _create_popup_ui(dt):
-            content = BoxLayout(padding=(20, 10), orientation="vertical")
+        def _show(dt):
+            try:
+                UniversalTip(
+                    message=str(text),
+                    icon="ℹ",
+                    auto_dismiss=True,
+                    auto_close_seconds=2.0,
+                    show_buttons=False,
+                ).open()
+            except Exception:
+                pass
 
-            with content.canvas.before:
-                Color(0.1, 0.12, 0.15, 0.95)
-                bg_rect = RoundedRectangle(radius=[10])
-            with content.canvas.after:
-                Color(0.2, 0.7, 0.95, 0.8)
-                border_line = Line(width=1.5)
-
-            def _update_bg(inst, val):
-                bg_rect.pos = inst.pos
-                bg_rect.size = inst.size
-                border_line.rounded_rectangle = (
-                    inst.x,
-                    inst.y,
-                    inst.width,
-                    inst.height,
-                    10,
-                )
-
-            content.bind(pos=_update_bg, size=_update_bg)
-
-            lbl = Label(
-                text=text,
-                color=(0.9, 0.95, 1, 1),
-                font_size="16sp",
-                halign="center",
-                valign="middle",
-            )
-            lbl.bind(size=lbl.setter("text_size"))
-            content.add_widget(lbl)
-
-            popup_size = (dp(400), dp(100))
-            popup = Popup(
-                title="",
-                title_size=0,
-                separator_height=0,
-                content=content,
-                size_hint=(None, None),
-                size=popup_size,
-                auto_dismiss=False,
-                background="",
-                background_color=(0, 0, 0, 0),
-                overlay_color=(0, 0, 0, 0.3),
-            )
-
-            # Ensure the content widget matches the popup size on all platforms
-            content.size = popup.size
-            popup.bind(size=lambda inst, val: setattr(content, "size", val))
-
-            popup.open()
-            Clock.schedule_once(lambda dt: popup.dismiss(), 2.0)
-
-        Clock.schedule_once(_create_popup_ui, 0)
+        Clock.schedule_once(_show, 0)
 
     def _call_motion(self, action):
         app = App.get_running_app()
@@ -908,6 +866,45 @@ class DebugPanel(Widget):
                 return float(getattr(bc, "gain_p", 0.0)), float(getattr(bc, "gain_r", 0.0))
             except Exception:
                 return 0.0, 0.0
+
+        def _read_axis_mode():
+            try:
+                mode = str(getattr(app, "_gyro_axis_mode", "auto"))
+                if mode not in ("auto", "normal", "swapped"):
+                    mode = "auto"
+                return mode
+            except Exception:
+                return "auto"
+
+        axis_mode_label = Label(
+            text="轴映射: auto",
+            size_hint_y=None,
+            height=dp(24),
+            color=(0.8, 0.9, 1, 1),
+            halign="left",
+            valign="middle",
+        )
+        axis_mode_label.bind(size=axis_mode_label.setter("text_size"))
+
+        def _set_axis_mode(mode):
+            if mode not in ("auto", "normal", "swapped"):
+                return
+            try:
+                app._gyro_axis_mode = mode
+                if mode == "auto":
+                    app._gyro_axis_samples = 0
+                axis_mode_label.text = f"轴映射: {mode}"
+                try:
+                    RuntimeStatusLogger.log_info(f"陀螺仪轴映射已设置: {mode}")
+                except Exception:
+                    pass
+                try:
+                    if hasattr(app, "save_balance_tuning"):
+                        app.save_balance_tuning()
+                except Exception:
+                    pass
+            except Exception:
+                pass
 
         def _apply_gain(attr_name, text_value, lbl):
             bc = getattr(app, "balance_ctrl", None)
@@ -1020,6 +1017,19 @@ class DebugPanel(Widget):
         root.add_widget(row_p)
         root.add_widget(row_r)
 
+        axis_row = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(8))
+        btn_auto = TechButton(text="映射: Auto", size_hint=(None, None), size=(dp(110), dp(36)))
+        btn_normal = TechButton(text="Normal", size_hint=(None, None), size=(dp(90), dp(36)))
+        btn_swapped = TechButton(text="Swapped", size_hint=(None, None), size=(dp(100), dp(36)))
+        btn_auto.bind(on_release=lambda *_: _set_axis_mode("auto"))
+        btn_normal.bind(on_release=lambda *_: _set_axis_mode("normal"))
+        btn_swapped.bind(on_release=lambda *_: _set_axis_mode("swapped"))
+        axis_row.add_widget(btn_auto)
+        axis_row.add_widget(btn_normal)
+        axis_row.add_widget(btn_swapped)
+        root.add_widget(axis_row)
+        root.add_widget(axis_mode_label)
+
         actions = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(8))
         btn_refresh = TechButton(text="读取当前")
         btn_reset = TechButton(text="恢复默认(横屏)")
@@ -1030,6 +1040,7 @@ class DebugPanel(Widget):
             inp_r.text = f"{r:.2f}"
             lbl_p.text = f"当前: {p:.2f}"
             lbl_r.text = f"当前: {r:.2f}"
+            axis_mode_label.text = f"轴映射: {_read_axis_mode()}"
 
         def _reset(*_):
             bc = getattr(app, "balance_ctrl", None)
@@ -1039,6 +1050,8 @@ class DebugPanel(Widget):
             try:
                 bc.gain_p = 5.5
                 bc.gain_r = 4.2
+                app._gyro_axis_mode = "auto"
+                app._gyro_axis_samples = 0
                 _refresh()
                 RuntimeStatusLogger.log_info("平衡参数已恢复默认: gain_p=5.50, gain_r=4.20")
                 try:
@@ -1074,6 +1087,8 @@ class DebugPanel(Widget):
             self._balance_level.start_tracking()
         except Exception:
             pass
+
+        _refresh()
 
         sv.add_widget(root)
         t_balance.add_widget(sv)

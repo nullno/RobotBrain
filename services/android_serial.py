@@ -1,5 +1,4 @@
 import threading
-import time
 from kivy.utils import platform
 import logging
 
@@ -19,7 +18,67 @@ def _set_status(msg):
     except Exception:
         pass
 
-def open_first_usb_serial(baud=115200, open_timeout_ms=1000):
+
+def _chip_name_by_vid_pid(vid, pid):
+    try:
+        v = int(vid)
+        p = int(pid)
+    except Exception:
+        return "UNKNOWN"
+    if v == 0x1A86 and p in (0x7523, 0x5523):
+        return "CH34x"
+    if v == 0x10C4:
+        return "CP210x"
+    if v == 0x0403:
+        return "FTDI"
+    if v == 0x067B:
+        return "PL2303"
+    return "UNKNOWN"
+
+
+def _score_driver(driver):
+    score = 0
+    try:
+        dev = driver.getDevice()
+        vid = int(dev.getVendorId())
+        pid = int(dev.getProductId())
+        chip = _chip_name_by_vid_pid(vid, pid)
+        if chip == "CH34x":
+            score += 100
+        elif chip in ("CP210x", "FTDI", "PL2303"):
+            score += 80
+    except Exception:
+        pass
+
+    try:
+        n = str(driver.getClass().getSimpleName()).lower()
+        if "ch34" in n:
+            score += 80
+        elif "cp21" in n or "ftdi" in n or "cdc" in n or "prolific" in n:
+            score += 60
+    except Exception:
+        pass
+    return score
+
+
+def _driver_matches_hint(driver, prefer_device_id):
+    if not prefer_device_id:
+        return True
+    hint = str(prefer_device_id).lower()
+    try:
+        dev = driver.getDevice()
+        name = str(dev.getDeviceName()).lower()
+    except Exception:
+        name = ""
+    try:
+        vid = int(dev.getVendorId())
+        pid = int(dev.getProductId())
+        vp = f"vid={vid}:pid={pid}".lower()
+    except Exception:
+        vp = ""
+    return (name and name in hint) or (vp and vp in hint)
+
+def open_first_usb_serial(baud=115200, open_timeout_ms=1000, prefer_device_id=None):
     """尝试使用 usb-serial-for-android 打开第一个检测到的 USB 串口设备。
     返回一个实现了 `write(bytes)`、`readall()`、`close()` 的对象；
     若需要系统授权或未找到设备则返回 None。
@@ -47,41 +106,25 @@ def open_first_usb_serial(baud=115200, open_timeout_ms=1000):
             _set_status('fail: no usb-serial drivers found')
             return None
 
-        driver = available_drivers.get(0)
-        device = driver.getDevice()
-
-        # 请求权限（若尚未授权，会弹出系统授权窗口）
-        if not usb_manager.hasPermission(device):
-            try:
-                PendingIntent = autoclass('android.app.PendingIntent')
-                Intent = autoclass('android.content.Intent')
-                flags = 0
-                try:
-                    flags = PendingIntent.FLAG_IMMUTABLE
-                except Exception:
-                    flags = 0
-                pi = PendingIntent.getBroadcast(activity, 0, Intent('USB_PERMISSION'), flags)
-                usb_manager.requestPermission(device, pi)
-                _set_status('wait: usb permission requested')
-            except Exception:
-                _set_status('fail: usb permission missing and request failed')
-                pass
-            # 尚未获得权限，返回 None，让上层等待或提示
-            return None
-
-        # 打开端口
-        port = driver.getPorts().get(0)
-        connection = usb_manager.openDevice(device)
+        drivers = []
         try:
-            port.open(connection)
-            port.setParameters(int(baud), 8, 1, 0)
+            for i in range(int(available_drivers.size())):
+                drv = available_drivers.get(i)
+                if _driver_matches_hint(drv, prefer_device_id):
+                    drivers.append(drv)
+            if not drivers:
+                for i in range(int(available_drivers.size())):
+                    drivers.append(available_drivers.get(i))
         except Exception:
-            try:
-                connection.close()
-            except Exception:
-                pass
-            _set_status('fail: open serial port failed')
-            return None
+            drivers = [available_drivers.get(0)]
+
+        try:
+            drivers.sort(key=_score_driver, reverse=True)
+        except Exception:
+            pass
+
+        saw_permission_wait = False
+        last_open_err = None
 
         class _Wrapper:
             def __init__(self, port, connection):
@@ -130,8 +173,63 @@ def open_first_usb_serial(baud=115200, open_timeout_ms=1000):
                 except Exception:
                     pass
 
-        _set_status('ok: usb serial opened')
-        return _Wrapper(port, connection)
+        for driver in drivers:
+            try:
+                device = driver.getDevice()
+                vid = int(device.getVendorId())
+                pid = int(device.getProductId())
+                dev_name = str(device.getDeviceName())
+                chip = _chip_name_by_vid_pid(vid, pid)
+            except Exception:
+                device = None
+                vid, pid, dev_name, chip = -1, -1, 'unknown', 'UNKNOWN'
+
+            if not device:
+                continue
+
+            # 请求权限（若尚未授权，会弹出系统授权窗口）
+            if not usb_manager.hasPermission(device):
+                saw_permission_wait = True
+                try:
+                    PendingIntent = autoclass('android.app.PendingIntent')
+                    Intent = autoclass('android.content.Intent')
+                    flags = 0
+                    try:
+                        flags = PendingIntent.FLAG_IMMUTABLE
+                    except Exception:
+                        flags = 0
+                    pi = PendingIntent.getBroadcast(activity, 0, Intent('USB_PERMISSION'), flags)
+                    usb_manager.requestPermission(device, pi)
+                except Exception:
+                    pass
+                _set_status(f'wait: permission requested for {chip} vid={vid} pid={pid} dev={dev_name}')
+                continue
+
+            # 打开端口
+            try:
+                port = driver.getPorts().get(0)
+                connection = usb_manager.openDevice(device)
+                port.open(connection)
+                port.setParameters(int(baud), 8, 1, 0)
+            except Exception as e:
+                last_open_err = e
+                try:
+                    connection.close()
+                except Exception:
+                    pass
+                continue
+            _set_status(f'ok: opened {chip} vid={vid} pid={pid} dev={dev_name}')
+            return _Wrapper(port, connection)
+
+        if saw_permission_wait:
+            return None
+
+        if last_open_err is not None:
+            _set_status(f'fail: all candidate ports open failed: {last_open_err}')
+            return None
+
+        _set_status('fail: no usable usb-serial driver after filtering')
+        return None
     except Exception as e:
         _set_status(f'fail: unexpected error: {e}')
         return None

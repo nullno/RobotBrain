@@ -13,10 +13,32 @@ from kivy.uix.label import Label
 from kivy.clock import Clock
 from kivy.graphics import Color, RoundedRectangle
 from kivy.metrics import dp
+from kivy.utils import platform as _kivy_platform
 from collections import deque
 import threading
 import time
 import logging
+import os
+
+
+def _pick_emoji_font():
+    candidates = [
+        'assets/fonts/NotoColorEmoji.ttf',
+        'assets/fonts/NotoEmoji-Regular.ttf',
+        'assets/fonts/simhei.ttf',
+        r'C:\Windows\Fonts\seguiemj.ttf',
+        '/system/fonts/NotoColorEmoji.ttf',
+        '/system/fonts/NotoColorEmoji-Regular.ttf',
+        '/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf',
+        '/System/Library/Fonts/Apple Color Emoji.ttc',
+    ]
+    for p in candidates:
+        try:
+            if os.path.exists(p):
+                return p
+        except Exception:
+            pass
+    return None
 
 
 class RuntimeStatusPanel(BoxLayout):
@@ -27,8 +49,8 @@ class RuntimeStatusPanel(BoxLayout):
         self.width = dp(280)
         self.height = dp(100)
         
-        # 日志缓冲（最多保留最近的 20 条）
-        self.logs = deque(maxlen=20)
+        # 日志缓冲（最多保留最近的 100 条）
+        self.logs = deque(maxlen=100)
         self._lock = threading.Lock()
         
         # 绘制背景
@@ -62,6 +84,10 @@ class RuntimeStatusPanel(BoxLayout):
         
         # 日志文本区域（可滚动）
         self.scroll_view = ScrollView(size_hint=(1, 1))
+        emoji_font = _pick_emoji_font()
+        label_kwargs = {}
+        if emoji_font:
+            label_kwargs['font_name'] = emoji_font
         self.log_label = Label(
             text='[等待信息...]',
             markup=True,
@@ -70,7 +96,8 @@ class RuntimeStatusPanel(BoxLayout):
             font_size='10sp',
             halign='left',
             valign='top',
-            text_size=(dp(270), None)  # \u8bbe\u7f6e\u6587\u672c\u5bbd\u5ea6\uff0c\u786e\u4fdd\u6ec6\u5de6\u6709\u6548
+            text_size=(dp(270), None),  # \u8bbe\u7f6e\u6587\u672c\u5bbd\u5ea6\uff0c\u786e\u4fdd\u6ec6\u5de6\u6709\u6548
+            **label_kwargs,
         )
         self.log_label.bind(texture_size=self.log_label.setter('size'))
         self.scroll_view.add_widget(self.log_label)
@@ -102,6 +129,12 @@ class RuntimeStatusPanel(BoxLayout):
         }
         color_tag = color_map.get(category, color_map['info'])
         
+        # 兼容某些字体不支持 emoji variation selector，先去除 FE0F
+        try:
+            message = str(message).replace("\ufe0f", "")
+        except Exception:
+            pass
+
         # 格式化日志
         formatted_log = f"{color_tag}{timestamp}[/color] {message}"
         
@@ -202,9 +235,25 @@ class RuntimeStatusLogger:
     @classmethod
     def log_error(cls, error: str):
         """记录错误"""
-        cls.log(f"x {error}", 'error')
+        try:
+            text = str(error)
+        except Exception:
+            text = ""
+        if text.lstrip().startswith("x "):
+            msg = text
+        else:
+            msg = f"x {text}"
+        cls.log(msg, 'error')
     
     @classmethod
     def log_info(cls, info: str):
         """记录信息"""
-        cls.log(f"-> {info}", 'info')
+        try:
+            text = str(info)
+        except Exception:
+            text = ""
+        if text.lstrip().startswith("->"):
+            msg = text
+        else:
+            msg = f"-> {text}"
+        cls.log(msg, 'info')

@@ -18,6 +18,7 @@ class CameraView(Image):
         self._camera_index = None  # 记录使用的摄像头索引
         self._camera_init_phase = True  # 权限等待阶段标志
         self._desktop_frame_logged = False
+        self._android_last_texture_id = None
         
         if platform in ("win", "linux", "macosx"):
             self._start_desktop()
@@ -25,10 +26,12 @@ class CameraView(Image):
             self._start_android()
 
     def _fix_android_texture_orientation(self, texture):
-        """修正 Android 摄像头纹理上下颠倒问题（仅设置采样坐标，不做逐帧画布变换）"""
+        """修正 Android 摄像头纹理上下颠倒问题（仅在新纹理对象上翻转一次）"""
         try:
-            texture.uvpos = (0, 1)
-            texture.uvsize = (1, -1)
+            tex_id = id(texture)
+            if tex_id != self._android_last_texture_id:
+                texture.flip_vertical()
+                self._android_last_texture_id = tex_id
         except Exception:
             pass
 
@@ -116,7 +119,7 @@ class CameraView(Image):
                         print(f"✅ 摄像头已启动 (index={idx})")
                         break
                     except Exception as e:
-                        print(f"⚠️ 尝试摄像头 index={idx} 失败: {e}")
+                        print(f"⚠ 尝试摄像头 index={idx} 失败: {e}")
                         self.camera = None
                         continue
 
@@ -146,7 +149,7 @@ class CameraView(Image):
                         start_camera()
                     else:
                         RuntimeStatusLogger.log_error('摄像头权限未授予，无法显示摄像头画面')
-                        print("⚠️ 摄像头权限未授予，无法显示摄像头画面")
+                        print("⚠ 摄像头权限未授予，无法显示摄像头画面")
 
                 # 请求权限并在回调里处理；同时如用户延迟允许，定期检测并重试
                 request_permissions([Permission.CAMERA], _cb)

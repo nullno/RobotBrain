@@ -2,11 +2,8 @@ from kivy.app import App
 from kivy.lang import Builder
 from kivy.clock import Clock
 from kivy.utils import platform
-from kivy.uix.popup import Popup
-from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.label import Label
-from kivy.uix.button import Button
 from widgets.startup_tip import StartupTip
+from widgets.universal_tip import UniversalTip
 import random
 import math
 import os
@@ -77,16 +74,20 @@ class RobotDashboardApp(App):
             return pathlib.Path("data") / "balance_tuning.json"
 
     def save_balance_tuning(self):
-        """持久化当前平衡参数（gain_p/gain_r）。"""
+        """持久化当前平衡参数（gain_p/gain_r）与陀螺仪轴映射模式。"""
         try:
             bc = getattr(self, "balance_ctrl", None)
             if not bc:
                 return False
             fp = self._balance_tuning_file()
             fp.parent.mkdir(parents=True, exist_ok=True)
+            axis_mode = str(getattr(self, "_gyro_axis_mode", "auto"))
+            if axis_mode not in ("auto", "normal", "swapped"):
+                axis_mode = "auto"
             data = {
                 "gain_p": float(getattr(bc, "gain_p", 5.5)),
                 "gain_r": float(getattr(bc, "gain_r", 4.2)),
+                "gyro_axis_mode": axis_mode,
             }
             with open(fp, "w", encoding="utf8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
@@ -95,7 +96,7 @@ class RobotDashboardApp(App):
             return False
 
     def load_balance_tuning(self):
-        """加载并应用持久化的平衡参数。"""
+        """加载并应用持久化的平衡参数与陀螺仪轴映射。"""
         try:
             bc = getattr(self, "balance_ctrl", None)
             if not bc:
@@ -108,13 +109,19 @@ class RobotDashboardApp(App):
 
             gp = float(obj.get("gain_p", getattr(bc, "gain_p", 5.5)))
             gr = float(obj.get("gain_r", getattr(bc, "gain_r", 4.2)))
+            axis_mode = str(obj.get("gyro_axis_mode", getattr(self, "_gyro_axis_mode", "auto")))
+            if axis_mode not in ("auto", "normal", "swapped"):
+                axis_mode = "auto"
             gp = max(0.0, min(20.0, gp))
             gr = max(0.0, min(20.0, gr))
             bc.gain_p = gp
             bc.gain_r = gr
+            self._gyro_axis_mode = axis_mode
+            if axis_mode == "auto":
+                self._gyro_axis_samples = 0
             try:
                 RuntimeStatusLogger.log_info(
-                    f"已加载平衡参数: gain_p={gp:.2f}, gain_r={gr:.2f}"
+                    f"已加载平衡参数: gain_p={gp:.2f}, gain_r={gr:.2f}, axis={axis_mode}"
                 )
             except Exception:
                 pass
@@ -167,7 +174,7 @@ class RobotDashboardApp(App):
                 params.layoutInDisplayCutoutMode = layout_mode
                 window.setAttributes(params)
         except Exception as e:
-            print(f"⚠️ Android UI Flags 设置失败: {e}")
+            print(f"⚠ Android UI Flags 设置失败: {e}")
 
     def build(self):
         # Android权限申请
@@ -206,13 +213,13 @@ class RobotDashboardApp(App):
                             print("✅ 所有权限申请成功")
                         else:
                             missing = [p for p, r in zip(permissions, results) if not r]
-                            print(f"⚠️ 未授予权限: {missing}，部分功能可能受限")
+                            print(f"⚠ 未授予权限: {missing}，部分功能可能受限")
 
                     request_permissions(missing_perms, _perm_callback)
                 else:
                     print("✅ 所有权限已获得")
             except Exception as e:
-                print(f"⚠️ Android platform init failed: {e}")
+                print(f"⚠ Android platform init failed: {e}")
                 # Log to RuntimeStatusLogger if available later, but for now just print
                 pass
 
@@ -276,16 +283,26 @@ class RobotDashboardApp(App):
             try:
 
                 class _ForwardHandler(logging.Handler):
+                    _local = threading.local()
+
                     def emit(self, record):
+                        if getattr(self._local, "busy", False):
+                            return
                         try:
+                            self._local.busy = True
                             msg = self.format(record)
                             if RuntimeStatusLogger:
                                 if record.levelno >= logging.ERROR:
-                                    RuntimeStatusLogger.log_error(msg)
+                                    RuntimeStatusLogger.log(msg, "error")
                                 else:
-                                    RuntimeStatusLogger.log_info(msg)
+                                    RuntimeStatusLogger.log(msg, "info")
                         except Exception:
                             pass
+                        finally:
+                            try:
+                                self._local.busy = False
+                            except Exception:
+                                pass
 
                 fh = _ForwardHandler()
                 fh.setLevel(logging.INFO)
@@ -383,7 +400,7 @@ class RobotDashboardApp(App):
             RuntimeStatusLogger.set_panel(runtime_status_panel)
             RuntimeStatusLogger.log_info("应用启动成功")
         except Exception as e:
-            print(f"⚠️ 运行状态面板初始化失败: {e}")
+            print(f"⚠ 运行状态面板初始化失败: {e}")
 
         # 启动时展示权限和连接提示（会在未授权时持续提示并监听授权变化）
         Clock.schedule_once(lambda dt: self._start_permission_watcher(), 0.6)
@@ -422,7 +439,10 @@ class RobotDashboardApp(App):
                                         get_last_usb_serial_status,
                                     )
 
-                                    usb_wrapper = open_first_usb_serial(baud=115200)
+                                    usb_wrapper = open_first_usb_serial(
+                                        baud=115200,
+                                        prefer_device_id=device_id,
+                                    )
                                 except Exception:
                                     usb_wrapper = None
                                 if usb_wrapper:
@@ -600,37 +620,12 @@ class RobotDashboardApp(App):
 
                                         def _show_connect_tip(dt):
                                             try:
-                                                content = BoxLayout(
-                                                    orientation="vertical",
-                                                    spacing=8,
-                                                    padding=8,
-                                                )
-                                                content.add_widget(
-                                                    Label(
-                                                        text="检测到手机连接但未找到 USB 串口。请在手机上打开本应用并启用 USB/OTG 串口模式进行连接。"
-                                                    )
-                                                )
-                                                btn = Button(
-                                                    text="我知道了",
-                                                    size_hint_y=None,
-                                                    height=40,
-                                                )
-                                                popup = Popup(
+                                                UniversalTip(
                                                     title="请在手机上启用串口连接",
-                                                    content=content,
-                                                    size_hint=(0.9, None),
-                                                    height=200,
-                                                )
-
-                                                def _close(instance):
-                                                    try:
-                                                        popup.dismiss()
-                                                    except Exception:
-                                                        pass
-
-                                                btn.bind(on_release=_close)
-                                                content.add_widget(btn)
-                                                popup.open()
+                                                    message="检测到手机连接但未找到 USB 串口。\n请在手机上打开本应用并启用 USB/OTG 串口模式进行连接。",
+                                                    ok_text="我知道了",
+                                                    icon="🔌",
+                                                ).open()
                                             except Exception:
                                                 pass
 

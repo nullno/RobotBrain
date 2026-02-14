@@ -135,10 +135,10 @@ class RobotFace(Widget):
     # ================= 外部接口 =================
     def set_emotion(self, emo):
         self.target_emotion = emo
-        try:
-            RuntimeStatusLogger.log_info(f"RobotFace 情绪设为: {emo}")
-        except Exception:
-            pass
+        # try:
+        #     RuntimeStatusLogger.log_info(f"RobotFace 情绪设为: {emo}")
+        # except Exception:
+        #     pass
 
     def start_talking(self):
         if not self.talking:
