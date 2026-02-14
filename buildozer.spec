@@ -47,8 +47,7 @@ android.accept_sdk_license = True
 # (注意：USB_PERMISSION 是代码中的 Intent Action，不是 Manifest 权限，已移除)
 
 android.permissions = INTERNET,ACCESS_NETWORK_STATE,CAMERA,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE
-android.extra_res_dirs = android/res
-# android.add_src_res = %(source.dir)s/.res
+android.extra_res_dirs = resources
 android.manifest.intent_filters = android/usb/intent_filter.xml
 
 
