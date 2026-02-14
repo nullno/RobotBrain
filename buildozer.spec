@@ -17,14 +17,11 @@ version = 0.1
 # - opencv, numpy: 视觉处理
 requirements = python3,kivy==2.3.0,pyjnius,plyer,requests,pyserial
 
-# 修复 Colab 上的 AIDL 错误
-# android.skip_update = False
-
 # UI配置
 fullscreen = 1
 orientation = landscape
 # 强制由传感器控制横屏方向（左右横屏可自动翻转）
-android.manifest.orientation = sensorLandscape
+# android.manifest.orientation = sensorLandscape
 icon.filename = %(source.dir)s/assets/logo.png
 
 # 启动页
