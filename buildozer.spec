@@ -4,7 +4,7 @@ package.name = robotbrain
 package.domain = com.nullno.robot
 
 source.dir = .
-source.include_exts = py,kv,png,jpg,atlas,ttf,ttc
+source.include_exts = py,kv,png,jpg,atlas,ttf,ttc,xml
 
 version = 0.1
 
@@ -15,7 +15,7 @@ version = 0.1
 # - plyer: 跨平台设备功能API
 # - requests: HTTP库
 # - opencv, numpy: 视觉处理
-requirements = python3,kivy==2.3.0,pyjnius,plyer,requests,pyserial,android
+requirements = python3,kivy==2.3.0,pyjnius,plyer,requests,pyserial
 
 # 修复 Colab 上的 AIDL 错误
 # android.skip_update = False
@@ -26,7 +26,7 @@ orientation = landscape
 icon.filename = %(source.dir)s/assets/logo.png
 
 # 启动页
-android.presplash_color = #171732
+android.presplash_color = #000000
 presplash.filename = %(source.dir)s/assets/setup.png
 include_statusbar = False
 
@@ -48,22 +48,21 @@ android.accept_sdk_license = True
 
 android.permissions = INTERNET,ACCESS_NETWORK_STATE,CAMERA,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE
 # android.extra_res_dirs = android_res
-# android.manifest.intent_filters = android/usb/intent_filter.xml
+android.features = android.hardware.usb.host
+android.manifest.intent_filters = android/usb/intent_filter.xml
+
 
 # 使用本地 aar 库（最稳妥的方式，避免 Maven 仓库连接问题）
 android.add_libs = android/libs/usb-serial-for-android-3.5.1.aar
 # android.gradle_dependencies = com.github.mik3y:usb-serial-for-android:3.5.1
 
 
-android.enable_androidx = True
-android.gradle_args = -Xmx4g
-
 # Android版本配置
 android.api = 31
 android.minapi = 21
 android.ndk = 25c
 
-# 架构配置（增加 32位 支持以兼容旧设备）
+# 架构配置
 android.archs = arm64-v8a
 
 # 隐私政策（可选但推荐）

@@ -61,54 +61,78 @@ class RobotDashboardApp(App):
     def build(self):
         # Android权限申请
         if platform == "android":
-            from jnius import autoclass
-            from android.permissions import (
-                request_permissions,
-                Permission,
-                check_permission,
-            )
+            try:
+                from jnius import autoclass
+                from android.permissions import (
+                    request_permissions,
+                    Permission,
+                    check_permission,
+                )
 
-            # 获取 Android 的 Activity
-            PythonActivity = autoclass("org.kivy.android.PythonActivity")
-            activity = PythonActivity.mActivity
-            View = autoclass("android.view.View")
-            decor_view = activity.getWindow().getDecorView()
+                # 获取 Android 的 Activity
+                PythonActivity = autoclass("org.kivy.android.PythonActivity")
+                activity = PythonActivity.mActivity
+                View = autoclass("android.view.View")
+                decor_view = activity.getWindow().getDecorView()
 
-            # 隐藏状态栏
-            decor_view.setSystemUiVisibility(
-                View.SYSTEM_UI_FLAG_FULLSCREEN
-                | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-            )
+                # 隐藏状态栏并设置沉浸式模式
+                # 增加 LAYOUT_FULLSCREEN/LAYOUT_HIDE_NAVIGATION 确保内容延伸到底层
+                decor_view.setSystemUiVisibility(
+                    View.SYSTEM_UI_FLAG_FULLSCREEN
+                    | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                    | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                    | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                    | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                    | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                )
 
-            # 检查并请求权限
-            required_perms = [
-                Permission.CAMERA,
-                Permission.WRITE_EXTERNAL_STORAGE,
-                Permission.READ_EXTERNAL_STORAGE,
-            ]
-
-            # 检查缺失的权限
-            missing_perms = []
-            for perm in required_perms:
+                # 适配刘海屏/挖孔屏 (Android 9.0+, API 28+)
+                # 强制允许内容绘制到挖孔区域
                 try:
-                    if not check_permission(perm):
+                    Build = autoclass("android.os.Build")
+                    if Build.VERSION.SDK_INT >= 28:
+                        LayoutParams = autoclass("android.view.WindowManager$LayoutParams")
+                        window = activity.getWindow()
+                        params = window.getAttributes()
+                        params.layoutInDisplayCutoutMode = (
+                            LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                        )
+                        window.setAttributes(params)
+                except Exception as e:
+                    print(f"⚠️ 刘海屏适配设置失败: {e}")
+
+                # 检查并请求权限
+                required_perms = [
+                    Permission.CAMERA,
+                    Permission.WRITE_EXTERNAL_STORAGE,
+                    Permission.READ_EXTERNAL_STORAGE,
+                ]
+
+                # 检查缺失的权限
+                missing_perms = []
+                for perm in required_perms:
+                    try:
+                        if not check_permission(perm):
+                            missing_perms.append(perm)
+                    except Exception:
                         missing_perms.append(perm)
-                except Exception:
-                    missing_perms.append(perm)
 
-            if missing_perms:
+                if missing_perms:
 
-                def _perm_callback(permissions, results):
-                    if all(results):
-                        print("✅ 所有权限申请成功")
-                    else:
-                        missing = [p for p, r in zip(permissions, results) if not r]
-                        print(f"⚠️ 未授予权限: {missing}，部分功能可能受限")
+                    def _perm_callback(permissions, results):
+                        if all(results):
+                            print("✅ 所有权限申请成功")
+                        else:
+                            missing = [p for p, r in zip(permissions, results) if not r]
+                            print(f"⚠️ 未授予权限: {missing}，部分功能可能受限")
 
-                request_permissions(missing_perms, _perm_callback)
-            else:
-                print("✅ 所有权限已获得")
+                    request_permissions(missing_perms, _perm_callback)
+                else:
+                    print("✅ 所有权限已获得")
+            except Exception as e:
+                print(f"⚠️ Android platform init failed: {e}")
+                # Log to RuntimeStatusLogger if available later, but for now just print
+                pass
 
         Builder.load_file("kv/style.kv")
         self.root_widget = Builder.load_file("kv/root.kv")
@@ -131,8 +155,11 @@ class RobotDashboardApp(App):
 
         # 初始化日志
         try:
-            log_dir = pathlib.Path("logs")
-            log_dir.mkdir(exist_ok=True)
+            if platform == "android":
+                log_dir = pathlib.Path(self.user_data_dir) / "logs"
+            else:
+                log_dir = pathlib.Path("logs")
+            log_dir.mkdir(parents=True, exist_ok=True)
             logging.basicConfig(
                 level=logging.INFO,
                 filename=str(log_dir / "robot_dashboard.log"),
@@ -751,7 +778,16 @@ class RobotDashboardApp(App):
             try:
                 val = gyroscope.rotation
                 if val[0] is not None:
-                    p, r, y = val[0], val[1], val[2]
+                    # 原始数据通常基于竖屏坐标系：0=Pitch(X), 1=Roll(Y), 2=Yaw(Z)
+                    dx, dy, dz = val[0], val[1], val[2]
+                    
+                    # 针对横屏模式进行坐标系转换
+                    # 假设是标准横屏（Home键在右，顶部在左），此时：
+                    # 屏幕的前后倾斜（Pitch）对应设备的左右翻转（Roll, Y轴）
+                    # 屏幕的左右倾斜（Roll）对应设备的前后翻转（-Pitch, -X轴）
+                    p = dy
+                    r = -dx
+                    y = dz
             except:
                 pass
         else:
