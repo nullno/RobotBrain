@@ -14,6 +14,7 @@ import sys
 import subprocess
 import json
 import threading
+import time
 
 from widgets.camera_view import CameraView
 from widgets.robot_face import RobotFace
@@ -87,28 +88,22 @@ class RobotDashboardApp(App):
             window = activity.getWindow()
             decor_view = window.getDecorView()
 
-            # 组合标志位: 全屏 + 隐藏导航栏 + 沉浸模式 + 内容延伸且稳定
+            # 仅保留沉浸式隐藏系统栏，避免使用 LAYOUT_* 导致内容区域偏移
             flags = (
-                View.SYSTEM_UI_FLAG_LAYOUT_STABLE |
-                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION |
-                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN |
                 View.SYSTEM_UI_FLAG_HIDE_NAVIGATION |
                 View.SYSTEM_UI_FLAG_FULLSCREEN |
                 View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
             )
             decor_view.setSystemUiVisibility(flags)
 
-            # 适配刘海屏/挖孔屏 (Android 9.0+, API 28+)
-            # Build.VERSION 可能无法直接访问，需使用 $VERSION 内部类
+            # 避免刘海屏模式导致布局基准变化，显式恢复为默认模式
             VERSION = autoclass("android.os.Build$VERSION")
             if VERSION.SDK_INT >= 28:
                 LayoutParams = autoclass("android.view.WindowManager$LayoutParams")
-                # LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES = 1
-                # 显式获取常量，确保兼容性
                 try:
-                    layout_mode = LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                    layout_mode = LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
                 except Exception:
-                    layout_mode = 1                
+                    layout_mode = 0
                 
                 params = window.getAttributes()
                 params.layoutInDisplayCutoutMode = layout_mode
