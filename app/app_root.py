@@ -138,15 +138,31 @@ class RobotDashboardApp(App):
         self.root_widget = Builder.load_file("kv/root.kv")
 
         # ---------- 硬件 ----------
-        try:
-            dev_port = "/dev/ttyUSB0" if platform == "android" else "COM6"
-            self._dev_port = dev_port
-            self.servo_bus = ServoBus(port=dev_port)
-        except Exception as e:
-            print(f"❌ 串口初始化失败: {e}")
-            self.servo_bus = None
+        # 优先尝试连接硬件，Android 平台特殊处理
+        self.servo_bus = None
+        if platform == "android":
+            try:
+                # 尝试通过 USB Serial 库连接
+                from services.android_serial import open_first_usb_serial
+                usb_wrapper = open_first_usb_serial(baud=115200)
+                if usb_wrapper:
+                     self.servo_bus = ServoBus(port=usb_wrapper)
+                     RuntimeStatusLogger.log_info("启动时已通过 USB 串口连接硬件")
+            except Exception as e:
+                print(f"Android USB Serial init failed: {e}")
+        
+        # PC 或 Android 失败回退连接
+        if not self.servo_bus:
+            try:
+                dev_port = "/dev/ttyUSB0" if platform == "android" else "COM6"
+                self._dev_port = dev_port
+                # 这里如果不成功，ServoBus 内部会自动切换到 mock 模式
+                self.servo_bus = ServoBus(port=dev_port)
+            except Exception as e:
+                print(f"❌ 串口初始化失败: {e}")
+                self.servo_bus = None
 
-        # 如果未能通过默认端口连接，尝试自动扫描系统串口并连接 CH340/USB-Serial 设备
+        # 如果未能通过默认端口连接（即处于 mock 状态），尝试自动扫描系统串口
         try:
             if not self.servo_bus or getattr(self.servo_bus, "is_mock", True):
                 self._try_auto_connect()
@@ -559,8 +575,34 @@ class RobotDashboardApp(App):
     def _try_auto_connect(self, candidate_ports=None):
         """尝试通过候选端口列表自动连接 ServoBus。
         若 candidate_ports 为空，则枚举系统串口并优先匹配 CH340/USB-SERIAL 描述。
+        Android 平台会尝试使用 usb-serial-for-android 库连接。
         """
         try:
+            # Android 专属自动连接逻辑
+            if platform == "android" and not candidate_ports:
+                try:
+                    from services.android_serial import open_first_usb_serial
+                    # 尝试连接
+                    usb_wrapper = open_first_usb_serial(baud=115200)
+                    if usb_wrapper:
+                        # 如果已有连接，先关闭
+                        if getattr(self, "servo_bus", None) and hasattr(self.servo_bus, "close"):
+                            try:
+                                self.servo_bus.close()
+                            except Exception:
+                                pass
+                        
+                        sb = ServoBus(port=usb_wrapper)
+                        if sb and not getattr(sb, "is_mock", True):
+                            self.servo_bus = sb
+                            self._init_motion_controller_after_connect()
+                            RuntimeStatusLogger.log_info(f"自动连接 Android USB 串口成功")
+                            Clock.schedule_once(self._safe_refresh_ui, 0)
+                            return True
+                except Exception as e:
+                    print(f"Android auto-connect failed: {e}")
+            
+            # PC / 通用逻辑
             candidates = []
             if candidate_ports:
                 candidates = list(candidate_ports)
@@ -605,17 +647,7 @@ class RobotDashboardApp(App):
                             pass
                         self._dev_port = cand
                         self.servo_bus = sb
-                        try:
-                            imu = IMUReader(simulate=False)
-                            imu.start()
-                            self.motion_controller = MotionController(
-                                self.servo_bus.manager,
-                                balance_ctrl=self.balance_ctrl,
-                                imu_reader=imu,
-                                neutral_positions={},
-                            )
-                        except Exception:
-                            self.motion_controller = None
+                        self._init_motion_controller_after_connect()
                         try:
                             RuntimeStatusLogger.log_info(f"自动连接串口成功: {cand}")
                         except Exception:
@@ -630,6 +662,20 @@ class RobotDashboardApp(App):
         except Exception:
             pass
         return False
+
+    def _init_motion_controller_after_connect(self):
+        """连接成功后初始化 MotionController"""
+        try:
+            imu = IMUReader(simulate=False)
+            imu.start()
+            self.motion_controller = MotionController(
+                self.servo_bus.manager,
+                balance_ctrl=self.balance_ctrl,
+                imu_reader=imu,
+                neutral_positions={},
+            )
+        except Exception:
+            self.motion_controller = None
 
     # ================== 硬件 ==================
     def _setup_gyroscope(self):

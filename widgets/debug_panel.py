@@ -316,7 +316,7 @@ class DebugPanel(Widget):
         content.bind(pos=_update_rect, size=_update_rect)
 
         info = Label(
-            text="调试面板 — 谨慎操作舵机。确保周围无人。",
+            text="调试面板 — 谨慎操作关节注意夹手",
             size_hint_y=None,
             height=dp(28),
             color=(0.85, 0.9, 0.98, 1),
@@ -857,7 +857,7 @@ class DebugPanel(Widget):
     # ================= 单舵机快捷调试 =================
     def _build_single_servo_tab(self, tp):
         app = App.get_running_app()
-        t_single = TabbedPanelItem(text="舵机调试", font_size=18)
+        t_single = TabbedPanelItem(text="关节调试", font_size=18)
         self._style_tab(t_single)
 
         sv = ScrollView(size_hint=(1, 1))
@@ -946,6 +946,109 @@ class DebugPanel(Widget):
         )
         grid_anchor.add_widget(grid)
         box.add_widget(grid_anchor)
+
+        # 增加垂直间距，避免与上方按钮挤在一起
+        box.add_widget(BoxLayout(size_hint_y=None, height=dp(10)))
+
+        # ---------- 3. 自定义及循环控制区域 (美化版) ----------
+        control_panel = BoxLayout(
+            orientation="vertical",
+            size_hint_y=None,
+            height=dp(136), # 增加高度以容纳3行
+            padding=(dp(15), dp(10)),
+            spacing=dp(8),
+        )
+        # 背景装饰
+        with control_panel.canvas.before:
+            Color(0.12, 0.14, 0.17, 0.6)
+            cp_bg = RoundedRectangle(radius=[8])
+            Color(1, 1, 1, 0.1)
+            cp_border = Line(width=1)
+
+        def _update_cp_bg(inst, _):
+            cp_bg.pos = inst.pos
+            cp_bg.size = inst.size
+            cp_border.rounded_rectangle = (inst.x, inst.y, inst.width, inst.height, 8)
+        control_panel.bind(pos=_update_cp_bg, size=_update_cp_bg)
+
+        # Ti 样式辅助
+        def _style_ti(ti):
+            ti.write_tab = False
+            ti.background_normal = ""
+            ti.background_active = ""
+            ti.background_color = (0.08, 0.08, 0.1, 1)
+            ti.foreground_color = (0.9, 0.9, 0.9, 1)
+            ti.cursor_color = (0.2, 0.7, 0.95, 1)
+            ti.halign = "center"
+            ti.padding_y = [dp(6), 0] 
+
+        # Row 0: 时间/速度设置
+        row_params = BoxLayout(spacing=dp(12))
+        lbl_dur = Label(text="时间(ms)", size_hint=(None, 1), width=dp(60), 
+                       font_size="14sp", color=(0.6, 0.7, 0.8, 1), halign='right', valign='middle')
+        lbl_dur.bind(size=lbl_dur.setter('text_size'))
+        
+        ti_dur = TextInput(text="500", multiline=False, input_filter="int", 
+                          size_hint=(None, None), size=(dp(60), dp(32)))
+        _style_ti(ti_dur)
+        
+        row_params.add_widget(lbl_dur)
+        row_params.add_widget(ti_dur)
+        row_params.add_widget(Label()) # spacer
+        control_panel.add_widget(row_params)
+
+        # Row 1: 自定义角度
+        row_cust = BoxLayout(spacing=dp(12))
+        
+        lbl_c_angle = Label(text="定点(°)", size_hint=(None, 1), width=dp(60), 
+                           font_size="14sp", color=(0.6, 0.7, 0.8, 1), halign='right', valign='middle')
+        lbl_c_angle.bind(size=lbl_c_angle.setter('text_size'))
+        
+        # 默认 90 度
+        ti_c_angle = TextInput(text="90", multiline=False, input_filter="float", 
+                              size_hint=(None, None), size=(dp(60), dp(32)))
+        _style_ti(ti_c_angle)
+                              
+        btn_c_go = TechButton(text="执行", size_hint=(None, None), size=(dp(60), dp(32)))
+        
+        row_cust.add_widget(lbl_c_angle)
+        row_cust.add_widget(ti_c_angle)
+        row_cust.add_widget(btn_c_go)
+        row_cust.add_widget(Label()) # spacer
+        control_panel.add_widget(row_cust)
+
+        # Row 2: 循环控制
+        row_cycle = BoxLayout(spacing=dp(8))
+        
+        lbl_cy = Label(text="循环(°)", size_hint=(None, 1), width=dp(60), 
+                      font_size="14sp", color=(0.6, 0.7, 0.8, 1), halign='right', valign='middle')
+        lbl_cy.bind(size=lbl_cy.setter('text_size'))
+        
+        ti_cy_a = TextInput(text="0", multiline=False, input_filter="float", 
+                           size_hint=(None, None), size=(dp(50), dp(32)))
+        _style_ti(ti_cy_a)
+
+        lbl_cy_mid = Label(text="~", size_hint=(None, 1), width=dp(15), color=(0.5,0.5,0.5,1))
+        
+        ti_cy_b = TextInput(text="180", multiline=False, input_filter="float", 
+                           size_hint=(None, None), size=(dp(50), dp(32)))
+        _style_ti(ti_cy_b)
+        
+        btn_cy_run = TechButton(text="开始", size_hint=(None, None), size=(dp(50), dp(32)), 
+                               border_color=(0.2, 0.8, 0.4, 0.8), fill_color=(0.2, 0.8, 0.4, 0.2))
+        btn_cy_stop = TechButton(text="停止", size_hint=(None, None), size=(dp(50), dp(32)), 
+                                border_color=(1, 0.3, 0.3, 0.8), fill_color=(1, 0.3, 0.3, 0.2))
+        
+        row_cycle.add_widget(lbl_cy)
+        row_cycle.add_widget(ti_cy_a)
+        row_cycle.add_widget(lbl_cy_mid)
+        row_cycle.add_widget(ti_cy_b)
+        row_cycle.add_widget(btn_cy_run)
+        row_cycle.add_widget(btn_cy_stop)
+        
+        control_panel.add_widget(row_cycle)
+        
+        box.add_widget(control_panel)
         sv.add_widget(box)
 
         def _reflow_single_grid(instance, width):
@@ -1034,8 +1137,15 @@ class DebugPanel(Widget):
                     _ensure_torque()
                     mgr = app.servo_bus.manager
                     pos = int(angle_deg / 360.0 * 4095)
-                    mgr.set_position_time(sid, pos, time_ms=400)
-                    msg = f"ID {sid} 转到 {angle_deg}°"
+                    # 动态读取时间
+                    try:
+                        dur = int(ti_dur.text)
+                        dur = max(0, dur)
+                    except:
+                        dur = 500
+                    
+                    mgr.set_position_time(sid, pos, time_ms=dur)
+                    msg = f"ID {sid} 转到 {angle_deg}° ({dur}ms)"
                     Clock.schedule_once(lambda dt, m=msg: self._show_info_popup(m))
                 except Exception as e:
                     msg = f"移动失败: {e}"
@@ -1198,10 +1308,18 @@ class DebugPanel(Widget):
                     new_id = int(ti.text)
                     mgr = app.servo_bus.manager
                     mgr.write_data_by_name(sid, "SERVO_ID", new_id)
-                    time.sleep(0.2)
+                    time.sleep(0.5)  # 稍微等待一下设备状态更新
                     ok_ping = mgr.ping(new_id)
                     popup.dismiss()
                     self._show_info_popup("写入ID " + ("成功" if ok_ping else "失败"))
+                    # 重新扫描总线上的所有舵机，更新其 known_ids 列表
+                    try:
+                        # 扫描所有可能的 ID 并缓存结果
+                        mgr.servo_scan(list(range(1, 26)))
+                    except Exception:
+                        pass
+                    # 最后统一刷新连接状态列表 UI
+                    Clock.schedule_once(lambda dt: self.refresh_servo_status(), 0.5)
                 except Exception as ex:
                     popup.dismiss()
                     self._show_info_popup(f"写ID失败: {ex}")
@@ -1249,6 +1367,88 @@ class DebugPanel(Widget):
 
             btn_servo.bind(on_release=lambda *_: _do(0x01))
             btn_dc.bind(on_release=lambda *_: _do(0x00))
+
+        # ---------- 新增按键逻辑 ----------
+        def _do_c_go(_):
+            try:
+                ang = float(ti_c_angle.text)
+                _move_to_angle(ang)
+            except:
+                self._show_info_popup("请输入有效角度数字")
+        btn_c_go.bind(on_release=_do_c_go)
+
+        def _do_cycle_stop(_):
+            sid = _get_sid()
+            ctrl = self._spin_controllers.get(sid)
+            if ctrl and ctrl.get('running'):
+                ctrl['running'] = False
+                self._show_info_popup(f"已停止 ID{sid} 循环")
+            
+        def _do_cycle_run(_):
+            sid = _get_sid()
+            # 先停止当前ID可能存在的旧循环
+            _do_cycle_stop(None)
+            
+            try:
+                deg_a = float(ti_cy_a.text)
+                deg_b = float(ti_cy_b.text)
+            except:
+                self._show_info_popup("角度输入无效")
+                return
+
+            app = App.get_running_app()
+            if not (hasattr(app, "servo_bus") and app.servo_bus and not getattr(app.servo_bus, "is_mock", True)):
+                self._show_info_popup("舵机未连接")
+                return
+            
+            # 创建新的控制标志
+            ctrl = {'running': True}
+            self._spin_controllers[sid] = ctrl
+            
+            def _thread_bg():
+                try:
+                    _ensure_torque()
+                    mgr = app.servo_bus.manager
+                    # 映射 0-360 -> 0-4095
+                    pos_a = int(deg_a / 360.0 * 4095)
+                    pos_b = int(deg_b / 360.0 * 4095)
+                    
+                    while ctrl['running']:
+                        # 动态读取时间
+                        try:
+                            dur = int(ti_dur.text)
+                            dur = max(100, dur)
+                        except:
+                            dur = 500
+                        
+                        # 移动到 A
+                        try:
+                            mgr.set_position_time(sid, pos_a, time_ms=dur)
+                        except: pass
+                        
+                        # 等待 dur + 间歇，分段以便快速响应
+                        wait_steps = int((dur + 200) / 100)
+                        for _ in range(wait_steps):
+                            if not ctrl['running']: break
+                            time.sleep(0.1)
+                        if not ctrl['running']: break
+                        
+                        # 移动到 B
+                        try:
+                            mgr.set_position_time(sid, pos_b, time_ms=dur)
+                        except: pass
+                        
+                        for _ in range(wait_steps):
+                            if not ctrl['running']: break
+                            time.sleep(0.1)
+                except Exception as e:
+                    pass
+            
+            threading.Thread(target=_thread_bg, daemon=True).start()
+            self._show_info_popup(f"开始循环 ID{sid}: {deg_a}°↔{deg_b}°")
+
+        btn_cy_run.bind(on_release=_do_cycle_run)
+        btn_cy_stop.bind(on_release=_do_cycle_stop)
 
         btn_inc.bind(on_release=_inc)
         btn_dec.bind(on_release=_dec)
