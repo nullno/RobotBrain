@@ -66,7 +66,6 @@ jobs:
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
           ANDROID_NDK_HOME: $HOME/Android/ndk/25.2.9519653
         run: |
-          buildozer android clean
           buildozer android debug
 
       - name: Upload APK artifact
