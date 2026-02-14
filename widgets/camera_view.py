@@ -9,11 +9,9 @@ from widgets.runtime_status import RuntimeStatusLogger
 class CameraView(Image):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        # 使用 fit_mode='cover' 确保护满全屏 (Kivy 2.2+)
-        # 这会自动处理裁剪，覆盖 keep_ratio/allow_stretch
-        self.fit_mode = "cover"
-        # self.allow_stretch = True
-        # self.keep_ratio = True
+       
+        self.allow_stretch = True
+        self.keep_ratio = True
 
         self.capture = None
         # 可注册回调以获取原始 OpenCV 帧：callback(frame: numpy.ndarray)
