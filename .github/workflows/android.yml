@@ -53,12 +53,20 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install --no-cache-dir buildozer "cython<3"
 
+      - name: Preflight resource check
+        run: |
+          echo "== buildozer.spec resource config =="
+          grep -nE "android\.(add_resources|res_xml|manifest\.intent_filters)" buildozer.spec || true
+          echo "== device_filter file =="
+          ls -l android/xml/device_filter.xml
+
       - name: Build APK with buildozer
         env:
           ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
           ANDROID_NDK_HOME: $HOME/Android/ndk/25.2.9519653
         run: |
+          buildozer android clean
           buildozer android debug
 
       - name: Upload APK artifact

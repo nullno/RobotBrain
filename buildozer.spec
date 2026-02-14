@@ -22,7 +22,7 @@ requirements = python3,kivy==2.3.0,pyjnius,plyer,requests,pyserial
 
 # UI配置
 fullscreen = 1
-orientation = landscape
+orientation = sensorLandscape
 icon.filename = %(source.dir)s/assets/logo.png
 
 # 启动页
@@ -47,9 +47,8 @@ android.accept_sdk_license = True
 # (注意：USB_PERMISSION 是代码中的 Intent Action，不是 Manifest 权限，已移除)
 
 android.permissions = INTERNET,ACCESS_NETWORK_STATE,CAMERA,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE
-android.extra_res_dirs = resources
+android.res_xml = android/xml/device_filter.xml
 android.manifest.intent_filters = android/usb/intent_filter.xml
-
 
 # 使用本地 aar 库（最稳妥的方式，避免 Maven 仓库连接问题）
 android.add_libs = android/libs/usb-serial-for-android-3.5.1.aar
