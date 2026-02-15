@@ -50,8 +50,8 @@ android.res_xml = android/xml/device_filter.xml
 android.manifest.intent_filters = android/usb/intent_filter.xml
 
 # 使用本地 aar 库（最稳妥的方式，避免 Maven 仓库连接问题）
-# android.add_aars = android/libs/usb-serial-for-android-3.5.1.aar
-android.gradle_dependencies = com.github.mik3y:usb-serial-for-android:3.5.1
+android.add_aars = android/libs/usb-serial-for-android-3.5.1.aar
+# android.gradle_dependencies = com.github.mik3y:usb-serial-for-android:3.5.1
 
 
 # Android版本配置
