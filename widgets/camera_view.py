@@ -19,6 +19,7 @@ class CameraView(Image):
         self._camera_init_phase = True  # 权限等待阶段标志
         self._desktop_frame_logged = False
         self._android_last_texture_id = None
+        self._android_texture_ready_logged = False
         
         if platform in ("win", "linux", "macosx"):
             self._start_desktop()
@@ -106,11 +107,19 @@ class CameraView(Image):
                                 if val:
                                     # 复制一个子纹理再翻转，避免 Android 原始纹理上下颠倒且无法原地修改
                                     tex = val.get_region(0, 0, val.width, val.height)
+                                    # Android 前置摄像头常见为 180° 反向：前置做上下+左右翻转；其余保持上下翻转
                                     tex.flip_vertical()
+                                    if camera_idx in (1, 2):
+                                        try:
+                                            tex.flip_horizontal()
+                                        except Exception:
+                                            pass
                                     self.texture = tex
-                                    RuntimeStatusLogger.log_info(
-                                        f'Android 摄像头 texture 就绪 (index={camera_idx})'
-                                    )
+                                    if not self._android_texture_ready_logged:
+                                        RuntimeStatusLogger.log_info(
+                                            f'Android 摄像头 texture 就绪 (index={camera_idx})'
+                                        )
+                                        self._android_texture_ready_logged = True
                             except Exception:
                                 pass
 

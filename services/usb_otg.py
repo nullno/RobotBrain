@@ -23,6 +23,9 @@ _monitor_thread = None
 _stop_event = None
 _last_devices = set()
 _callbacks = []
+# Android 下检测到 OTG 插入时，默认不弹“打开应用/Intent”提示；
+# 应用已在前台运行时该弹窗会干扰调试。
+_android_popup_enabled = False
 
 
 def _chip_name_by_vid_pid(vid, pid):
@@ -137,9 +140,9 @@ def _monitor_loop(poll_interval=1.0):
                             logging.info(msg)
                     except Exception:
                         pass
-                    # Android: 弹窗提示用户打开应用并可直接尝试通过 Intent 唤起 APK
+                    # Android: 仅在显式启用时弹窗提示并尝试 Intent 唤起
                     try:
-                        if _kivy_platform == 'android':
+                        if _kivy_platform == 'android' and _android_popup_enabled:
                             Clock.schedule_once(lambda dt, dev=d: _show_otg_popup(dev))
                         # 调用注册的回调（主线程）通知应用热插拔事件
                         for cb in list(_callbacks):
@@ -208,6 +211,15 @@ def stop_monitor():
     global _stop_event
     if _stop_event:
         _stop_event.set()
+
+
+def set_android_popup_enabled(enabled=False):
+    """设置 Android OTG 插入时是否弹“打开应用/Intent”提示。默认关闭。"""
+    global _android_popup_enabled
+    try:
+        _android_popup_enabled = bool(enabled)
+    except Exception:
+        _android_popup_enabled = False
 
 
 def _show_otg_popup(device_id=None):

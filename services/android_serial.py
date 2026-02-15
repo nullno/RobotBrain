@@ -1,8 +1,11 @@
 import threading
+import time
 from kivy.utils import platform
 import logging
 
 _last_status = "init"
+_perm_req_last = {}
+_perm_req_interval_sec = 2.5
 
 
 def get_last_usb_serial_status():
@@ -210,19 +213,27 @@ def open_first_usb_serial(baud=115200, open_timeout_ms=1000, prefer_device_id=No
             # 请求权限（若尚未授权，会弹出系统授权窗口）
             if not usb_manager.hasPermission(device):
                 saw_permission_wait = True
+                key = f"{vid}:{pid}:{dev_name}"
+                now = time.time()
+                can_request = (now - float(_perm_req_last.get(key, 0.0))) >= _perm_req_interval_sec
                 try:
-                    PendingIntent = autoclass('android.app.PendingIntent')
-                    Intent = autoclass('android.content.Intent')
-                    flags = 0
-                    try:
-                        flags = PendingIntent.FLAG_IMMUTABLE
-                    except Exception:
+                    if can_request:
+                        PendingIntent = autoclass('android.app.PendingIntent')
+                        Intent = autoclass('android.content.Intent')
                         flags = 0
-                    pi = PendingIntent.getBroadcast(activity, 0, Intent('USB_PERMISSION'), flags)
-                    usb_manager.requestPermission(device, pi)
+                        try:
+                            flags = PendingIntent.FLAG_IMMUTABLE
+                        except Exception:
+                            flags = 0
+                        pi = PendingIntent.getBroadcast(activity, 0, Intent('USB_PERMISSION'), flags)
+                        usb_manager.requestPermission(device, pi)
+                        _perm_req_last[key] = now
                 except Exception:
                     pass
-                _set_status(f'wait: permission requested for {chip} vid={vid} pid={pid} dev={dev_name}')
+                if can_request:
+                    _set_status(f'wait: permission requested for {chip} vid={vid} pid={pid} dev={dev_name}')
+                else:
+                    _set_status(f'wait: permission pending for {chip} vid={vid} pid={pid} dev={dev_name}')
                 continue
 
             # 打开端口

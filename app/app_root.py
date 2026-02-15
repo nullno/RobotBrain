@@ -67,6 +67,36 @@ else:
 
 
 class RobotDashboardApp(App):
+    def _should_log_usb_status(self, key, status, interval_sec=3.0):
+        """同类 USB 状态日志节流：状态变化立即记，重复状态按间隔记。"""
+        try:
+            now = time.time()
+            last_status = getattr(self, f"_last_{key}_status", None)
+            last_time = float(getattr(self, f"_last_{key}_time", 0.0) or 0.0)
+            if status != last_status or (now - last_time) >= float(interval_sec):
+                setattr(self, f"_last_{key}_status", status)
+                setattr(self, f"_last_{key}_time", now)
+                return True
+            return False
+        except Exception:
+            return True
+
+    def _mark_usb_connected_after_permission(self, status_text=None):
+        """Android USB 串口成功连接后：清空 pending 状态，并仅提示一次授权完成。"""
+        try:
+            prev = str(getattr(self, "_last_usb_permission_status", "") or "")
+            if prev.startswith("wait:"):
+                msg = "USB 授权已完成，串口已连接"
+                if status_text:
+                    msg = msg + ": " + str(status_text)
+                RuntimeStatusLogger.log_info(msg)
+            self._last_usb_permission_status = None
+        except Exception:
+            try:
+                self._last_usb_permission_status = None
+            except Exception:
+                pass
+
     def _balance_tuning_file(self):
         try:
             return pathlib.Path(self.user_data_dir) / "balance_tuning.json"
@@ -81,9 +111,9 @@ class RobotDashboardApp(App):
                 return False
             fp = self._balance_tuning_file()
             fp.parent.mkdir(parents=True, exist_ok=True)
-            axis_mode = str(getattr(self, "_gyro_axis_mode", "auto"))
+            axis_mode = str(getattr(self, "_gyro_axis_mode", "normal"))
             if axis_mode not in ("auto", "normal", "swapped"):
-                axis_mode = "auto"
+                axis_mode = "normal"
             data = {
                 "gain_p": float(getattr(bc, "gain_p", 5.5)),
                 "gain_r": float(getattr(bc, "gain_r", 4.2)),
@@ -109,14 +139,15 @@ class RobotDashboardApp(App):
 
             gp = float(obj.get("gain_p", getattr(bc, "gain_p", 5.5)))
             gr = float(obj.get("gain_r", getattr(bc, "gain_r", 4.2)))
-            axis_mode = str(obj.get("gyro_axis_mode", getattr(self, "_gyro_axis_mode", "auto")))
+            axis_mode = str(obj.get("gyro_axis_mode", getattr(self, "_gyro_axis_mode", "normal")))
             if axis_mode not in ("auto", "normal", "swapped"):
-                axis_mode = "auto"
+                axis_mode = "normal"
             gp = max(0.0, min(20.0, gp))
             gr = max(0.0, min(20.0, gr))
             bc.gain_p = gp
             bc.gain_r = gr
             self._gyro_axis_mode = axis_mode
+            self._gyro_axis_mode_logged = axis_mode
             if axis_mode == "auto":
                 self._gyro_axis_samples = 0
             try:
@@ -239,6 +270,9 @@ class RobotDashboardApp(App):
                 usb_wrapper = open_first_usb_serial(baud=115200)
                 if usb_wrapper:
                      self.servo_bus = ServoBus(port=usb_wrapper)
+                     self._mark_usb_connected_after_permission(
+                         get_last_usb_serial_status()
+                     )
                      RuntimeStatusLogger.log_info("启动时已通过 USB 串口连接硬件")
                 else:
                     RuntimeStatusLogger.log_info(
@@ -429,6 +463,13 @@ class RobotDashboardApp(App):
             def _handle():
                 try:
                     if event == "added":
+                        # Android: 若当前已经连接真实串口，跳过重复 open/requestPermission，避免误报与刷屏
+                        try:
+                            if platform == "android" and getattr(self, "servo_bus", None) and not getattr(self.servo_bus, "is_mock", True):
+                                return
+                        except Exception:
+                            pass
+
                         # 解析 device_id 中的实际串口端口名（如 COM6 或 /dev/ttyUSB0）
                         # Android 特殊处理：尝试通过 usb-serial-for-android 打开设备（Pyjnius）
                         try:
@@ -448,6 +489,12 @@ class RobotDashboardApp(App):
                                 if usb_wrapper:
                                     sb = ServoBus(port=usb_wrapper)
                                     if sb and not getattr(sb, "is_mock", True):
+                                        try:
+                                            self._mark_usb_connected_after_permission(
+                                                get_last_usb_serial_status()
+                                            )
+                                        except Exception:
+                                            pass
                                         # 成功连接，替换旧实例并刷新 UI
                                         try:
                                             if getattr(
@@ -481,10 +528,20 @@ class RobotDashboardApp(App):
                                         return
                                 else:
                                     try:
-                                        RuntimeStatusLogger.log_info(
-                                            "OTG added 事件触发，但 Android USB Serial 未连接: "
-                                            + str(get_last_usb_serial_status())
-                                        )
+                                        status = str(get_last_usb_serial_status())
+                                        if status.startswith("wait:"):
+                                            # 等待系统授权时做状态+时间节流，避免刷屏
+                                            if self._should_log_usb_status("usb_permission", status, 3.0):
+                                                RuntimeStatusLogger.log_info(
+                                                    "OTG 已检测到设备，正在等待 USB 授权: " + status
+                                                )
+                                                self._last_usb_permission_status = status
+                                        else:
+                                            self._last_usb_permission_status = None
+                                            if self._should_log_usb_status("usb_unconnected", status, 3.0):
+                                                RuntimeStatusLogger.log_info(
+                                                    "OTG added 事件触发，但 Android USB Serial 未连接: " + status
+                                                )
                                     except Exception:
                                         pass
                         except Exception:
@@ -695,6 +752,9 @@ class RobotDashboardApp(App):
                         sb = ServoBus(port=usb_wrapper)
                         if sb and not getattr(sb, "is_mock", True):
                             self.servo_bus = sb
+                            self._mark_usb_connected_after_permission(
+                                get_last_usb_serial_status()
+                            )
                             self._init_motion_controller_after_connect()
                             RuntimeStatusLogger.log_info(f"自动连接 Android USB 串口成功")
                             Clock.schedule_once(self._safe_refresh_ui, 0)
@@ -938,7 +998,7 @@ class RobotDashboardApp(App):
                     # 针对不同设备/ROM 的横屏轴差异，自动判定一次映射并锁定
                     # normal: p=dy, r=-dx
                     # swapped: p=-dx, r=dy
-                    mode = getattr(self, "_gyro_axis_mode", "auto")
+                    mode = getattr(self, "_gyro_axis_mode", "normal")
                     if mode == "auto":
                         try:
                             ax, ay = abs(dx), abs(dy)
@@ -954,7 +1014,9 @@ class RobotDashboardApp(App):
                             mode = getattr(self, "_gyro_axis_mode", "normal")
                             if mode != "auto":
                                 try:
-                                    RuntimeStatusLogger.log_info(f"陀螺仪轴映射模式: {mode}")
+                                    if getattr(self, "_gyro_axis_mode_logged", None) != mode:
+                                        RuntimeStatusLogger.log_info(f"陀螺仪轴映射已设置: {mode}")
+                                        self._gyro_axis_mode_logged = mode
                                 except Exception:
                                     pass
                         except Exception:
