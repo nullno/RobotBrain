@@ -31,6 +31,8 @@ include_statusbar = False
 
 # short_edges: 允许内容扩展到刘海/挖孔区域
 android.window_layout_in_display_cutout_mode = short_edges
+# 屏幕是否常亮
+android.wakelock = True
 
 # 打包优化
 # android.add_src = 
@@ -49,9 +51,9 @@ android.permissions = INTERNET,ACCESS_NETWORK_STATE,CAMERA,WRITE_EXTERNAL_STORAG
 android.res_xml = android/xml/device_filter.xml
 android.manifest.intent_filters = android/usb/intent_filter.xml
 
-# 使用本地 aar 库（最稳妥的方式，避免 Maven 仓库连接问题）
-android.add_aars = android/libs/usb-serial-for-android-3.5.1.aar
-# android.gradle_dependencies = com.github.mik3y:usb-serial-for-android:3.5.1
+# USB Serial 依赖（CI 上优先使用 Maven，避免本地 AAR flatDir 解析失败）
+android.gradle_repositories = https://jitpack.io
+android.gradle_dependencies = com.github.mik3y:usb-serial-for-android:3.5.1
 
 
 # Android版本配置
