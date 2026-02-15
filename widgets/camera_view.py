@@ -104,8 +104,10 @@ class CameraView(Image):
                         def _on_text(inst, val, camera_idx=idx):
                             try:
                                 if val:
-                                    self._fix_android_texture_orientation(val)
-                                    self.texture = val
+                                    # 复制一个子纹理再翻转，避免 Android 原始纹理上下颠倒且无法原地修改
+                                    tex = val.get_region(0, 0, val.width, val.height)
+                                    tex.flip_vertical()
+                                    self.texture = tex
                                     RuntimeStatusLogger.log_info(
                                         f'Android 摄像头 texture 就绪 (index={camera_idx})'
                                     )
