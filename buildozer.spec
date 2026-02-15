@@ -50,11 +50,11 @@ android.res_xml = android/xml/device_filter.xml
 android.manifest.intent_filters = android/usb/intent_filter.xml
 
 # 使用本地 aar 库避免远端仓库不可达
-android.add_aars = android/libs/usb-serial-for-android-3.5.1.aar
+# android.add_aars = android/libs/usb-serial-for-android-3.5.1.aar
 
 # 仅本地依赖，禁用在线拉取
-# android.gradle_repositories = maven { url "https://jitpack.io" }
-# android.gradle_dependencies = com.github.mik3y:usb-serial-for-android:3.5.1
+android.gradle_dependencies = com.github.mik3y:usb-serial-for-android:3.5.1
+android.gradle_repositories = mavenCentral()
 android.enable_androidx = True
 
 
