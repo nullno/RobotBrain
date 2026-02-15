@@ -51,8 +51,8 @@ android.permissions = INTERNET,ACCESS_NETWORK_STATE,CAMERA,WRITE_EXTERNAL_STORAG
 android.res_xml = android/xml/device_filter.xml
 android.manifest.intent_filters = android/usb/intent_filter.xml
 
-# USB Serial 依赖（CI 上优先使用 Maven，避免本地 AAR flatDir 解析失败）
-android.gradle_repositories = https://jitpack.io
+# USB Serial 依赖（使用 p4a 的 add_gradle_repositories 注入 JitPack）
+android.add_gradle_repositories = maven { url 'https://jitpack.io' }
 android.gradle_dependencies = com.github.mik3y:usb-serial-for-android:3.5.1
 
 

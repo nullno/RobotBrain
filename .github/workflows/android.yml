@@ -56,7 +56,7 @@ jobs:
       - name: Preflight resource check
         run: |
           echo "== buildozer.spec resource config =="
-          grep -nE "android\.(add_resources|res_xml|manifest\.intent_filters|add_aars|gradle_dependencies|gradle_repositories)" buildozer.spec || true
+          grep -nE "android\.(add_resources|res_xml|manifest\.intent_filters|add_aars|gradle_dependencies|gradle_repositories|add_gradle_repositories)" buildozer.spec || true
           echo "== device_filter file =="
           ls -l android/xml/device_filter.xml
           echo "== aar libs =="
