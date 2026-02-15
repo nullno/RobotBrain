@@ -49,12 +49,12 @@ android.permissions = INTERNET,ACCESS_NETWORK_STATE,CAMERA,WRITE_EXTERNAL_STORAG
 android.res_xml = android/xml/device_filter.xml
 android.manifest.intent_filters = android/usb/intent_filter.xml
 
-# 使用本地 aar 库（最稳妥的方式，避免 Maven 仓库连接问题）
-# android.add_aars = android/libs/usb-serial-for-android-3.5.1.aar
+# 使用本地 aar 库避免远端仓库不可达
+android.add_aars = android/libs/usb-serial-for-android-3.5.1.aar
 
-# 同时启用在线依赖，确保 Gradle 能拉取缺失的 aar（避免本地 aar 未被拷贝时的构建失败）
-android.gradle_repositories = maven { url "https://jitpack.io" }
-android.gradle_dependencies = com.github.mik3y:usb-serial-for-android:3.5.1
+# 仅本地依赖，禁用在线拉取
+# android.gradle_repositories = maven { url "https://jitpack.io" }
+# android.gradle_dependencies = com.github.mik3y:usb-serial-for-android:3.5.1
 android.enable_androidx = True
 
 
