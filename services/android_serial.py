@@ -19,6 +19,17 @@ def _set_status(msg):
         pass
 
 
+def _is_missing_usbserial_class_error(err):
+    text = str(err or "")
+    low = text.lower()
+    return (
+        "com.hoho.android.usbserial.driver.usbserialprober" in low
+        or "didn't find class" in low
+        or "classnotfoundexception" in low
+        or "noclassdeffounderror" in low
+    )
+
+
 def _chip_name_by_vid_pid(vid, pid):
     try:
         v = int(vid)
@@ -95,7 +106,16 @@ def open_first_usb_serial(baud=115200, open_timeout_ms=1000, prefer_device_id=No
     try:
         PythonActivity = autoclass('org.kivy.android.PythonActivity')
         UsbManager = autoclass('android.hardware.usb.UsbManager')
-        UsbSerialProber = autoclass('com.hoho.android.usbserial.driver.UsbSerialProber')
+        try:
+            UsbSerialProber = autoclass('com.hoho.android.usbserial.driver.UsbSerialProber')
+        except Exception as e:
+            if _is_missing_usbserial_class_error(e):
+                _set_status(
+                    'fail: usb-serial class missing in APK; check buildozer.spec android.add_aars and rebuild with clean'
+                )
+                return None
+            _set_status(f'fail: usb-serial class load error: {e}')
+            return None
 
         activity = PythonActivity.mActivity
         usb_manager = cast('android.hardware.usb.UsbManager',
@@ -231,5 +251,10 @@ def open_first_usb_serial(baud=115200, open_timeout_ms=1000, prefer_device_id=No
         _set_status('fail: no usable usb-serial driver after filtering')
         return None
     except Exception as e:
+        if _is_missing_usbserial_class_error(e):
+            _set_status(
+                'fail: usb-serial class missing in APK; check buildozer.spec android.add_aars and rebuild with clean'
+            )
+            return None
         _set_status(f'fail: unexpected error: {e}')
         return None
