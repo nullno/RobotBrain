@@ -91,6 +91,8 @@ class RobotDashboardApp(App):
                     msg = msg + ": " + str(status_text)
                 RuntimeStatusLogger.log_info(msg)
             self._last_usb_permission_status = None
+            self._android_usb_connected_once = True
+            self._suppress_android_otg_added_until = time.time() + 8.0
         except Exception:
             try:
                 self._last_usb_permission_status = None
@@ -467,6 +469,18 @@ class RobotDashboardApp(App):
             def _handle():
                 try:
                     if event == "added":
+                        # Android: 启动后短时间内忽略 added 事件，避免系统重复分发导致重连抖动
+                        try:
+                            if platform == "android":
+                                suppress_until = float(
+                                    getattr(self, "_suppress_android_otg_added_until", 0.0)
+                                    or 0.0
+                                )
+                                if time.time() < suppress_until:
+                                    return
+                        except Exception:
+                            pass
+
                         # Android: 若当前已经连接真实串口，跳过重复 open/requestPermission，避免误报与刷屏
                         try:
                             if platform == "android" and getattr(self, "servo_bus", None) and not getattr(self.servo_bus, "is_mock", True):
@@ -512,15 +526,7 @@ class RobotDashboardApp(App):
                                             pass
                                         self.servo_bus = sb
                                         try:
-                                            if getattr(
-                                                self.servo_bus, "manager", None
-                                            ):
-                                                try:
-                                                    self.servo_bus.manager.servo_scan(
-                                                        list(range(1, 26))
-                                                    )
-                                                except Exception:
-                                                    pass
+                                            self._schedule_servo_scan_after_connect("OTG")
                                         except Exception:
                                             pass
                                         try:
@@ -636,15 +642,8 @@ class RobotDashboardApp(App):
                                         except Exception:
                                             pass
                                         self.servo_bus = sb
-                                        # 强制扫描已连接的舵机以确保 manager 有最新的 servo_info_dict
                                         try:
-                                            if getattr(self.servo_bus, "manager", None):
-                                                try:
-                                                    self.servo_bus.manager.servo_scan(
-                                                        list(range(1, 26))
-                                                    )
-                                                except Exception:
-                                                    pass
+                                            self._schedule_servo_scan_after_connect("OTG")
                                         except Exception:
                                             pass
                                         connected = True

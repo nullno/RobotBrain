@@ -3,6 +3,7 @@ from kivy.clock import Clock
 from kivy.graphics.texture import Texture
 from kivy.utils import platform
 from widgets.runtime_status import RuntimeStatusLogger
+import os
 
 
 class CameraView(Image):
@@ -20,21 +21,75 @@ class CameraView(Image):
         self._desktop_frame_logged = False
         self._android_last_texture_id = None
         self._android_texture_ready_logged = False
+        self._android_front_indices = set()
+        self._android_camera_started = False
         
         if platform in ("win", "linux", "macosx"):
             self._start_desktop()
         else:
             self._start_android()
 
-    def _fix_android_texture_orientation(self, texture):
-        """修正 Android 摄像头纹理上下颠倒问题（仅在新纹理对象上翻转一次）"""
+    def _get_android_camera_candidates(self):
+        """返回 Android 摄像头候选索引：优先前置，再补充常见索引。"""
+        candidates = []
         try:
-            tex_id = id(texture)
-            if tex_id != self._android_last_texture_id:
-                texture.flip_vertical()
-                self._android_last_texture_id = tex_id
+            from jnius import autoclass
+
+            CameraJava = autoclass("android.hardware.Camera")
+            CameraInfo = autoclass("android.hardware.Camera$CameraInfo")
+            count = int(CameraJava.getNumberOfCameras())
+            for idx in range(count):
+                try:
+                    info = CameraInfo()
+                    CameraJava.getCameraInfo(idx, info)
+                    facing = int(getattr(info, "facing", -1))
+                    if facing == int(CameraInfo.CAMERA_FACING_FRONT):
+                        self._android_front_indices.add(int(idx))
+                        if idx not in candidates:
+                            candidates.append(int(idx))
+                except Exception:
+                    pass
+            for idx in range(count):
+                if idx not in candidates:
+                    candidates.append(int(idx))
         except Exception:
             pass
+
+        for idx in [1, 0, 2, -1]:
+            if idx not in candidates:
+                candidates.append(idx)
+        return candidates
+
+    def _apply_android_texture_transform(self, texture, camera_idx):
+        """对 Android 摄像头纹理应用稳定的 uv 变换。"""
+        try:
+            mode = str(os.environ.get("RB_ANDROID_FRONT_FIX", "rotate180")).strip().lower()
+            is_front = int(camera_idx) in self._android_front_indices if camera_idx != -1 else False
+
+            # Android 相机纹理普遍存在 Y 轴反向，默认先做垂直翻转
+            uvpos = (0.0, 1.0)
+            uvsize = (1.0, -1.0)
+
+            # 前置默认做 180°（等价于上下+左右），可通过环境变量覆盖
+            if is_front:
+                if mode in ("rotate180", "180", "default"):
+                    uvpos = (1.0, 1.0)
+                    uvsize = (-1.0, -1.0)
+                elif mode in ("vflip", "vertical"):
+                    uvpos = (0.0, 1.0)
+                    uvsize = (1.0, -1.0)
+                elif mode in ("hflip", "horizontal"):
+                    uvpos = (1.0, 0.0)
+                    uvsize = (-1.0, 1.0)
+                elif mode in ("none", "off"):
+                    uvpos = (0.0, 0.0)
+                    uvsize = (1.0, 1.0)
+
+            texture.uvpos = uvpos
+            texture.uvsize = uvsize
+            return is_front, mode
+        except Exception:
+            return False, "unknown"
 
     # ---------- Desktop (OpenCV) ----------
     def _start_desktop(self):
@@ -88,13 +143,17 @@ class CameraView(Image):
     def _start_android(self):
         from kivy.uix.camera import Camera
         from kivy.clock import Clock
+
         def start_camera():
             try:
+                if self._android_camera_started and getattr(self, "camera", None):
+                    return
                 self.camera = None
                 camera_started = False
+                candidates = self._get_android_camera_candidates()
 
-                # 尝试多个摄像头索引：优先尝试 1/2/不指定索引作为最后手段
-                for idx in [1, 2, -1]:
+                # 尝试多个摄像头索引：优先前置，再回退
+                for idx in candidates:
                     try:
                         if idx == -1:
                             self.camera = Camera(play=True, resolution=(640, 480))
@@ -105,19 +164,13 @@ class CameraView(Image):
                         def _on_text(inst, val, camera_idx=idx):
                             try:
                                 if val:
-                                    # 复制一个子纹理再翻转，避免 Android 原始纹理上下颠倒且无法原地修改
+                                    # 复制一个子纹理并通过 uv 变换修正方向（比 flip_* 更稳定）
                                     tex = val.get_region(0, 0, val.width, val.height)
-                                    # Android 前置摄像头常见为 180° 反向：前置做上下+左右翻转；其余保持上下翻转
-                                    tex.flip_vertical()
-                                    if camera_idx in (1, 2):
-                                        try:
-                                            tex.flip_horizontal()
-                                        except Exception:
-                                            pass
+                                    is_front, mode = self._apply_android_texture_transform(tex, camera_idx)
                                     self.texture = tex
                                     if not self._android_texture_ready_logged:
                                         RuntimeStatusLogger.log_info(
-                                            f'Android 摄像头 texture 就绪 (index={camera_idx})'
+                                            f'Android 摄像头 texture 就绪 (index={camera_idx}, front={is_front}, mode={mode})'
                                         )
                                         self._android_texture_ready_logged = True
                             except Exception:
@@ -126,6 +179,7 @@ class CameraView(Image):
                         self.camera.bind(texture=_on_text)
                         self._camera_index = idx
                         camera_started = True
+                        self._android_camera_started = True
                         RuntimeStatusLogger.log_info(f"摄像头已启动 (index={idx})")
                         print(f"✅ 摄像头已启动 (index={idx})")
                         break
@@ -180,6 +234,63 @@ class CameraView(Image):
             # 非 android.permissions 环境：直接尝试启动摄像头
             start_camera()
 
+    def set_android_front_fix_mode(self, mode):
+        """设置 Android 前置摄像头方向修正模式。"""
+        try:
+            m = str(mode or "").strip().lower()
+            alias = {
+                "180": "rotate180",
+                "default": "rotate180",
+                "vertical": "vflip",
+                "horizontal": "hflip",
+                "off": "none",
+            }
+            m = alias.get(m, m)
+            if m not in ("rotate180", "vflip", "hflip", "none"):
+                m = "rotate180"
+            os.environ["RB_ANDROID_FRONT_FIX"] = m
+            try:
+                RuntimeStatusLogger.log_info(f"视觉设置: 前置修正模式 -> {m}")
+            except Exception:
+                pass
+            return m
+        except Exception:
+            return "rotate180"
+
+    def restart_camera(self):
+        """重启相机以重新探测设备与索引。"""
+        try:
+            if platform in ("win", "linux", "macosx"):
+                try:
+                    if self.capture:
+                        self.capture.release()
+                except Exception:
+                    pass
+                self.capture = None
+                if self._event:
+                    try:
+                        self._event.cancel()
+                    except Exception:
+                        pass
+                self._event = None
+                self._desktop_frame_logged = False
+                self._start_desktop()
+                return True
+
+            try:
+                if hasattr(self, "camera") and self.camera:
+                    self.camera.play = False
+                    self.camera = None
+            except Exception:
+                pass
+            self._android_camera_started = False
+            self._android_texture_ready_logged = False
+            self._android_front_indices = set()
+            self._start_android()
+            return True
+        except Exception:
+            return False
+
     def on_parent(self, instance, parent):
         """清理资源：当widget从父级移除时"""
         if not parent:
@@ -194,5 +305,6 @@ class CameraView(Image):
                 if hasattr(self, 'camera') and self.camera:
                     self.camera.play = False
                     self.camera = None
+                self._android_camera_started = False
             except Exception:
                 pass

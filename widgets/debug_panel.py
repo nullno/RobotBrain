@@ -20,6 +20,7 @@ import sys
 import time
 from widgets.bubble_level import BubbleLevel
 from widgets.universal_tip import UniversalTip
+from widgets.vision_settings_panel import VisionSettingsPanel
 
 try:
     from widgets.runtime_status import RuntimeStatusLogger
@@ -443,6 +444,11 @@ class DebugPanel(Widget):
 
         try:
             self._build_balance_debug_tab(tp)
+        except Exception:
+            pass
+
+        try:
+            self._build_vision_settings_tab(tp)
         except Exception:
             pass
 
@@ -1093,6 +1099,15 @@ class DebugPanel(Widget):
         sv.add_widget(root)
         t_balance.add_widget(sv)
         tp.add_widget(t_balance)
+
+    # ================= 视觉设置 =================
+    def _build_vision_settings_tab(self, tp):
+        t_vision = TabbedPanelItem(text="视觉设置", font_size="15sp")
+        self._style_tab(t_vision)
+
+        panel = VisionSettingsPanel(show_message=self._show_info_popup)
+        t_vision.add_widget(panel)
+        tp.add_widget(t_vision)
 
     # ================= 单舵机快捷调试 =================
     def _build_single_servo_tab(self, tp):
