@@ -719,20 +719,29 @@ class DebugPanel(Widget):
 
     # ===================== 舵机状态刷新 =====================
     def refresh_servo_status(self):
+        status_grid = getattr(self, "_status_grid", None)
+        if status_grid is None:
+            return
+
         app = App.get_running_app()
         mgr = getattr(app, "servo_bus", None)
 
-        def _clear():
-            self._status_grid.clear_widgets()
+        def _clear(dt=0):
+            grid = getattr(self, "_status_grid", None)
+            if grid is not None:
+                grid.clear_widgets()
 
-        Clock.schedule_once(lambda dt: _clear(), 0)
+        Clock.schedule_once(_clear, 0)
 
         if not mgr or getattr(mgr, "is_mock", False):
             max_id = 25
             for sid in range(1, max_id + 1):
                 Clock.schedule_once(
-                    lambda dt, s=sid: self._status_grid.add_widget(
-                        ServoStatusCard(s, data=None, online=False)
+                    lambda dt, s=sid: (
+                        getattr(self, "_status_grid", None)
+                        and getattr(self, "_status_grid", None).add_widget(
+                            ServoStatusCard(s, data=None, online=False)
+                        )
                     ),
                     0,
                 )
@@ -761,8 +770,11 @@ class DebugPanel(Widget):
                     online = False
 
             Clock.schedule_once(
-                lambda dt, s=sid, d=data, o=online: self._status_grid.add_widget(
-                    ServoStatusCard(s, data=d, online=o)
+                lambda dt, s=sid, d=data, o=online: (
+                    getattr(self, "_status_grid", None)
+                    and getattr(self, "_status_grid", None).add_widget(
+                        ServoStatusCard(s, data=d, online=o)
+                    )
                 ),
                 0,
             )

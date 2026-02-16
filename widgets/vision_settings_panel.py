@@ -120,11 +120,11 @@ class VisionSettingsPanel(BoxLayout):
             self._status.text = "视觉设置: 未检测到 CameraView"
             return
         try:
-            mode = "rotate180"
+            mode = "vflip"
             try:
                 import os
 
-                mode = str(os.environ.get("RB_ANDROID_FRONT_FIX", "rotate180"))
+                mode = str(os.environ.get("RB_ANDROID_FRONT_FIX", "vflip"))
             except Exception:
                 pass
             idx = getattr(cam, "_camera_index", None)

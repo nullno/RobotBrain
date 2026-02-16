@@ -41,7 +41,7 @@ def parse_id_list(s):
 
 
 def main():
-    port = input('Serial port (e.g. COM6 or /dev/ttyUSB0) [COM6]: ') or 'COM6'
+    port = input('Serial port (e.g. COM8 or /dev/ttyUSB0) [COM8]: ') or 'COM8'
     baud = int(input('Baudrate [115200]: ') or 115200)
     ids = input('Servo IDs (e.g. 1-25 or 1,2,3) [1-25]: ') or '1-25'
     servo_ids = parse_id_list(ids)

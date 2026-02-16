@@ -100,7 +100,7 @@ def write_servo_id(us, current_id, new_id):
 
 
 def main():
-    port = input('Serial port (e.g. COM6) [COM6]: ') or 'COM6'
+    port = input('Serial port (e.g. COM8) [COM8]: ') or 'COM8'
     baud = int(input('Baudrate [115200]: ') or 115200)
     try:
         uart = serial.Serial(port, baud, timeout=0.02)

@@ -4,7 +4,7 @@ from .uart_servo import UartServoManager
 from .data_table import SERVO_ID_BRODCAST, TORQUE_ENABLE, TORQUE_DISABLE
 
 class ServoBus:
-    def __init__(self, port="COM6", baudrate=115200):
+    def __init__(self, port="COM8", baudrate=115200):
         self.is_mock = False
         try:
             # 若传入的是一个已打开的 uart-like 对象（Android 情况），则直接使用它

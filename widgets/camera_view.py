@@ -2,11 +2,14 @@ from kivy.uix.image import Image
 from kivy.clock import Clock
 from kivy.graphics.texture import Texture
 from kivy.utils import platform
+from kivy.app import App
 from widgets.runtime_status import RuntimeStatusLogger
 import os
 
 
 class CameraView(Image):
+    DEFAULT_ANDROID_FIX_MODE = "vflip"
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.allow_stretch = True
@@ -23,6 +26,11 @@ class CameraView(Image):
         self._android_texture_ready_logged = False
         self._android_front_indices = set()
         self._android_camera_started = False
+
+        try:
+            self._load_saved_android_fix_mode()
+        except Exception:
+            pass
         
         if platform in ("win", "linux", "macosx"):
             self._start_desktop()
@@ -63,33 +71,84 @@ class CameraView(Image):
     def _apply_android_texture_transform(self, texture, camera_idx):
         """对 Android 摄像头纹理应用稳定的 uv 变换。"""
         try:
-            mode = str(os.environ.get("RB_ANDROID_FRONT_FIX", "rotate180")).strip().lower()
+            mode = str(
+                os.environ.get("RB_ANDROID_FRONT_FIX", self.DEFAULT_ANDROID_FIX_MODE)
+            ).strip().lower()
             is_front = int(camera_idx) in self._android_front_indices if camera_idx != -1 else False
 
             # Android 相机纹理普遍存在 Y 轴反向，默认先做垂直翻转
             uvpos = (0.0, 1.0)
             uvsize = (1.0, -1.0)
 
-            # 前置默认做 180°（等价于上下+左右），可通过环境变量覆盖
-            if is_front:
-                if mode in ("rotate180", "180", "default"):
-                    uvpos = (1.0, 1.0)
-                    uvsize = (-1.0, -1.0)
-                elif mode in ("vflip", "vertical"):
-                    uvpos = (0.0, 1.0)
-                    uvsize = (1.0, -1.0)
-                elif mode in ("hflip", "horizontal"):
-                    uvpos = (1.0, 0.0)
-                    uvsize = (-1.0, 1.0)
-                elif mode in ("none", "off"):
-                    uvpos = (0.0, 0.0)
-                    uvsize = (1.0, 1.0)
+            # 用户在视觉设置中选择的模式应始终生效（不依赖前置识别结果）
+            if mode in ("rotate180", "180", "default"):
+                uvpos = (1.0, 1.0)
+                uvsize = (-1.0, -1.0)
+            elif mode in ("vflip", "vertical"):
+                uvpos = (0.0, 1.0)
+                uvsize = (1.0, -1.0)
+            elif mode in ("hflip", "horizontal"):
+                uvpos = (1.0, 0.0)
+                uvsize = (-1.0, 1.0)
+            elif mode in ("none", "off"):
+                uvpos = (0.0, 0.0)
+                uvsize = (1.0, 1.0)
 
             texture.uvpos = uvpos
             texture.uvsize = uvsize
             return is_front, mode
         except Exception:
             return False, "unknown"
+
+    def _get_android_fix_mode_file(self):
+        try:
+            app = App.get_running_app()
+            if app and getattr(app, "user_data_dir", None):
+                base = str(app.user_data_dir)
+            else:
+                base = "data"
+            return os.path.join(base, "camera_fix_mode.txt")
+        except Exception:
+            return os.path.join("data", "camera_fix_mode.txt")
+
+    def _normalize_fix_mode(self, mode):
+        try:
+            m = str(mode or "").strip().lower()
+            alias = {
+                "180": "rotate180",
+                "default": "rotate180",
+                "vertical": "vflip",
+                "horizontal": "hflip",
+                "off": "none",
+            }
+            m = alias.get(m, m)
+            if m not in ("rotate180", "vflip", "hflip", "none"):
+                m = self.DEFAULT_ANDROID_FIX_MODE
+            return m
+        except Exception:
+            return self.DEFAULT_ANDROID_FIX_MODE
+
+    def _load_saved_android_fix_mode(self):
+        mode = self.DEFAULT_ANDROID_FIX_MODE
+        try:
+            path = self._get_android_fix_mode_file()
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf8") as f:
+                    mode = f.read().strip() or mode
+        except Exception:
+            pass
+        mode = self._normalize_fix_mode(mode)
+        os.environ["RB_ANDROID_FRONT_FIX"] = mode
+        return mode
+
+    def _save_android_fix_mode(self, mode):
+        try:
+            path = self._get_android_fix_mode_file()
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf8") as f:
+                f.write(str(mode))
+        except Exception:
+            pass
 
     # ---------- Desktop (OpenCV) ----------
     def _start_desktop(self):
@@ -237,25 +296,16 @@ class CameraView(Image):
     def set_android_front_fix_mode(self, mode):
         """设置 Android 前置摄像头方向修正模式。"""
         try:
-            m = str(mode or "").strip().lower()
-            alias = {
-                "180": "rotate180",
-                "default": "rotate180",
-                "vertical": "vflip",
-                "horizontal": "hflip",
-                "off": "none",
-            }
-            m = alias.get(m, m)
-            if m not in ("rotate180", "vflip", "hflip", "none"):
-                m = "rotate180"
+            m = self._normalize_fix_mode(mode)
             os.environ["RB_ANDROID_FRONT_FIX"] = m
+            self._save_android_fix_mode(m)
             try:
                 RuntimeStatusLogger.log_info(f"视觉设置: 前置修正模式 -> {m}")
             except Exception:
                 pass
             return m
         except Exception:
-            return "rotate180"
+            return self.DEFAULT_ANDROID_FIX_MODE
 
     def restart_camera(self):
         """重启相机以重新探测设备与索引。"""

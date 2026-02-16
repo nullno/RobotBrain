@@ -287,7 +287,7 @@ class RobotDashboardApp(App):
         # PC 或 Android 失败回退连接
         if not self.servo_bus:
             try:
-                dev_port = "/dev/ttyUSB0" if platform == "android" else "COM6"
+                dev_port = "/dev/ttyUSB0" if platform == "android" else "COM8"
                 self._dev_port = dev_port
                 # 这里如果不成功，ServoBus 内部会自动切换到 mock 模式
                 self.servo_bus = ServoBus(port=dev_port)
@@ -488,7 +488,7 @@ class RobotDashboardApp(App):
                         except Exception:
                             pass
 
-                        # 解析 device_id 中的实际串口端口名（如 COM6 或 /dev/ttyUSB0）
+                        # 解析 device_id 中的实际串口端口名（如 COM8 或 /dev/ttyUSB0）
                         # Android 特殊处理：尝试通过 usb-serial-for-android 打开设备（Pyjnius）
                         try:
                             if platform == "android":
@@ -579,7 +579,7 @@ class RobotDashboardApp(App):
                     port = (
                         _parse_port(device_id)
                         or getattr(self, "_dev_port", None)
-                        or ("/dev/ttyUSB0" if platform == "android" else "COM6")
+                        or ("/dev/ttyUSB0" if platform == "android" else "COM8")
                     )
                     # 若当前为 mock，则尝试使用可用端口列表连接（优先使用解析到的 port）
                     if not getattr(self, "servo_bus", None) or getattr(
@@ -797,7 +797,7 @@ class RobotDashboardApp(App):
                         pass
                 # 最后加入默认端口作为兜底
                 default = getattr(self, "_dev_port", None) or (
-                    "/dev/ttyUSB0" if platform == "android" else "COM6"
+                    "/dev/ttyUSB0" if platform == "android" else "COM8"
                 )
                 if default and default not in candidates:
                     candidates.append(default)
