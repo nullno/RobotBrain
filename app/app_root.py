@@ -273,7 +273,8 @@ class RobotDashboardApp(App):
                      self._mark_usb_connected_after_permission(
                          get_last_usb_serial_status()
                      )
-                     RuntimeStatusLogger.log_info("启动时已通过 USB 串口连接硬件")
+                     RuntimeStatusLogger.log_info("启动时 USB 串口已连接，开始扫描舵机")
+                     self._schedule_servo_scan_after_connect("启动")
                 else:
                     RuntimeStatusLogger.log_info(
                         f"启动时 Android USB Serial 未连接: {get_last_usb_serial_status()}"
@@ -288,6 +289,9 @@ class RobotDashboardApp(App):
                 self._dev_port = dev_port
                 # 这里如果不成功，ServoBus 内部会自动切换到 mock 模式
                 self.servo_bus = ServoBus(port=dev_port)
+                if self.servo_bus and not getattr(self.servo_bus, "is_mock", True):
+                    RuntimeStatusLogger.log_info(f"启动时串口已连接: {dev_port}，开始扫描舵机")
+                    self._schedule_servo_scan_after_connect("启动")
             except Exception as e:
                 print(f"❌ 串口初始化失败: {e}")
                 self.servo_bus = None
@@ -844,6 +848,68 @@ class RobotDashboardApp(App):
             )
         except Exception:
             self.motion_controller = None
+
+    def _schedule_servo_scan_after_connect(self, source="连接"):
+        """连接成功后在后台重扫舵机，避免设备刚枚举完成时首轮扫描漏检。"""
+        try:
+            if getattr(self, "_servo_scan_in_progress", False):
+                return
+            self._servo_scan_in_progress = True
+
+            def _worker():
+                try:
+                    sb = getattr(self, "servo_bus", None)
+                    if not sb or getattr(sb, "is_mock", True):
+                        return
+
+                    mgr = getattr(sb, "manager", None)
+                    if not mgr:
+                        return
+
+                    scan_ids = list(range(1, 26))
+                    online_ids = []
+                    for idx in range(3):
+                        try:
+                            mgr.servo_scan(scan_ids)
+                        except Exception:
+                            pass
+
+                        try:
+                            online_ids = sorted(
+                                sid
+                                for sid, info in getattr(mgr, "servo_info_dict", {}).items()
+                                if getattr(info, "is_online", False)
+                            )
+                        except Exception:
+                            online_ids = []
+
+                        if online_ids:
+                            break
+
+                        time.sleep(0.25 + 0.2 * idx)
+
+                    if online_ids:
+                        RuntimeStatusLogger.log_info(
+                            f"{source}后舵机扫描完成，在线 {len(online_ids)} 个"
+                        )
+                    else:
+                        RuntimeStatusLogger.log_error(
+                            f"{source}后串口已连接，但未扫描到舵机（0/25），请检查舵机供电/接线/ID/波特率"
+                        )
+
+                    try:
+                        Clock.schedule_once(self._safe_refresh_ui, 0)
+                    except Exception:
+                        pass
+                finally:
+                    self._servo_scan_in_progress = False
+
+            threading.Thread(target=_worker, daemon=True).start()
+        except Exception:
+            try:
+                self._servo_scan_in_progress = False
+            except Exception:
+                pass
 
     # ================== 硬件 ==================
     def _setup_gyroscope(self):
