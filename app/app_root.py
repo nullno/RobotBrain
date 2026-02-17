@@ -2,15 +2,7 @@ from kivy.app import App
 from kivy.lang import Builder
 from kivy.clock import Clock
 from kivy.utils import platform
-from widgets.startup_tip import StartupTip
-from widgets.universal_tip import UniversalTip
-import random
 import math
-import os
-import sys
-import subprocess
-import json
-import threading
 import time
 
 from widgets.camera_view import CameraView
@@ -19,12 +11,15 @@ from widgets.gyro_panel import GyroPanel
 from widgets.debug_panel import DebugPanel
 from widgets.servo_status import ServoStatus
 from widgets.runtime_status import RuntimeStatusPanel, RuntimeStatusLogger
-from services.servo_bus import ServoBus
-from services.balance_ctrl import BalanceController
-from services.motion_controller import MotionController
-from services.imu import IMUReader
-from services.neutral import load_neutral
 from services import usb_otg
+from app import usb_runtime
+from app import device_runtime
+from app import bootstrap_runtime
+from app import ai_runtime
+from app import android_ui_runtime
+from app import ui_runtime
+from app import balance_runtime
+from app import platform_runtime
 
 try:
     # 用于枚举串口设备以便自动检测 CH340 等适配器
@@ -34,53 +29,24 @@ except Exception:
 # AICore 暂时禁用，注释掉导入
 # from services.ai_core import AICore
 import logging
-import pathlib
 import traceback
 
-try:
-    # 仅在 Android 平台尝试延迟导入 plyer.gyroscope，避免在 Windows/macOS 上触发
-    # 因为 plyer 在某些平台上会尝试导入不存在的子模块（如 plyer.platforms.win.gyroscope）
-    if platform == "android":
-        try:
-            import importlib
-
-            gyroscope = importlib.import_module("plyer.gyroscope")
-        except ModuleNotFoundError:
-            gyroscope = None
-        except Exception:
-            gyroscope = None
-    else:
-        gyroscope = None
-except Exception:
-    gyroscope = None
-
-
-if platform == 'android':
-    try:
-        from android.runnable import run_on_ui_thread
-    except ImportError:
-        def run_on_ui_thread(f):
-            return f
-else:
-    def run_on_ui_thread(f):
-        return f
+gyroscope = platform_runtime.load_gyroscope_module()
+run_on_ui_thread = platform_runtime.get_run_on_ui_thread()
 
 
 class RobotDashboardApp(App):
-    def _should_log_usb_status(self, key, status, interval_sec=3.0):
-        """同类 USB 状态日志节流：状态变化立即记，重复状态按间隔记。"""
-        try:
-            now = time.time()
-            last_status = getattr(self, f"_last_{key}_status", None)
-            last_time = float(getattr(self, f"_last_{key}_time", 0.0) or 0.0)
-            if status != last_status or (now - last_time) >= float(interval_sec):
-                setattr(self, f"_last_{key}_status", status)
-                setattr(self, f"_last_{key}_time", now)
-                return True
-            return False
-        except Exception:
-            return True
+    # ================== UI / 状态代理 ==================
+    def _update_usb_state(self, **kwargs):
+        ui_runtime.update_usb_state(self, **kwargs)
 
+    def _log_usb_state_summary(self):
+        ui_runtime.log_usb_state_summary(self)
+
+    def _should_log_usb_status(self, key, status, interval_sec=3.0):
+        return ui_runtime.should_log_usb_status(self, key, status, interval_sec=interval_sec)
+
+    # ================== USB 连接状态 ==================
     def _mark_usb_connected_after_permission(self, status_text=None):
         """Android USB 串口成功连接后：清空 pending 状态，并仅提示一次授权完成。"""
         try:
@@ -93,1014 +59,111 @@ class RobotDashboardApp(App):
             self._last_usb_permission_status = None
             self._android_usb_connected_once = True
             self._suppress_android_otg_added_until = time.time() + 8.0
+            self._update_usb_state(
+                detect="device",
+                auth="granted",
+                connect="up",
+                detail=str(status_text or ""),
+            )
         except Exception:
             try:
                 self._last_usb_permission_status = None
             except Exception:
                 pass
 
+    def _ensure_android_usb_reconnect_watcher(self, reason=""):
+        usb_runtime.ensure_android_usb_reconnect_watcher(self, reason=reason)
+
+    # ================== 平衡参数持久化 ==================
     def _balance_tuning_file(self):
-        try:
-            return pathlib.Path(self.user_data_dir) / "balance_tuning.json"
-        except Exception:
-            return pathlib.Path("data") / "balance_tuning.json"
+        return balance_runtime.balance_tuning_file(self)
 
     def save_balance_tuning(self):
-        """持久化当前平衡参数（gain_p/gain_r）与陀螺仪轴映射模式。"""
-        try:
-            bc = getattr(self, "balance_ctrl", None)
-            if not bc:
-                return False
-            fp = self._balance_tuning_file()
-            fp.parent.mkdir(parents=True, exist_ok=True)
-            axis_mode = str(getattr(self, "_gyro_axis_mode", "normal"))
-            if axis_mode not in ("auto", "normal", "swapped"):
-                axis_mode = "normal"
-            data = {
-                "gain_p": float(getattr(bc, "gain_p", 5.5)),
-                "gain_r": float(getattr(bc, "gain_r", 4.2)),
-                "gyro_axis_mode": axis_mode,
-            }
-            with open(fp, "w", encoding="utf8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            return True
-        except Exception:
-            return False
+        return balance_runtime.save_balance_tuning(self)
 
     def load_balance_tuning(self):
-        """加载并应用持久化的平衡参数与陀螺仪轴映射。"""
-        try:
-            bc = getattr(self, "balance_ctrl", None)
-            if not bc:
-                return False
-            fp = self._balance_tuning_file()
-            if not fp.exists():
-                return False
-            with open(fp, "r", encoding="utf8") as f:
-                obj = json.load(f)
+        return balance_runtime.load_balance_tuning(self)
 
-            gp = float(obj.get("gain_p", getattr(bc, "gain_p", 5.5)))
-            gr = float(obj.get("gain_r", getattr(bc, "gain_r", 4.2)))
-            axis_mode = str(obj.get("gyro_axis_mode", getattr(self, "_gyro_axis_mode", "normal")))
-            if axis_mode not in ("auto", "normal", "swapped"):
-                axis_mode = "normal"
-            gp = max(0.0, min(20.0, gp))
-            gr = max(0.0, min(20.0, gr))
-            bc.gain_p = gp
-            bc.gain_r = gr
-            self._gyro_axis_mode = axis_mode
-            self._gyro_axis_mode_logged = axis_mode
-            if axis_mode == "auto":
-                self._gyro_axis_samples = 0
-            try:
-                RuntimeStatusLogger.log_info(
-                    f"已加载平衡参数: gain_p={gp:.2f}, gain_r={gr:.2f}, axis={axis_mode}"
-                )
-            except Exception:
-                pass
-            return True
-        except Exception:
-            return False
+    # ================== Android USB Intent 处理 ==================
+    def _is_duplicate_usb_attach_event(self, signature, interval_sec=4.0):
+        return usb_runtime.is_duplicate_usb_attach_event(self, signature, interval_sec=interval_sec)
 
+    def _handle_android_usb_attach_intent(self, source="resume"):
+        usb_runtime.handle_android_usb_attach_intent(self, source=source)
+
+    # ================== 生命周期 ==================
     def on_start(self):
         if platform == 'android':
             Clock.schedule_once(lambda dt: self.update_android_flags(), 0)
+            Clock.schedule_once(lambda dt: self._handle_android_usb_attach_intent("start"), 0.1)
 
     def on_resume(self):
         if platform == 'android':
             Clock.schedule_once(lambda dt: self.update_android_flags(), 0)
+            Clock.schedule_once(lambda dt: self._handle_android_usb_attach_intent("resume"), 0.1)
 
     @run_on_ui_thread
     def update_android_flags(self):
-        try:
-            from jnius import autoclass
-            PythonActivity = autoclass("org.kivy.android.PythonActivity")
-            activity = PythonActivity.mActivity
-            View = autoclass("android.view.View")
-            window = activity.getWindow()
-            decor_view = window.getDecorView()
+        android_ui_runtime.update_android_flags(self)
 
-            # 组合标志位: 全屏 + 隐藏导航栏 + 沉浸模式 + 内容延伸且稳定
-            flags = (
-                View.SYSTEM_UI_FLAG_LAYOUT_STABLE |
-                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION |
-                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN |
-                View.SYSTEM_UI_FLAG_HIDE_NAVIGATION |
-                View.SYSTEM_UI_FLAG_FULLSCREEN |
-                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-            )
-            decor_view.setSystemUiVisibility(flags)
-
-            # 适配刘海屏/挖孔屏 (Android 9.0+, API 28+)
-            # Build.VERSION 可能无法直接访问，需使用 $VERSION 内部类
-            VERSION = autoclass("android.os.Build$VERSION")
-            if VERSION.SDK_INT >= 28:
-                LayoutParams = autoclass("android.view.WindowManager$LayoutParams")
-                # LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES = 1
-                # 显式获取常量，确保兼容性
-                try:
-                    layout_mode = LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-                except Exception:
-                    layout_mode = 1                
-                
-                params = window.getAttributes()
-                params.layoutInDisplayCutoutMode = layout_mode
-                window.setAttributes(params)
-        except Exception as e:
-            print(f"⚠ Android UI Flags 设置失败: {e}")
-
+    # ================== 构建入口 ==================
     def build(self):
-        # Android权限申请
-        if platform == "android":
-            try:
-                from jnius import autoclass
-                from android.permissions import (
-                    request_permissions,
-                    Permission,
-                    check_permission,
-                )
-
-                # 初始化 UI 状态 (全屏、沉浸式、挖孔屏适配)
-                Clock.schedule_once(lambda dt: self.update_android_flags(), 0)
-
-                # 检查并请求权限
-                required_perms = [
-                    Permission.CAMERA,
-                    Permission.WRITE_EXTERNAL_STORAGE,
-                    Permission.READ_EXTERNAL_STORAGE,
-                ]
-
-                # 检查缺失的权限
-                missing_perms = []
-                for perm in required_perms:
-                    try:
-                        if not check_permission(perm):
-                            missing_perms.append(perm)
-                    except Exception:
-                        missing_perms.append(perm)
-
-                if missing_perms:
-
-                    def _perm_callback(permissions, results):
-                        if all(results):
-                            print("✅ 所有权限申请成功")
-                        else:
-                            missing = [p for p, r in zip(permissions, results) if not r]
-                            print(f"⚠ 未授予权限: {missing}，部分功能可能受限")
-
-                    request_permissions(missing_perms, _perm_callback)
-                else:
-                    print("✅ 所有权限已获得")
-            except Exception as e:
-                print(f"⚠ Android platform init failed: {e}")
-                # Log to RuntimeStatusLogger if available later, but for now just print
-                pass
+        bootstrap_runtime.init_android_permissions(self)
 
         Builder.load_file("kv/style.kv")
         self.root_widget = Builder.load_file("kv/root.kv")
 
-        # ---------- 硬件 ----------
-        # 优先尝试连接硬件，Android 平台特殊处理
-        self.servo_bus = None
-        if platform == "android":
-            try:
-                # 尝试通过 USB Serial 库连接
-                from services.android_serial import (
-                    open_first_usb_serial,
-                    get_last_usb_serial_status,
-                )
-                usb_wrapper = open_first_usb_serial(baud=115200)
-                if usb_wrapper:
-                     self.servo_bus = ServoBus(port=usb_wrapper)
-                     self._mark_usb_connected_after_permission(
-                         get_last_usb_serial_status()
-                     )
-                     RuntimeStatusLogger.log_info("启动时 USB 串口已连接，开始扫描舵机")
-                     self._schedule_servo_scan_after_connect("启动")
-                else:
-                    RuntimeStatusLogger.log_info(
-                        f"启动时 Android USB Serial 未连接: {get_last_usb_serial_status()}"
-                    )
-            except Exception as e:
-                print(f"Android USB Serial init failed: {e}")
-        
-        # PC 或 Android 失败回退连接
-        if not self.servo_bus:
-            try:
-                dev_port = "/dev/ttyUSB0" if platform == "android" else "COM8"
-                self._dev_port = dev_port
-                # 这里如果不成功，ServoBus 内部会自动切换到 mock 模式
-                self.servo_bus = ServoBus(port=dev_port)
-                if self.servo_bus and not getattr(self.servo_bus, "is_mock", True):
-                    RuntimeStatusLogger.log_info(f"启动时串口已连接: {dev_port}，开始扫描舵机")
-                    self._schedule_servo_scan_after_connect("启动")
-            except Exception as e:
-                print(f"❌ 串口初始化失败: {e}")
-                self.servo_bus = None
+        bootstrap_runtime.init_servo_bus(self)
 
-        # 如果未能通过默认端口连接（即处于 mock 状态），尝试自动扫描系统串口
-        try:
-            if not self.servo_bus or getattr(self.servo_bus, "is_mock", True):
-                self._try_auto_connect()
-        except Exception:
-            pass
+        bootstrap_runtime.init_logging(self)
 
-        # 初始化日志
-        try:
-            if platform == "android":
-                log_dir = pathlib.Path(self.user_data_dir) / "logs"
-            else:
-                log_dir = pathlib.Path("logs")
-            log_dir.mkdir(parents=True, exist_ok=True)
-            logging.basicConfig(
-                level=logging.INFO,
-                filename=str(log_dir / "robot_dashboard.log"),
-                filemode="a",
-                format="%(asctime)s %(levelname)s: %(message)s",
-            )
-            logging.info("App starting")
-            # 将 Python logging 同步到 RuntimeStatusLogger，便于在界面查看日志
-            try:
-
-                class _ForwardHandler(logging.Handler):
-                    _local = threading.local()
-
-                    def emit(self, record):
-                        if getattr(self._local, "busy", False):
-                            return
-                        try:
-                            self._local.busy = True
-                            msg = self.format(record)
-                            if RuntimeStatusLogger:
-                                if record.levelno >= logging.ERROR:
-                                    RuntimeStatusLogger.log(msg, "error")
-                                else:
-                                    RuntimeStatusLogger.log(msg, "info")
-                        except Exception:
-                            pass
-                        finally:
-                            try:
-                                self._local.busy = False
-                            except Exception:
-                                pass
-
-                fh = _ForwardHandler()
-                fh.setLevel(logging.INFO)
-                logging.getLogger().addHandler(fh)
-            except Exception:
-                pass
-            # 将 stdout/stderr 重定向到 logging，以便 print() 也能显示在 runtime_status 中
-            try:
-                import sys
-
-                class _StdForward:
-                    def __init__(self, level="info"):
-                        self._level = level
-
-                    def write(self, s):
-                        try:
-                            s = s.strip()
-                            if not s:
-                                return
-                            if self._level == "error":
-                                logging.getLogger().error(s)
-                            else:
-                                logging.getLogger().info(s)
-                        except Exception:
-                            pass
-
-                    def flush(self):
-                        pass
-
-                sys.stdout = _StdForward("info")
-                sys.stderr = _StdForward("error")
-            except Exception:
-                pass
-        except Exception:
-            pass
-
-        # 加载中位配置（若存在）
-        neutral_raw = load_neutral() or {}
-        # normalize keys to ints
-        try:
-            neutral = {int(k): int(v) for k, v in neutral_raw.items()}
-        except Exception:
-            neutral = {i: 2048 for i in range(1, 26)}
-
-        self.balance_ctrl = BalanceController(neutral, is_landscape=True)
-        try:
-            self.load_balance_tuning()
-        except Exception:
-            pass
-        # 尝试初始化陀螺仪（延迟导入并兼容多种 plyer 导入失败场景）
-        try:
-            self._setup_gyroscope()
-        except Exception:
-            # 忽略初始化失败，后续权限通过时会重试
-            pass
+        neutral = bootstrap_runtime.init_balance_and_gyro(self)
 
         # AI 核心暂时禁用（不初始化 AICore）
         self.ai_core = None
         self._ai_speech_buf = ""
         self._ai_speech_clear_ev = None
 
-        # MotionController 集成（若有 ServoBus）
-        try:
-            if self.servo_bus and not getattr(self.servo_bus, "is_mock", True):
-                imu = IMUReader(simulate=False)
-                imu.start()
-                self.motion_controller = MotionController(
-                    self.servo_bus.manager,
-                    balance_ctrl=self.balance_ctrl,
-                    imu_reader=imu,
-                    neutral_positions=neutral,
-                )
-            else:
-                self.motion_controller = None
-        except Exception as e:
-            logging.exception("MotionController init failed")
-            self.motion_controller = None
-
-        # ---------- Demo 动画 ----------
-        self._demo_step = 0
-        Clock.schedule_interval(self._update_loop, 0.1)
-        Clock.schedule_interval(self._demo_emotion_loop, 4.0)
-        Clock.schedule_interval(self._demo_eye_move, 0.05)
-
-        # 用于循环错误节流，避免界面被频繁相同错误刷屏
-        self._last_loop_error = None
-        self._last_loop_error_time = 0
-        self._latest_pitch = 0.0
-        self._latest_roll = 0.0
-        self._latest_yaw = 0.0
-
-        # 初始化运行状态日志记录器
-        try:
-            runtime_status_panel = self.root_widget.ids.runtime_status
-            RuntimeStatusLogger.set_panel(runtime_status_panel)
-            RuntimeStatusLogger.log_info("应用启动成功")
-        except Exception as e:
-            print(f"⚠ 运行状态面板初始化失败: {e}")
-
-        # 启动时展示权限和连接提示（会在未授权时持续提示并监听授权变化）
-        Clock.schedule_once(lambda dt: self._start_permission_watcher(), 0.6)
-
-        # 启动 OTG / 串口监测（跨平台：Android / PC / macOS / Linux）
-        try:
-            usb_otg.start_monitor()
-            RuntimeStatusLogger.log_info("串口/OTG 监测已启动")
-            try:
-                # 注册 OTG 设备事件回调，热插拔时尝试重建 ServoBus 并刷新 UI
-                usb_otg.register_device_callback(self._on_otg_event)
-            except Exception:
-                pass
-        except Exception as e:
-            try:
-                RuntimeStatusLogger.log_error(f"OTG 监测启动失败: {e}")
-            except Exception:
-                print(f"OTG 监测启动失败: {e}")
+        bootstrap_runtime.init_motion_controller(self, neutral)
+        bootstrap_runtime.init_runtime_loops(self)
+        bootstrap_runtime.init_runtime_status_panel(self)
+        bootstrap_runtime.start_permission_and_otg_watchers(self)
 
         return self.root_widget
 
+    # ================== USB / 串口代理 ==================
     def _on_otg_event(self, event, device_id):
-        """处理 OTG 插拔事件：在设备插入时尝试重建 ServoBus 并刷新界面；拔出时清理状态。"""
-        try:
-            # 在后台执行 I/O/初始化以避免阻塞主线程
-            def _handle():
-                try:
-                    if event == "added":
-                        # Android: 启动后短时间内忽略 added 事件，避免系统重复分发导致重连抖动
-                        try:
-                            if platform == "android":
-                                suppress_until = float(
-                                    getattr(self, "_suppress_android_otg_added_until", 0.0)
-                                    or 0.0
-                                )
-                                if time.time() < suppress_until:
-                                    return
-                        except Exception:
-                            pass
-
-                        # Android: 若当前已经连接真实串口，跳过重复 open/requestPermission，避免误报与刷屏
-                        try:
-                            if platform == "android" and getattr(self, "servo_bus", None) and not getattr(self.servo_bus, "is_mock", True):
-                                return
-                        except Exception:
-                            pass
-
-                        # 解析 device_id 中的实际串口端口名（如 COM8 或 /dev/ttyUSB0）
-                        # Android 特殊处理：尝试通过 usb-serial-for-android 打开设备（Pyjnius）
-                        try:
-                            if platform == "android":
-                                try:
-                                    from services.android_serial import (
-                                        open_first_usb_serial,
-                                        get_last_usb_serial_status,
-                                    )
-
-                                    usb_wrapper = open_first_usb_serial(
-                                        baud=115200,
-                                        prefer_device_id=device_id,
-                                    )
-                                except Exception:
-                                    usb_wrapper = None
-                                if usb_wrapper:
-                                    sb = ServoBus(port=usb_wrapper)
-                                    if sb and not getattr(sb, "is_mock", True):
-                                        try:
-                                            self._mark_usb_connected_after_permission(
-                                                get_last_usb_serial_status()
-                                            )
-                                        except Exception:
-                                            pass
-                                        # 成功连接，替换旧实例并刷新 UI
-                                        try:
-                                            if getattr(
-                                                self, "servo_bus", None
-                                            ) and hasattr(self.servo_bus, "close"):
-                                                try:
-                                                    self.servo_bus.close()
-                                                except Exception:
-                                                    pass
-                                        except Exception:
-                                            pass
-                                        self.servo_bus = sb
-                                        try:
-                                            self._schedule_servo_scan_after_connect("OTG")
-                                        except Exception:
-                                            pass
-                                        try:
-                                            Clock.schedule_once(
-                                                self._safe_refresh_ui, 0
-                                            )
-                                        except Exception:
-                                            pass
-                                        return
-                                else:
-                                    try:
-                                        status = str(get_last_usb_serial_status())
-                                        if status.startswith("wait:"):
-                                            # 等待系统授权时做状态+时间节流，避免刷屏
-                                            if self._should_log_usb_status("usb_permission", status, 3.0):
-                                                RuntimeStatusLogger.log_info(
-                                                    "OTG 已检测到设备，正在等待 USB 授权: " + status
-                                                )
-                                                self._last_usb_permission_status = status
-                                        else:
-                                            self._last_usb_permission_status = None
-                                            if self._should_log_usb_status("usb_unconnected", status, 3.0):
-                                                RuntimeStatusLogger.log_info(
-                                                    "OTG added 事件触发，但 Android USB Serial 未连接: " + status
-                                                )
-                                    except Exception:
-                                        pass
-                        except Exception:
-                            pass
-
-                    def _parse_port(dev_id):
-                        try:
-                            if not dev_id:
-                                return None
-                            if "::" in dev_id:
-                                return dev_id.split("::", 1)[0]
-                            import re
-
-                            m = re.search(r"(COM\d+)", dev_id, re.I)
-                            if m:
-                                return m.group(1)
-                            m = re.search(r"(/dev/tty[^,;\s]+)", dev_id)
-                            if m:
-                                return m.group(1)
-                            return dev_id
-                        except Exception:
-                            return None
-
-                    # 首先尝试解析 device_id 提供的端口
-                    port = (
-                        _parse_port(device_id)
-                        or getattr(self, "_dev_port", None)
-                        or ("/dev/ttyUSB0" if platform == "android" else "COM8")
-                    )
-                    # 若当前为 mock，则尝试使用可用端口列表连接（优先使用解析到的 port）
-                    if not getattr(self, "servo_bus", None) or getattr(
-                        self.servo_bus, "is_mock", True
-                    ):
-                        try:
-                            # 保存首选端口
-                            self._dev_port = port
-                            # 优先尝试解析到的端口，然后回退到系统枚举的端口
-                            tried = [port]
-                            connected = False
-                            # 先尝试首选端口
-                            try_ports = list(tried)
-                            # 如果可用，使用 pyserial 列出更多候选端口（包含描述信息），优先匹配 CH340/USB-SERIAL
-                            if _list_ports:
-                                try:
-                                    for p in _list_ports.comports():
-                                        dev = p.device
-                                        desc = p.description or ""
-                                        if dev not in try_ports:
-                                            # 优先选取包含 CH340/USB-SERIAL 的设备
-                                            if (
-                                                "ch340" in desc.lower()
-                                                or "usb-serial" in desc.lower()
-                                                or "usb serial" in desc.lower()
-                                            ):
-                                                try_ports.insert(0, dev)
-                                            else:
-                                                try_ports.append(dev)
-                                except Exception:
-                                    pass
-
-                            # 等待系统稳固枚举设备再尝试（短延迟），并重试一次以提高热插拔稳定性
-                            import time as _time
-
-                            _time.sleep(0.2)
-                            # 额外重试一次枚举以捕获延迟出现的 COM 端口
-                            if _list_ports:
-                                try:
-                                    for p in _list_ports.comports():
-                                        dev = p.device
-                                        if dev not in try_ports:
-                                            try_ports.append(dev)
-                                except Exception:
-                                    pass
-
-                            for cand in try_ports:
-                                try:
-                                    sb = ServoBus(port=cand)
-                                    if sb and not getattr(sb, "is_mock", True):
-                                        # 关闭旧实例
-                                        try:
-                                            if getattr(
-                                                self, "servo_bus", None
-                                            ) and hasattr(self.servo_bus, "close"):
-                                                try:
-                                                    self.servo_bus.close()
-                                                except Exception:
-                                                    pass
-                                        except Exception:
-                                            pass
-                                        self.servo_bus = sb
-                                        try:
-                                            self._schedule_servo_scan_after_connect("OTG")
-                                        except Exception:
-                                            pass
-                                        connected = True
-                                        try:
-                                            imu = IMUReader(simulate=False)
-                                            imu.start()
-                                            self.motion_controller = MotionController(
-                                                self.servo_bus.manager,
-                                                balance_ctrl=self.balance_ctrl,
-                                                imu_reader=imu,
-                                                neutral_positions={},
-                                            )
-                                        except Exception:
-                                            self.motion_controller = None
-                                        try:
-                                            RuntimeStatusLogger.log_info(
-                                                f"检测到 OTG 设备，已连接串口: {cand}"
-                                            )
-                                        except Exception:
-                                            pass
-                                        break
-                                except Exception:
-                                    pass
-
-                            # 如果连接成功则刷新 UI；若未成功且为 Android，则提示用户在手机端用我们的应用连接
-                            if connected:
-                                try:
-                                    Clock.schedule_once(self._safe_refresh_ui, 0)
-                                except Exception:
-                                    pass
-                            else:
-                                try:
-                                    if platform == "android":
-
-                                        def _show_connect_tip(dt):
-                                            try:
-                                                UniversalTip(
-                                                    title="请在手机上启用串口连接",
-                                                    message="检测到手机连接但未找到 USB 串口。\n请在手机上打开本应用并启用 USB/OTG 串口模式进行连接。",
-                                                    ok_text="我知道了",
-                                                    icon="🔌",
-                                                ).open()
-                                            except Exception:
-                                                pass
-
-                                        Clock.schedule_once(_show_connect_tip, 0)
-                                except Exception:
-                                    pass
-                        except Exception:
-                            pass
-                    elif event == "removed":
-                        # 简单清理：优雅关闭 servo_bus 与 motion_controller，并刷新 UI
-                        try:
-                            if getattr(self, "servo_bus", None) and hasattr(
-                                self.servo_bus, "close"
-                            ):
-                                try:
-                                    self.servo_bus.close()
-                                except Exception:
-                                    pass
-                        except Exception:
-                            pass
-                        try:
-                            self.servo_bus = None
-                        except Exception:
-                            pass
-                        try:
-                            self.motion_controller = None
-                        except Exception:
-                            pass
-                        try:
-                            RuntimeStatusLogger.log_info(f"串口设备已拔出: {device_id}")
-                        except Exception:
-                            pass
-                        try:
-                            Clock.schedule_once(self._safe_refresh_ui, 0)
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-
-            threading.Thread(target=_handle, daemon=True).start()
-        except Exception:
-            pass
+        usb_runtime.handle_otg_event(self, event, device_id, list_ports_module=_list_ports)
 
     def _try_auto_connect(self, candidate_ports=None):
-        """尝试通过候选端口列表自动连接 ServoBus。
-        若 candidate_ports 为空，则枚举系统串口并优先匹配 CH340/USB-SERIAL 描述。
-        Android 平台会尝试使用 usb-serial-for-android 库连接。
-        """
-        try:
-            # Android 专属自动连接逻辑
-            if platform == "android" and not candidate_ports:
-                try:
-                    from services.android_serial import (
-                        open_first_usb_serial,
-                        get_last_usb_serial_status,
-                    )
-                    # 尝试连接
-                    usb_wrapper = open_first_usb_serial(baud=115200)
-                    if usb_wrapper:
-                        # 如果已有连接，先关闭
-                        if getattr(self, "servo_bus", None) and hasattr(self.servo_bus, "close"):
-                            try:
-                                self.servo_bus.close()
-                            except Exception:
-                                pass
-                        
-                        sb = ServoBus(port=usb_wrapper)
-                        if sb and not getattr(sb, "is_mock", True):
-                            self.servo_bus = sb
-                            self._mark_usb_connected_after_permission(
-                                get_last_usb_serial_status()
-                            )
-                            self._init_motion_controller_after_connect()
-                            RuntimeStatusLogger.log_info(f"自动连接 Android USB 串口成功")
-                            Clock.schedule_once(self._safe_refresh_ui, 0)
-                            return True
-                    else:
-                        try:
-                            RuntimeStatusLogger.log_info(
-                                "自动连接 Android USB 串口未成功: "
-                                + str(get_last_usb_serial_status())
-                            )
-                        except Exception:
-                            pass
-                except Exception as e:
-                    print(f"Android auto-connect failed: {e}")
-            
-            # PC / 通用逻辑
-            candidates = []
-            if candidate_ports:
-                candidates = list(candidate_ports)
-            else:
-                # 枚举系统串口
-                if _list_ports:
-                    try:
-                        for p in _list_ports.comports():
-                            dev = p.device
-                            desc = p.description or ""
-                            # 优先把带 CH340/USB-SERIAL 的放前面
-                            if (
-                                "ch340" in desc.lower()
-                                or "usb-serial" in desc.lower()
-                                or "usb serial" in desc.lower()
-                            ):
-                                candidates.insert(0, dev)
-                            else:
-                                candidates.append(dev)
-                    except Exception:
-                        pass
-                # 最后加入默认端口作为兜底
-                default = getattr(self, "_dev_port", None) or (
-                    "/dev/ttyUSB0" if platform == "android" else "COM8"
-                )
-                if default and default not in candidates:
-                    candidates.append(default)
-
-            for cand in candidates:
-                try:
-                    sb = ServoBus(port=cand)
-                    if sb and not getattr(sb, "is_mock", True):
-                        try:
-                            if getattr(self, "servo_bus", None) and hasattr(
-                                self.servo_bus, "close"
-                            ):
-                                try:
-                                    self.servo_bus.close()
-                                except Exception:
-                                    pass
-                        except Exception:
-                            pass
-                        self._dev_port = cand
-                        self.servo_bus = sb
-                        self._init_motion_controller_after_connect()
-                        try:
-                            RuntimeStatusLogger.log_info(f"自动连接串口成功: {cand}")
-                        except Exception:
-                            pass
-                        try:
-                            Clock.schedule_once(self._safe_refresh_ui, 0)
-                        except Exception:
-                            pass
-                        return True
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        return False
+        return usb_runtime.try_auto_connect(
+            self,
+            candidate_ports=candidate_ports,
+            list_ports_module=_list_ports,
+        )
 
     def _init_motion_controller_after_connect(self):
-        """连接成功后初始化 MotionController"""
-        try:
-            imu = IMUReader(simulate=False)
-            imu.start()
-            self.motion_controller = MotionController(
-                self.servo_bus.manager,
-                balance_ctrl=self.balance_ctrl,
-                imu_reader=imu,
-                neutral_positions={},
-            )
-        except Exception:
-            self.motion_controller = None
+        usb_runtime.init_motion_controller_after_connect(self)
 
     def _schedule_servo_scan_after_connect(self, source="连接"):
-        """连接成功后在后台重扫舵机，避免设备刚枚举完成时首轮扫描漏检。"""
-        try:
-            if getattr(self, "_servo_scan_in_progress", False):
-                return
-            self._servo_scan_in_progress = True
-
-            def _worker():
-                try:
-                    sb = getattr(self, "servo_bus", None)
-                    if not sb or getattr(sb, "is_mock", True):
-                        return
-
-                    mgr = getattr(sb, "manager", None)
-                    if not mgr:
-                        return
-
-                    scan_ids = list(range(1, 26))
-                    online_ids = []
-                    for idx in range(3):
-                        try:
-                            mgr.servo_scan(scan_ids)
-                        except Exception:
-                            pass
-
-                        try:
-                            online_ids = sorted(
-                                sid
-                                for sid, info in getattr(mgr, "servo_info_dict", {}).items()
-                                if getattr(info, "is_online", False)
-                            )
-                        except Exception:
-                            online_ids = []
-
-                        if online_ids:
-                            break
-
-                        time.sleep(0.25 + 0.2 * idx)
-
-                    if online_ids:
-                        RuntimeStatusLogger.log_info(
-                            f"{source}后舵机扫描完成，在线 {len(online_ids)} 个"
-                        )
-                    else:
-                        RuntimeStatusLogger.log_error(
-                            f"{source}后串口已连接，但未扫描到舵机（0/25），请检查舵机供电/接线/ID/波特率"
-                        )
-
-                    try:
-                        Clock.schedule_once(self._safe_refresh_ui, 0)
-                    except Exception:
-                        pass
-                finally:
-                    self._servo_scan_in_progress = False
-
-            threading.Thread(target=_worker, daemon=True).start()
-        except Exception:
-            try:
-                self._servo_scan_in_progress = False
-            except Exception:
-                pass
+        usb_runtime.schedule_servo_scan_after_connect(self, source=source)
 
     # ================== 硬件 ==================
     def _setup_gyroscope(self):
-        # 延迟导入 plyer.gyroscope，兼容 importlib 与直接 from-import 两种情形
         global gyroscope
-        if platform == "android":
-            try:
-                # 优先使用直接导入
-                try:
-                    from plyer import gyroscope as _gyro
-                except Exception:
-                    try:
-                        import importlib
-
-                        _gyro = importlib.import_module("plyer.gyroscope")
-                    except Exception:
-                        _gyro = None
-
-                if not _gyro:
-                    try:
-                        RuntimeStatusLogger.log_error(
-                            "未检测到 plyer.gyroscope；无法启用陀螺仪"
-                        )
-                    except Exception:
-                        pass
-                    return
-
-                # 将成功导入的模块保存在全局变量，供 _get_gyro_data 使用
-                try:
-                    gyroscope = _gyro
-
-                except Exception:
-                    pass
-
-                try:
-                    _gyro.enable()
-                    try:
-                        RuntimeStatusLogger.log_info("Android 陀螺仪已激活")
-                    except Exception:
-                        pass
-                except Exception as e:
-                    try:
-                        RuntimeStatusLogger.log_error(f"无法激活陀螺仪: {e}")
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+        gyroscope = device_runtime.setup_gyroscope(self)
 
     def _check_android_permissions(self):
-        """返回缺失的权限列表（Android）"""
-        if platform != "android":
-            return []
-        try:
-            from android.permissions import check_permission, Permission
-
-            required_perms = [
-                Permission.CAMERA,
-                Permission.WRITE_EXTERNAL_STORAGE,
-                Permission.READ_EXTERNAL_STORAGE,
-            ]
-            missing = []
-            for p in required_perms:
-                try:
-                    if not check_permission(p):
-                        missing.append(p)
-                except Exception:
-                    missing.append(p)
-            return missing
-        except Exception:
-            return []
+        return device_runtime.check_android_permissions()
 
     def _start_permission_watcher(self):
-        """在启动时（以及授权未完成时）持续提醒用户并在授权完成后触发重试初始化。"""
-        missing = self._check_android_permissions()
-        # 如果有权限缺失，展示 StartupTip 并每秒重试检查
-        if missing:
-            RuntimeStatusLogger.log_info("检测到缺失权限，等待用户授权")
-            # 打开提示（如果用户延迟授权，可多次打开）
-            try:
-                self._startup_tip = StartupTip()
-                self._startup_tip.open()
-            except Exception:
-                pass
-
-            def _watch(dt):
-                missing_now = self._check_android_permissions()
-                if not missing_now:
-                    # 权限已授予，关闭提示并重新初始化必要组件
-                    # try:
-                    #     if hasattr(self, '_startup_tip') and self._startup_tip._popup:
-                    #         self._startup_tip._popup.dismiss()
-                    # except Exception:
-                    #     pass
-                    RuntimeStatusLogger.log_info(
-                        "权限已授予，正在重新初始化授权依赖模块"
-                    )
-                    # 触发 CameraView 重试（如果存在）
-                    try:
-                        cam = self.root_widget.ids.get("camera_view")
-                        if cam and hasattr(cam, "_start_android"):
-                            cam._start_android()
-                    except Exception:
-                        pass
-                    # 权限通过后，重试初始化陀螺仪
-                    try:
-                        self._setup_gyroscope()
-                    except Exception:
-                        pass
-                    return False
-                return True
-
-            Clock.schedule_interval(_watch, 1.0)
-        else:
-            # 没有缺失权限，仍记录日志
-            RuntimeStatusLogger.log_info("权限检查通过")
+        device_runtime.start_permission_watcher(self)
 
     def _safe_refresh_ui(self, dt=0):
-        """在主线程安全刷新调试面板与运行面板的辅助方法。"""
-        try:
-            try:
-                dp = None
-                if hasattr(self, "root_widget") and getattr(
-                    self.root_widget, "ids", None
-                ):
-                    dp = self.root_widget.ids.get("debug_panel")
-                if dp and hasattr(dp, "refresh_servo_status"):
-                    dp.refresh_servo_status()
-            except Exception:
-                pass
-            try:
-                rs = None
-                if hasattr(self, "root_widget") and getattr(
-                    self.root_widget, "ids", None
-                ):
-                    rs = self.root_widget.ids.get("runtime_status")
-                if rs and hasattr(rs, "refresh"):
-                    rs.refresh()
-            except Exception:
-                pass
-        except Exception:
-            pass
+        ui_runtime.safe_refresh_ui(self, dt=dt)
 
     def _get_gyro_data(self):
-        p, r, y = 0, 0, 0
-        if platform == "android" and gyroscope:
-            try:
-                val = gyroscope.rotation
-                if val[0] is not None:
-                    # 原始数据通常基于竖屏坐标系：0=Pitch(X), 1=Roll(Y), 2=Yaw(Z)
-                    dx, dy, dz = val[0], val[1], val[2]
-
-                    # 针对不同设备/ROM 的横屏轴差异，自动判定一次映射并锁定
-                    # normal: p=dy, r=-dx
-                    # swapped: p=-dx, r=dy
-                    mode = getattr(self, "_gyro_axis_mode", "normal")
-                    if mode == "auto":
-                        try:
-                            ax, ay = abs(dx), abs(dy)
-                            if max(ax, ay) > 0.8:
-                                if ay > ax * 1.8:
-                                    self._gyro_axis_mode = "swapped"
-                                elif ax > ay * 1.8:
-                                    self._gyro_axis_mode = "normal"
-                            # 超过一定采样仍未判定，使用默认 normal
-                            self._gyro_axis_samples = getattr(self, "_gyro_axis_samples", 0) + 1
-                            if getattr(self, "_gyro_axis_mode", "auto") == "auto" and self._gyro_axis_samples > 120:
-                                self._gyro_axis_mode = "normal"
-                            mode = getattr(self, "_gyro_axis_mode", "normal")
-                            if mode != "auto":
-                                try:
-                                    if getattr(self, "_gyro_axis_mode_logged", None) != mode:
-                                        RuntimeStatusLogger.log_info(f"陀螺仪轴映射已设置: {mode}")
-                                        self._gyro_axis_mode_logged = mode
-                                except Exception:
-                                    pass
-                        except Exception:
-                            mode = "normal"
-
-                    if mode == "swapped":
-                        p = -dx
-                        r = dy
-                    else:
-                        p = dy
-                        r = -dx
-                    y = dz
-            except:
-                pass
-        else:
-            p = random.uniform(-5, 5)
-            r = random.uniform(-5, 5)
-            y = random.uniform(0, 360)
-        return p, r, y
+        return device_runtime.get_gyro_data(self, gyroscope)
 
     # ================== 主循环 ==================
     def _update_loop(self, dt):
@@ -1176,112 +239,32 @@ class RobotDashboardApp(App):
 
     # ============== AI 事件处理 ==============
     def _on_ai_action(self, instance, action, emotion):
-        # 更新表情并处理动作指令（动作交给上层或硬件）
-        if "face" in self.root_widget.ids:
-            try:
-                self.root_widget.ids.face.set_emotion(emotion)
-            except Exception:
-                pass
-        # 简单打印或延后处理动作
-        print(f"AI action received: {action}, emotion: {emotion}")
+        ai_runtime.on_ai_action(self, instance, action, emotion)
 
     def _on_ai_speech(self, instance, text):
-        # 接收逐块/逐字的 speech 输出，传递给 RobotFace 做显示
-        face = self.root_widget.ids.get("face")
-        if face:
-            try:
-                face.show_speaking_text(text)
-            except Exception:
-                pass
-        # 聚合分片，短时间无新分片则触发 TTS 播放完整句子
-        try:
-            self._ai_speech_buf += str(text)
-            if self._ai_speech_clear_ev:
-                self._ai_speech_clear_ev.cancel()
-            self._ai_speech_clear_ev = Clock.schedule_once(self._ai_speak_final, 0.6)
-        except Exception:
-            pass
+        ai_runtime.on_ai_speech(self, instance, text)
 
     def _ai_speak_final(self, dt):
-        txt = self._ai_speech_buf.strip()
-        self._ai_speech_buf = ""
-        self._ai_speech_clear_ev = None
-        if not txt:
-            return
-        # 尝试使用 plyer tts（优先，支持 Android/iOS），失败则回退到桌面 TTS（pyttsx3）
+        ai_runtime.ai_speak_final(self, dt)
+
+    # ================== 退出清理 ==================
+    def on_stop(self):
+        """应用退出时清理 OTG 回调与 USB 重试任务，避免重复注册与残留任务。"""
         try:
-            from plyer import tts
-
-            try:
-                tts.speak(txt)
-                return
-            except Exception as e:
-                print(f"TTS (plyer) play failed: {e}")
-        except Exception as e:
-            print(f"plyer.tts not available: {e}")
-
-        # 回退到 pyttsx3（桌面环境），若不可用则打印文本
+            usb_otg.unregister_device_callback(self._on_otg_event)
+        except Exception:
+            pass
         try:
-            # 确保 comtypes 有一个可写的缓存目录，避免权限错误
-            try:
-                cache_dir = os.environ.get("COMTYPES_CACHE_DIR") or os.path.join(
-                    os.path.expanduser("~"), ".comtypes_cache"
-                )
-                os.makedirs(cache_dir, exist_ok=True)
-                os.environ["COMTYPES_CACHE_DIR"] = cache_dir
-            except Exception as _e:
-                print(f"Warning: cannot create comtypes cache dir: {_e}")
-
-            import pyttsx3
-
-            try:
-                engine = pyttsx3.init()
-                # 调整语速与音量为适中
-                try:
-                    engine.setProperty("rate", 150)
-                except Exception:
-                    pass
-                engine.say(txt)
-                engine.runAndWait()
-                return
-            except Exception as e:
-                print(f"TTS (pyttsx3) play failed: {e}")
-                # Windows 特殊回退到 SAPI（win32com）尝试
-                try:
-                    import platform as _plat
-
-                    if _plat.system().lower().startswith("win"):
-                        try:
-                            import win32com.client
-
-                            sapi = win32com.client.Dispatch("SAPI.SpVoice")
-                            sapi.Speak(txt)
-                            return
-                        except Exception as e2:
-                            print(f"TTS (win32com SAPI) play failed: {e2}")
-                            # PowerShell SAPI 直接调用回退（避开 comtypes 生成），可在多数 Windows 上工作
-                            try:
-                                if sys.platform.startswith("win"):
-                                    ps_cmd = f"Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak({json.dumps(txt)})"
-                                    subprocess.run(
-                                        [
-                                            "powershell",
-                                            "-NoProfile",
-                                            "-Command",
-                                            ps_cmd,
-                                        ],
-                                        check=True,
-                                    )
-                                    return
-                            except Exception as e3:
-                                print(f"TTS (PowerShell) play failed: {e3}")
-                except Exception:
-                    pass
-        except Exception as e:
-            print(f"pyttsx3 not available: {e}")
-
-        # 最后的回退：在控制台输出文本
-        print(f"AI says: {txt}")
+            usb_otg.stop_monitor()
+        except Exception:
+            pass
+        try:
+            ev = getattr(self, "_android_usb_reconnect_ev", None)
+            if ev:
+                ev.cancel()
+            self._android_usb_reconnect_ev = None
+        except Exception:
+            pass
 
     # ================== 外部接口 ==================
     def set_emotion(self, emo):

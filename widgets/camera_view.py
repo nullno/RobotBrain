@@ -3,12 +3,13 @@ from kivy.clock import Clock
 from kivy.graphics.texture import Texture
 from kivy.utils import platform
 from kivy.app import App
+from kivy.graphics import PushMatrix, PopMatrix, Rotate, Scale
 from widgets.runtime_status import RuntimeStatusLogger
 import os
 
 
 class CameraView(Image):
-    DEFAULT_ANDROID_FIX_MODE = "vflip"
+    DEFAULT_ANDROID_FIX_MODE = "rotate180"
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -26,9 +27,20 @@ class CameraView(Image):
         self._android_texture_ready_logged = False
         self._android_front_indices = set()
         self._android_camera_started = False
+        self._display_rotate = None
+        self._display_scale = None
 
         try:
             self._load_saved_android_fix_mode()
+        except Exception:
+            pass
+
+        try:
+            self._setup_display_transform()
+            self.bind(pos=lambda *_: self._update_display_transform_origin())
+            self.bind(size=lambda *_: self._update_display_transform_origin())
+            self._update_display_transform_origin()
+            self._apply_android_display_transform()
         except Exception:
             pass
         
@@ -99,6 +111,77 @@ class CameraView(Image):
             return is_front, mode
         except Exception:
             return False, "unknown"
+
+    def _setup_display_transform(self):
+        """显示层变换兜底：解决部分 Android 设备 uv 变换不生效问题。"""
+        try:
+            if self._display_rotate is not None and self._display_scale is not None:
+                return
+            with self.canvas.before:
+                PushMatrix()
+                self._display_rotate = Rotate(angle=0, origin=self.center)
+                self._display_scale = Scale(x=1.0, y=1.0, z=1.0, origin=self.center)
+            with self.canvas.after:
+                PopMatrix()
+        except Exception:
+            pass
+
+    def _update_display_transform_origin(self):
+        try:
+            c = self.center
+            if self._display_rotate is not None:
+                self._display_rotate.origin = c
+            if self._display_scale is not None:
+                self._display_scale.origin = c
+        except Exception:
+            pass
+
+    def _apply_android_display_transform(self):
+        """根据当前模式应用显示层旋转/翻转，作为纹理 uv 的兜底。"""
+        try:
+            if platform != "android":
+                return
+            self._setup_display_transform()
+            mode = str(
+                os.environ.get("RB_ANDROID_FRONT_FIX", self.DEFAULT_ANDROID_FIX_MODE)
+            ).strip().lower()
+
+            angle = 0.0
+            sx = 1.0
+            sy = 1.0
+            if mode in ("rotate180", "180", "default"):
+                angle = 180.0
+            elif mode in ("vflip", "vertical"):
+                sy = -1.0
+            elif mode in ("hflip", "horizontal"):
+                sx = -1.0
+            elif mode in ("none", "off"):
+                pass
+
+            if self._display_rotate is not None:
+                self._display_rotate.angle = angle
+            if self._display_scale is not None:
+                self._display_scale.x = sx
+                self._display_scale.y = sy
+            self._update_display_transform_origin()
+        except Exception:
+            pass
+
+    def _apply_fix_mode_to_desktop_frame(self, frame):
+        """将与 Android 一致的翻转模式应用到桌面 OpenCV 帧。"""
+        try:
+            mode = str(
+                os.environ.get("RB_ANDROID_FRONT_FIX", self.DEFAULT_ANDROID_FIX_MODE)
+            ).strip().lower()
+            if mode in ("rotate180", "180", "default"):
+                return self.cv2.rotate(frame, self.cv2.ROTATE_180)
+            if mode in ("vflip", "vertical"):
+                return self.cv2.flip(frame, 0)
+            if mode in ("hflip", "horizontal"):
+                return self.cv2.flip(frame, 1)
+            return frame
+        except Exception:
+            return frame
 
     def _get_android_fix_mode_file(self):
         try:
@@ -190,6 +273,11 @@ class CameraView(Image):
         except Exception:
             pass
 
+        try:
+            frame = self._apply_fix_mode_to_desktop_frame(frame)
+        except Exception:
+            pass
+
         # OpenCV -> Kivy Texture
         frame = self.cv2.cvtColor(frame, self.cv2.COLOR_BGR2RGB)
         h, w, _ = frame.shape
@@ -227,6 +315,7 @@ class CameraView(Image):
                                     tex = val.get_region(0, 0, val.width, val.height)
                                     is_front, mode = self._apply_android_texture_transform(tex, camera_idx)
                                     self.texture = tex
+                                    self._apply_android_display_transform()
                                     if not self._android_texture_ready_logged:
                                         RuntimeStatusLogger.log_info(
                                             f'Android 摄像头 texture 就绪 (index={camera_idx}, front={is_front}, mode={mode})'
@@ -294,11 +383,12 @@ class CameraView(Image):
             start_camera()
 
     def set_android_front_fix_mode(self, mode):
-        """设置 Android 前置摄像头方向修正模式。"""
+        """设置摄像头方向修正模式（Android/桌面统一）。"""
         try:
             m = self._normalize_fix_mode(mode)
             os.environ["RB_ANDROID_FRONT_FIX"] = m
             self._save_android_fix_mode(m)
+            self._apply_android_display_transform()
             try:
                 RuntimeStatusLogger.log_info(f"视觉设置: 前置修正模式 -> {m}")
             except Exception:

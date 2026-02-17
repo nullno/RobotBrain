@@ -49,7 +49,10 @@ android.accept_sdk_license = True
 
 android.permissions = INTERNET,ACCESS_NETWORK_STATE,CAMERA,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE
 android.res_xml = android/xml/device_filter.xml
+# USB 插入可唤醒应用
 android.manifest.intent_filters = android/usb/intent_filter.xml
+# 避免应用已在运行时因 USB 事件重复创建 Activity 实例
+android.manifest.launch_mode = singleTask
 
 # USB Serial 依赖（使用 p4a 的 add_gradle_repositories 注入 JitPack）
 android.add_gradle_repositories = maven { url 'https://jitpack.io' }

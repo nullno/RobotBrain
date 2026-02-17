@@ -8,7 +8,7 @@ from widgets.runtime_status import RuntimeStatusLogger
 
 
 class VisionSettingsPanel(BoxLayout):
-    """视觉设置面板：用于调整 Android 前置摄像头方向修正模式。"""
+    """视觉设置面板：用于调整摄像头方向修正模式（Android/桌面）。"""
 
     def __init__(self, show_message=None, **kwargs):
         kwargs.setdefault("orientation", "vertical")
@@ -29,7 +29,7 @@ class VisionSettingsPanel(BoxLayout):
         self.add_widget(self._status)
 
         hint = Label(
-            text="前置方向修正（Android）：若画面颠倒可切换模式",
+            text="摄像头方向修正（跨平台）：若画面颠倒可切换模式",
             size_hint_y=None,
             height=dp(24),
             color=(0.7, 0.8, 0.9, 1),
@@ -40,10 +40,10 @@ class VisionSettingsPanel(BoxLayout):
         self.add_widget(hint)
 
         row = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(8))
-        self._btn_rotate180 = Button(text="Rotate180")
-        self._btn_vflip = Button(text="VFlip")
-        self._btn_hflip = Button(text="HFlip")
-        self._btn_none = Button(text="None")
+        self._btn_rotate180 = Button(text="旋转180°")
+        self._btn_vflip = Button(text="上下翻转")
+        self._btn_hflip = Button(text="左右翻转")
+        self._btn_none = Button(text="不修正")
         row.add_widget(self._btn_rotate180)
         row.add_widget(self._btn_vflip)
         row.add_widget(self._btn_hflip)
@@ -52,7 +52,7 @@ class VisionSettingsPanel(BoxLayout):
 
         row2 = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(8))
         self._btn_refresh = Button(text="读取当前")
-        self._btn_restart = Button(text="重启相机")
+        self._btn_restart = Button(text="重启摄像头")
         row2.add_widget(self._btn_refresh)
         row2.add_widget(self._btn_restart)
         self.add_widget(row2)
@@ -120,11 +120,11 @@ class VisionSettingsPanel(BoxLayout):
             self._status.text = "视觉设置: 未检测到 CameraView"
             return
         try:
-            mode = "vflip"
+            mode = "rotate180"
             try:
                 import os
 
-                mode = str(os.environ.get("RB_ANDROID_FRONT_FIX", "vflip"))
+                mode = str(os.environ.get("RB_ANDROID_FRONT_FIX", "rotate180"))
             except Exception:
                 pass
             idx = getattr(cam, "_camera_index", None)

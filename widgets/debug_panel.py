@@ -1564,7 +1564,7 @@ class DebugPanel(Widget):
             btn_row.add_widget(cancel)
             content.add_widget(btn_row)
             popup = Popup(
-                title="设置舵机ID",
+                title="SET ID",
                 content=content,
                 size_hint=(None, None),
                 size=(320, 160),
