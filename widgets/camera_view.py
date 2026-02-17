@@ -167,6 +167,19 @@ class CameraView(Image):
         except Exception:
             pass
 
+    def _apply_mode_to_current_android_texture(self):
+        """将当前模式立即应用到当前纹理，避免依赖 texture 事件回调。"""
+        try:
+            if platform != "android":
+                return
+            tex = getattr(self, "texture", None)
+            if not tex:
+                return
+            idx = int(getattr(self, "_camera_index", -1) or -1)
+            self._apply_android_texture_transform(tex, idx)
+        except Exception:
+            pass
+
     def _apply_fix_mode_to_desktop_frame(self, frame):
         """将与 Android 一致的翻转模式应用到桌面 OpenCV 帧。"""
         try:
@@ -388,6 +401,7 @@ class CameraView(Image):
             m = self._normalize_fix_mode(mode)
             os.environ["RB_ANDROID_FRONT_FIX"] = m
             self._save_android_fix_mode(m)
+            self._apply_mode_to_current_android_texture()
             self._apply_android_display_transform()
             try:
                 RuntimeStatusLogger.log_info(f"视觉设置: 前置修正模式 -> {m}")

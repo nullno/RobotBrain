@@ -235,6 +235,55 @@ class MotionController:
         # 立即回中以保证安全
         self.goto_neutral(time_ms=300)
 
+    def nod(self, times=1, amplitude=160, time_ms=180):
+        sid = self.JOINT.get('neck_pitch')
+        if not sid:
+            return False
+        base = int(self.neutral.get(sid, 2048))
+        for _ in range(max(1, int(times))):
+            self._send_targets({sid: base + int(amplitude)}, runtime_ms=time_ms)
+            time.sleep(max(0.05, time_ms / 1000.0))
+            self._send_targets({sid: base - int(amplitude // 2)}, runtime_ms=time_ms)
+            time.sleep(max(0.05, time_ms / 1000.0))
+        self._send_targets({sid: base}, runtime_ms=time_ms)
+        return True
+
+    def shake_head(self, times=1, amplitude=180, time_ms=180):
+        sid = self.JOINT.get('neck_yaw')
+        if not sid:
+            return False
+        base = int(self.neutral.get(sid, 2048))
+        for _ in range(max(1, int(times))):
+            self._send_targets({sid: base + int(amplitude)}, runtime_ms=time_ms)
+            time.sleep(max(0.05, time_ms / 1000.0))
+            self._send_targets({sid: base - int(amplitude)}, runtime_ms=time_ms)
+            time.sleep(max(0.05, time_ms / 1000.0))
+        self._send_targets({sid: base}, runtime_ms=time_ms)
+        return True
+
+    def run_action(self, action):
+        action = str(action or '').strip().lower()
+        if action in ('', 'none'):
+            return True
+        if action == 'walk':
+            return self.walk(steps=2)
+        if action == 'stop':
+            self.stop()
+            return True
+        if action == 'nod':
+            return self.nod(times=1)
+        if action == 'shake_head':
+            return self.shake_head(times=1)
+        if action == 'wave':
+            return self.wave(side='right', times=1)
+        if action == 'sit':
+            return self.sit()
+        if action == 'stand':
+            return self.stand()
+        if action == 'twist':
+            return self.twist(angle_deg=25)
+        return False
+
 
 if __name__ == '__main__':
     print('MotionController module - integrate with your servo manager/IMU for testing')

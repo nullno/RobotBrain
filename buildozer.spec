@@ -47,7 +47,7 @@ android.accept_sdk_license = True
 # WRITE/READ_EXTERNAL_STORAGE - 文件访问
 # (注意：USB_PERMISSION 是代码中的 Intent Action，不是 Manifest 权限，已移除)
 
-android.permissions = INTERNET,ACCESS_NETWORK_STATE,CAMERA,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE
+android.permissions = INTERNET,ACCESS_NETWORK_STATE,CAMERA,RECORD_AUDIO,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE
 android.res_xml = android/xml/device_filter.xml
 # USB 插入可唤醒应用
 android.manifest.intent_filters = android/usb/intent_filter.xml

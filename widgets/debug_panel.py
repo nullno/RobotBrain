@@ -21,6 +21,7 @@ import time
 from widgets.bubble_level import BubbleLevel
 from widgets.universal_tip import UniversalTip
 from widgets.vision_settings_panel import VisionSettingsPanel
+from widgets.ai_model_panel import AIModelPanel
 
 try:
     from widgets.runtime_status import RuntimeStatusLogger
@@ -331,7 +332,7 @@ class DebugPanel(Widget):
         content.add_widget(info)
 
         # ---------------- TabbedPanel ----------------
-        tp = TabbedPanel(do_default_tab=False, tab_width=dp(100), size_hint_y=0.78)
+        tp = TabbedPanel(do_default_tab=False, tab_width=dp(90), size_hint_y=0.78)
         tp.tab_height = dp(40)
 
         # ---------- 动作 Tab ----------
@@ -449,6 +450,11 @@ class DebugPanel(Widget):
 
         try:
             self._build_vision_settings_tab(tp)
+        except Exception:
+            pass
+
+        try:
+            self._build_ai_model_tab(tp)
         except Exception:
             pass
 
@@ -851,6 +857,30 @@ class DebugPanel(Widget):
             self._show_info_popup(f"动作执行失败: {e}")
 
     # ================= 平衡调试 =================
+    def _build_ai_model_tab(self, tp):
+        t_ai_model = TabbedPanelItem(text="AI模型", font_size="15sp")
+        self._style_tab(t_ai_model)
+
+        sv = ScrollView(size_hint=(1, 1))
+        sv.do_scroll_x = False
+        sv.do_scroll_y = True
+
+        panel = AIModelPanel(size_hint=(1, None))
+
+        def _sync_panel_height(_inst, _val):
+            try:
+                panel.height = max(panel.minimum_height, sv.height)
+            except Exception:
+                pass
+
+        sv.bind(height=_sync_panel_height)
+        panel.bind(minimum_height=lambda *_: _sync_panel_height(None, None))
+        Clock.schedule_once(lambda dt: _sync_panel_height(None, None), 0)
+
+        sv.add_widget(panel)
+        t_ai_model.add_widget(sv)
+        tp.add_widget(t_ai_model)
+
     def _build_balance_debug_tab(self, tp):
         app = App.get_running_app()
         t_balance = TabbedPanelItem(text="平衡调试", font_size="15sp")

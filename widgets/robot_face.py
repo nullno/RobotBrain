@@ -230,10 +230,26 @@ class RobotFace(Widget):
 
                 # 再绘制摄像头纹理（白色调保证颜色不变形）
                 Color(1, 1, 1, 1)
+                try:
+                    u0, v0 = tex.uvpos
+                    us, vs = tex.uvsize
+                    tex_coords = [
+                        u0,
+                        v0,
+                        u0 + us,
+                        v0,
+                        u0 + us,
+                        v0 + vs,
+                        u0,
+                        v0 + vs,
+                    ]
+                except Exception:
+                    tex_coords = None
                 RoundedRectangle(
                     texture=tex,
                     pos=(ex - ox + shift_x, eye_y - oy + shift_y),
                     size=(draw_w, draw_h),
+                    tex_coords=tex_coords,
                 )
             else:
                 self._draw_robot_eye_base(ex, eye_y, eye_w, eye_h, base_color)

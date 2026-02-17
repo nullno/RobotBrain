@@ -169,7 +169,7 @@ def open_first_usb_serial(baud=115200, open_timeout_ms=1000, prefer_device_id=No
                 try:
                     # 读取当前可用的数据（短超时以保证非阻塞返回）
                     with self._lock:
-                        data = self._port.read(4096, 10)
+                        data = self._port.read(4096, 20)
                     if data is None:
                         return b''
                     try:
@@ -242,6 +242,22 @@ def open_first_usb_serial(baud=115200, open_timeout_ms=1000, prefer_device_id=No
                 connection = usb_manager.openDevice(device)
                 port.open(connection)
                 port.setParameters(int(baud), 8, 1, 0)
+                try:
+                    # JOHO 总线转接在部分手机上需要显式拉高控制线才能稳定收发
+                    port.setDTR(True)
+                except Exception:
+                    pass
+                try:
+                    port.setRTS(True)
+                except Exception:
+                    pass
+                try:
+                    # 清理可能残留的垃圾数据，避免首轮 ping 被污染
+                    port.purgeHwBuffers(True, True)
+                except Exception:
+                    pass
+                # 端口参数设置后等待硬件稳定，避免“刚连上立即扫描”导致首轮全超时
+                time.sleep(0.12)
             except Exception as e:
                 last_open_err = e
                 try:

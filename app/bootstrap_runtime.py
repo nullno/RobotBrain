@@ -1,6 +1,8 @@
 import logging
 import pathlib
 import threading
+import os
+import json
 
 from kivy.clock import Clock
 from kivy.utils import platform
@@ -12,6 +14,7 @@ from services.motion_controller import MotionController
 from services.imu import IMUReader
 from services.neutral import load_neutral
 from services import usb_otg
+from services.ai_core import AICore
 
 
 def init_android_permissions(app):
@@ -24,6 +27,7 @@ def init_android_permissions(app):
 
         required_perms = [
             Permission.CAMERA,
+            Permission.RECORD_AUDIO,
             Permission.WRITE_EXTERNAL_STORAGE,
             Permission.READ_EXTERNAL_STORAGE,
         ]
@@ -245,6 +249,42 @@ def init_runtime_status_panel(app):
         RuntimeStatusLogger.log_info("应用启动成功")
     except Exception as e:
         print(f"⚠ 运行状态面板初始化失败: {e}")
+
+
+def init_ai_core(app):
+    """初始化 AI 核心（支持模型切换，默认 DeepSeek）。"""
+    app.ai_core = None
+    app._ai_speech_buf = ""
+    app._ai_speech_clear_ev = None
+
+    try:
+        profile_name = os.environ.get("ROBOTBRAIN_LLM_PROFILE") or "deepseek"
+        api_key = os.environ.get("ROBOTBRAIN_LLM_API_KEY")
+
+        try:
+            cfg_path = pathlib.Path(getattr(app, "user_data_dir", ".")) / "ai_settings.json"
+            if cfg_path.exists():
+                with open(cfg_path, "r", encoding="utf-8") as f:
+                    saved = json.load(f)
+                profile_name = str(saved.get("profile_name") or profile_name)
+                api_key = str(saved.get("api_key") or api_key or "").strip() or api_key
+        except Exception as e:
+            RuntimeStatusLogger.log_info(f"AI 配置读取失败，使用环境变量: {e}")
+
+        app.ai_core = AICore(api_key=api_key, profile_name=profile_name)
+        app.ai_core.bind(
+            on_action_command=app._on_ai_action,
+            on_speech_output=app._on_ai_speech,
+        )
+        RuntimeStatusLogger.log_info(
+            f"AI 已初始化: profile={app.ai_core.profile_name}, online={app.ai_core.enabled}"
+        )
+    except Exception as e:
+        app.ai_core = None
+        try:
+            RuntimeStatusLogger.log_error(f"AI 初始化失败: {e}")
+        except Exception:
+            print(f"AI 初始化失败: {e}")
 
 
 def start_permission_and_otg_watchers(app):

@@ -8,9 +8,22 @@ class ServoBus:
         self.is_mock = False
         try:
             # 若传入的是一个已打开的 uart-like 对象（Android 情况），则直接使用它
-            if not isinstance(port, (str, bytes, os.PathLike)) and hasattr(port, 'write') and hasattr(port, 'readall'):
+            is_uart_wrapper = (
+                not isinstance(port, (str, bytes, os.PathLike))
+                and hasattr(port, 'write')
+                and hasattr(port, 'readall')
+            )
+
+            if is_uart_wrapper:
                 self.uart = port
                 self.manager = UartServoManager(self.uart, servo_id_list=list(range(1, 26)))
+                # Android USB wrapper 延迟抖动更大，放宽收包超时与重试次数，减少误判 0/25
+                try:
+                    self.manager.RECEIVE_TIMEOUT = max(float(getattr(self.manager, 'RECEIVE_TIMEOUT', 0.02)), 0.08)
+                    self.manager.RETRY_NTIME = max(int(getattr(self.manager, 'RETRY_NTIME', 3)), 6)
+                    self.manager.DELAY_BETWEEN_CMD = max(float(getattr(self.manager, 'DELAY_BETWEEN_CMD', 0.001)), 0.002)
+                except Exception:
+                    pass
                 print(f"✅ JOHO SDK Link Start! (android usb wrapper)")
             else:
                 # 参考实例配置：timeout=0 保证 Kivy 界面不卡死
@@ -21,6 +34,12 @@ class ServoBus:
                 )
                 # 默认管理 1-25 号舵机
                 self.manager = UartServoManager(self.uart, servo_id_list=list(range(1, 26)))
+                # 实体串口同样适度放宽，提升 USB 转串口芯片在高负载下的应答稳定性
+                try:
+                    self.manager.RECEIVE_TIMEOUT = max(float(getattr(self.manager, 'RECEIVE_TIMEOUT', 0.02)), 0.05)
+                    self.manager.RETRY_NTIME = max(int(getattr(self.manager, 'RETRY_NTIME', 3)), 5)
+                except Exception:
+                    pass
                 print(f"✅ JOHO SDK Link Start! Port: {port}")
         except Exception as e:
             print(f"⚠  Hardware not found: {e}. Switching to MOCK mode.")

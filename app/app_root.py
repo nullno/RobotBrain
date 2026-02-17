@@ -4,6 +4,8 @@ from kivy.clock import Clock
 from kivy.utils import platform
 import math
 import time
+import json
+from pathlib import Path
 
 from widgets.camera_view import CameraView
 from widgets.robot_face import RobotFace
@@ -26,8 +28,6 @@ try:
     from serial.tools import list_ports as _list_ports
 except Exception:
     _list_ports = None
-# AICore 暂时禁用，注释掉导入
-# from services.ai_core import AICore
 import logging
 import traceback
 
@@ -119,10 +119,7 @@ class RobotDashboardApp(App):
 
         neutral = bootstrap_runtime.init_balance_and_gyro(self)
 
-        # AI 核心暂时禁用（不初始化 AICore）
-        self.ai_core = None
-        self._ai_speech_buf = ""
-        self._ai_speech_clear_ev = None
+        bootstrap_runtime.init_ai_core(self)
 
         bootstrap_runtime.init_motion_controller(self, neutral)
         bootstrap_runtime.init_runtime_loops(self)
@@ -246,6 +243,134 @@ class RobotDashboardApp(App):
 
     def _ai_speak_final(self, dt):
         ai_runtime.ai_speak_final(self, dt)
+
+    def set_ai_model(self, profile_name, api_key=None):
+        if not self.ai_core:
+            return False
+        try:
+            self.ai_core.switch_profile(profile_name, api_key=api_key)
+            return True
+        except Exception:
+            return False
+
+    def save_ai_settings(self, profile_name, api_key):
+        try:
+            cfg_path = Path(getattr(self, "user_data_dir", ".")) / "ai_settings.json"
+            cfg_path.parent.mkdir(parents=True, exist_ok=True)
+            data = {
+                "profile_name": str(profile_name or "deepseek"),
+                "api_key": str(api_key or ""),
+            }
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            return True
+        except Exception:
+            return False
+
+    def load_ai_settings(self):
+        try:
+            cfg_path = Path(getattr(self, "user_data_dir", ".")) / "ai_settings.json"
+            if not cfg_path.exists():
+                return {}
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                return dict(json.load(f) or {})
+        except Exception:
+            return {}
+
+    def test_ai_chat(self, text):
+        if not self.ai_core:
+            return False
+        try:
+            self.ai_core.send_text(str(text or "").strip())
+            return True
+        except Exception:
+            return False
+
+    def set_ai_profile(self, profile_name, api_key=None):
+        return self.set_ai_model(profile_name, api_key=api_key)
+
+    def get_ai_models(self):
+        if not self.ai_core:
+            return []
+        try:
+            return self.ai_core.list_profiles()
+        except Exception:
+            return []
+
+    def start_ai_voice_chat(self, language="zh-CN"):
+        if not self.ai_core:
+            return False
+        try:
+            return bool(self.ai_core.start_voice_capture(language=language))
+        except Exception:
+            return False
+
+    def stop_ai_voice_chat(self):
+        if not self.ai_core:
+            return False
+        try:
+            return bool(self.ai_core.stop_voice_capture())
+        except Exception:
+            return False
+
+    def get_ai_voice_error(self):
+        if not self.ai_core:
+            return "AI 未初始化"
+        try:
+            return str(self.ai_core.get_last_voice_error() or "")
+        except Exception:
+            return ""
+
+    def test_ai_connection(self):
+        if not self.ai_core:
+            return False, "AI 未初始化"
+        try:
+            return self.ai_core.test_connection()
+        except Exception as e:
+            return False, str(e)
+
+    def test_ai_tts(self, text="你好，我是 RobotBrain，语音播报测试成功。"):
+        try:
+            return bool(ai_runtime.speak_text(self, text))
+        except Exception:
+            return False
+
+    def get_ai_tts_status(self):
+        try:
+            channel = str(getattr(self, "_tts_channel", "unknown") or "unknown")
+            err = str(getattr(self, "_tts_last_error", "") or "")
+            return {"channel": channel, "error": err}
+        except Exception:
+            return {"channel": "unknown", "error": ""}
+
+    def get_ai_latency_status(self):
+        stt_wait = 0
+        stt_rec = 0
+        llm_first = 0
+        llm_total = 0
+        try:
+            if self.ai_core and hasattr(self.ai_core, "get_latency_snapshot"):
+                snap = dict(self.ai_core.get_latency_snapshot() or {})
+                stt_wait = int(snap.get("stt_wait_ms") or 0)
+                stt_rec = int(snap.get("stt_rec_ms") or 0)
+                llm_first = int(snap.get("llm_first_ms") or 0)
+                llm_total = int(snap.get("llm_total_ms") or 0)
+        except Exception:
+            pass
+
+        tts_ms = 0
+        try:
+            tts_ms = int(getattr(self, "_tts_last_ms", 0) or 0)
+        except Exception:
+            tts_ms = 0
+
+        return {
+            "stt_wait_ms": stt_wait,
+            "stt_rec_ms": stt_rec,
+            "llm_first_ms": llm_first,
+            "llm_total_ms": llm_total,
+            "tts_ms": tts_ms,
+        }
 
     # ================== 退出清理 ==================
     def on_stop(self):

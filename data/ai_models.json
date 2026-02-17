@@ -1,0 +1,33 @@
+{
+  "default_profile": "deepseek",
+  "profiles": {
+    "deepseek": {
+      "base_url": "https://api.deepseek.com",
+      "text_model": "deepseek-chat",
+      "vision_model": "deepseek-vl2",
+      "api_key_env": "ROBOTBRAIN_LLM_API_KEY",
+      "timeout_sec": 60
+    },
+    "openai": {
+      "base_url": "https://api.openai.com/v1",
+      "text_model": "gpt-4o-mini",
+      "vision_model": "gpt-4o-mini",
+      "api_key_env": "ROBOTBRAIN_OPENAI_API_KEY",
+      "timeout_sec": 60
+    },
+    "qwen": {
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "text_model": "qwen-plus",
+      "vision_model": "qwen-vl-plus",
+      "api_key_env": "ROBOTBRAIN_QWEN_API_KEY",
+      "timeout_sec": 60
+    },
+    "glm": {
+      "base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "text_model": "glm-4-plus",
+      "vision_model": "glm-4v-plus",
+      "api_key_env": "ROBOTBRAIN_GLM_API_KEY",
+      "timeout_sec": 60
+    }
+  }
+}

@@ -13,6 +13,24 @@
 4. 运行程序（桌面调试）：
    - `python main.py`
 
+**AI 新架构（已重建）**
+- 统一采用 OpenAI 兼容协议，默认模型配置为 DeepSeek。
+- 支持在 PC / Android 共用同一套 AI 代码路径。
+- 支持多模型切换（`deepseek` / `openai` / `qwen` / `glm`），配置文件在 `data/ai_models.json`。
+- AI 输出统一为 JSON 决策：语音（speech）+ 情绪（emotion）+ 动作（action）。
+- 动作会自动映射到 `MotionController`（如 `walk/stop/nod/shake_head/wave/sit/stand/twist`）。
+
+**AI Key 与模型切换（重要）**
+- 不要把 Key 写入代码或提交到仓库。
+- 默认读取环境变量：`ROBOTBRAIN_LLM_API_KEY`。
+- 可选设置模型档位：`ROBOTBRAIN_LLM_PROFILE`（默认 `deepseek`）。
+
+示例（Windows PowerShell）：
+- `setx ROBOTBRAIN_LLM_API_KEY "你的Key"`
+- `setx ROBOTBRAIN_LLM_PROFILE "deepseek"`
+
+应用内可通过 `RobotDashboardApp.set_ai_model(profile_name, api_key=None)` 动态切换模型。
+
 **主要文件与说明**
 - `main.py`: 应用入口。
 - `app/app_root.py`: 应用主类 `RobotDashboardApp`，负责初始化界面、日志、硬件（串口/陀螺 / 摄像头）并启动定时循环。

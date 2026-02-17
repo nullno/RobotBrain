@@ -2,7 +2,8 @@ kivy>=2.1.0
 opencv-python>=4.5.5
 numpy>=1.21.0
 pyserial>=3.5
-plyer>=2.0.0
-pyttsx3>=2.90
-pywin32>=305; platform_system == "Windows"
-comtypes>=1.1.10
+requests>=2.31.0
+SpeechRecognition>=3.10.0
+PyAudio>=0.2.14; platform_system != "Android"
+edge-tts>=6.1.12
+pygame>=2.5.2

@@ -10,6 +10,152 @@ from services.imu import IMUReader
 from services.motion_controller import MotionController
 
 
+def _get_android_servo_baud_candidates(app):
+    """获取 Android 舵机串口候选波特率（按优先级去重）。"""
+    values = []
+    try:
+        cur = int(getattr(app, "_usb_baud", 0) or 0)
+        if cur > 0:
+            values.append(cur)
+    except Exception:
+        pass
+
+    try:
+        extra = getattr(app, "_usb_baud_candidates", None)
+        if isinstance(extra, (list, tuple)):
+            for item in extra:
+                try:
+                    v = int(item)
+                    if v > 0:
+                        values.append(v)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    values.extend([115200, 1000000])
+    uniq = []
+    seen = set()
+    for v in values:
+        if v in seen:
+            continue
+        seen.add(v)
+        uniq.append(v)
+    return uniq
+
+
+def _try_open_android_servo_bus(app, prefer_device_id=None):
+    """按候选波特率尝试打开 Android USB 串口并创建 ServoBus。"""
+    try:
+        from services.android_serial import (
+            open_first_usb_serial,
+            get_last_usb_serial_status,
+        )
+    except Exception:
+        return None, "fail: android_serial import error", None
+
+    last_status = "fail: unknown"
+    for baud in _get_android_servo_baud_candidates(app):
+        try:
+            usb_wrapper = open_first_usb_serial(
+                baud=baud,
+                prefer_device_id=prefer_device_id,
+            )
+            last_status = str(get_last_usb_serial_status())
+            if not usb_wrapper:
+                continue
+
+            sb = ServoBus(port=usb_wrapper, baudrate=baud)
+            if sb and not getattr(sb, "is_mock", True):
+                try:
+                    app._usb_baud = int(baud)
+                except Exception:
+                    pass
+                return sb, last_status, baud
+
+            try:
+                usb_wrapper.close()
+            except Exception:
+                pass
+        except Exception:
+            try:
+                last_status = str(get_last_usb_serial_status())
+            except Exception:
+                pass
+            continue
+    return None, last_status, None
+
+
+def _retry_android_servo_scan_with_baud_fallback(app, source="连接"):
+    """Android 在 0/25 时切换波特率重连并复扫一次。"""
+    try:
+        if platform != "android":
+            return []
+        if getattr(app, "_android_baud_recover_in_progress", False):
+            return []
+        app._android_baud_recover_in_progress = True
+
+        old_sb = getattr(app, "servo_bus", None)
+        sb, status, baud = _try_open_android_servo_bus(app)
+        if not sb:
+            return []
+
+        try:
+            if old_sb and old_sb is not sb and hasattr(old_sb, "close"):
+                old_sb.close()
+        except Exception:
+            pass
+
+        app.servo_bus = sb
+        try:
+            app._mark_usb_connected_after_permission(status)
+        except Exception:
+            pass
+        init_motion_controller_after_connect(app)
+
+        mgr = getattr(sb, "manager", None)
+        if not mgr:
+            return []
+
+        scan_ids = list(range(1, 26))
+        online_ids = []
+        for idx in range(3):
+            try:
+                mgr.servo_scan(scan_ids)
+            except Exception:
+                pass
+
+            try:
+                online_ids = sorted(
+                    sid
+                    for sid, info in getattr(mgr, "servo_info_dict", {}).items()
+                    if getattr(info, "is_online", False)
+                )
+            except Exception:
+                online_ids = []
+
+            if online_ids:
+                break
+            time.sleep(0.25 + 0.2 * idx)
+
+        if online_ids:
+            RuntimeStatusLogger.log_info(
+                f"{source}后0/25，切换波特率重连成功（baud={baud}），在线 {len(online_ids)} 个"
+            )
+        else:
+            RuntimeStatusLogger.log_info(
+                f"{source}后0/25，已尝试波特率重连（baud={baud}）但仍未发现舵机"
+            )
+        return online_ids
+    except Exception:
+        return []
+    finally:
+        try:
+            app._android_baud_recover_in_progress = False
+        except Exception:
+            pass
+
+
 def is_duplicate_usb_attach_event(app, signature, interval_sec=4.0):
     """判断 USB attach 事件是否在短时间内重复。"""
     try:
@@ -51,32 +197,24 @@ def ensure_android_usb_reconnect_watcher(app, reason=""):
                     app._android_usb_reconnect_ev = None
                     return False
 
-                from services.android_serial import (
-                    open_first_usb_serial,
-                    get_last_usb_serial_status,
-                )
+                sb, status, baud = _try_open_android_servo_bus(app)
+                if sb:
+                    try:
+                        if getattr(app, "servo_bus", None) and hasattr(app.servo_bus, "close"):
+                            app.servo_bus.close()
+                    except Exception:
+                        pass
+                    app.servo_bus = sb
+                    app._mark_usb_connected_after_permission(status)
+                    init_motion_controller_after_connect(app)
+                    RuntimeStatusLogger.log_info(
+                        f"Android USB 串口已连接（授权后自动重试成功，baud={baud}）"
+                    )
+                    schedule_servo_scan_after_connect(app, "USB授权")
+                    Clock.schedule_once(app._safe_refresh_ui, 0)
+                    app._android_usb_reconnect_ev = None
+                    return False
 
-                usb_wrapper = open_first_usb_serial(baud=115200)
-                if usb_wrapper:
-                    sb = ServoBus(port=usb_wrapper)
-                    if sb and not getattr(sb, "is_mock", True):
-                        try:
-                            if getattr(app, "servo_bus", None) and hasattr(app.servo_bus, "close"):
-                                app.servo_bus.close()
-                        except Exception:
-                            pass
-                        app.servo_bus = sb
-                        app._mark_usb_connected_after_permission(
-                            get_last_usb_serial_status()
-                        )
-                        init_motion_controller_after_connect(app)
-                        RuntimeStatusLogger.log_info("Android USB 串口已连接（授权后自动重试成功）")
-                        schedule_servo_scan_after_connect(app, "USB授权")
-                        Clock.schedule_once(app._safe_refresh_ui, 0)
-                        app._android_usb_reconnect_ev = None
-                        return False
-
-                status = str(get_last_usb_serial_status())
                 if status.startswith("wait:"):
                     if app._should_log_usb_status("usb_wait_reconnect", status, 3.0):
                         RuntimeStatusLogger.log_info("等待 USB 授权中: " + status)
@@ -196,6 +334,13 @@ def schedule_servo_scan_after_connect(app, source="连接"):
                 if not mgr:
                     return
 
+                if platform == "android":
+                    try:
+                        # 手机侧 USB 串口刚建立时总线可能尚未稳定，先短暂等待再扫
+                        time.sleep(0.18)
+                    except Exception:
+                        pass
+
                 scan_ids = list(range(1, 26))
                 online_ids = []
                 for idx in range(3):
@@ -228,14 +373,29 @@ def schedule_servo_scan_after_connect(app, source="连接"):
                         f"{source}后舵机扫描完成，在线 {len(online_ids)} 个"
                     )
                 else:
-                    app._update_usb_state(
-                        connect="up",
-                        scan="none(0)",
-                        detail="online=0",
-                    )
-                    RuntimeStatusLogger.log_error(
-                        f"{source}后串口已连接，但未扫描到舵机（0/25），请检查舵机供电/接线/ID/波特率"
-                    )
+                    recovered_ids = []
+                    if platform == "android":
+                        recovered_ids = _retry_android_servo_scan_with_baud_fallback(app, source)
+
+                    if recovered_ids:
+                        app._update_usb_state(
+                            connect="up",
+                            scan=f"ok({len(recovered_ids)})",
+                            detail=f"online={len(recovered_ids)}",
+                        )
+                        RuntimeStatusLogger.log_info(
+                            f"{source}后初次扫描0/25，重连重扫恢复成功，在线 {len(recovered_ids)} 个"
+                        )
+                    else:
+                        tried_bauds = _get_android_servo_baud_candidates(app) if platform == "android" else [115200]
+                        app._update_usb_state(
+                            connect="up",
+                            scan="none(0)",
+                            detail="online=0",
+                        )
+                        RuntimeStatusLogger.log_error(
+                            f"{source}后串口已连接，但未扫描到舵机（0/25），请检查舵机供电/接线/ID/波特率；已尝试波特率={tried_bauds}，并已放宽通信超时/重试"
+                        )
 
                 try:
                     Clock.schedule_once(app._safe_refresh_ui, 0)
@@ -257,32 +417,23 @@ def try_auto_connect(app, candidate_ports=None, list_ports_module=None):
     try:
         if platform == "android" and not candidate_ports:
             try:
-                from services.android_serial import (
-                    open_first_usb_serial,
-                    get_last_usb_serial_status,
-                )
-
-                usb_wrapper = open_first_usb_serial(baud=115200)
-                if usb_wrapper:
+                sb, status, baud = _try_open_android_servo_bus(app)
+                if sb:
                     if getattr(app, "servo_bus", None) and hasattr(app.servo_bus, "close"):
                         try:
                             app.servo_bus.close()
                         except Exception:
                             pass
 
-                    sb = ServoBus(port=usb_wrapper)
-                    if sb and not getattr(sb, "is_mock", True):
-                        app.servo_bus = sb
-                        app._mark_usb_connected_after_permission(
-                            get_last_usb_serial_status()
-                        )
-                        init_motion_controller_after_connect(app)
-                        RuntimeStatusLogger.log_info("自动连接 Android USB 串口成功")
-                        Clock.schedule_once(app._safe_refresh_ui, 0)
-                        return True
+                    app.servo_bus = sb
+                    app._mark_usb_connected_after_permission(status)
+                    init_motion_controller_after_connect(app)
+                    RuntimeStatusLogger.log_info(f"自动连接 Android USB 串口成功（baud={baud}）")
+                    Clock.schedule_once(app._safe_refresh_ui, 0)
+                    return True
                 else:
                     try:
-                        _s = str(get_last_usb_serial_status())
+                        _s = str(status)
                         if _s.startswith("wait:"):
                             app._last_usb_permission_status = _s
                             app._update_usb_state(
@@ -409,51 +560,48 @@ def handle_otg_event(app, event, device_id, list_ports_module=None):
                     try:
                         if platform == "android":
                             try:
-                                from services.android_serial import (
-                                    open_first_usb_serial,
-                                    get_last_usb_serial_status,
-                                )
-
-                                usb_wrapper = open_first_usb_serial(
-                                    baud=115200,
+                                sb, status, baud = _try_open_android_servo_bus(
+                                    app,
                                     prefer_device_id=device_id,
                                 )
                             except Exception:
-                                usb_wrapper = None
+                                sb, status, baud = None, "fail: unknown", None
 
-                            if usb_wrapper:
-                                sb = ServoBus(port=usb_wrapper)
-                                if sb and not getattr(sb, "is_mock", True):
-                                    try:
-                                        app._mark_usb_connected_after_permission(
-                                            get_last_usb_serial_status()
-                                        )
-                                    except Exception:
-                                        pass
+                            if sb:
+                                try:
+                                    app._mark_usb_connected_after_permission(status)
+                                except Exception:
+                                    pass
 
-                                    try:
-                                        if getattr(app, "servo_bus", None) and hasattr(
-                                            app.servo_bus, "close"
-                                        ):
-                                            try:
-                                                app.servo_bus.close()
-                                            except Exception:
-                                                pass
-                                    except Exception:
-                                        pass
-                                    app.servo_bus = sb
-                                    try:
-                                        schedule_servo_scan_after_connect(app, "OTG")
-                                    except Exception:
-                                        pass
-                                    try:
-                                        Clock.schedule_once(app._safe_refresh_ui, 0)
-                                    except Exception:
-                                        pass
-                                    return
+                                try:
+                                    if getattr(app, "servo_bus", None) and hasattr(
+                                        app.servo_bus, "close"
+                                    ):
+                                        try:
+                                            app.servo_bus.close()
+                                        except Exception:
+                                            pass
+                                except Exception:
+                                    pass
+                                app.servo_bus = sb
+                                try:
+                                    RuntimeStatusLogger.log_info(
+                                        f"OTG 串口连接成功（baud={baud}）"
+                                    )
+                                except Exception:
+                                    pass
+                                try:
+                                    schedule_servo_scan_after_connect(app, "OTG")
+                                except Exception:
+                                    pass
+                                try:
+                                    Clock.schedule_once(app._safe_refresh_ui, 0)
+                                except Exception:
+                                    pass
+                                return
                             else:
                                 try:
-                                    status = str(get_last_usb_serial_status())
+                                    status = str(status)
                                     if status.startswith("wait:"):
                                         if app._should_log_usb_status("usb_permission", status, 3.0):
                                             RuntimeStatusLogger.log_info(
