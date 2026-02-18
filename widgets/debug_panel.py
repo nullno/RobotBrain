@@ -477,6 +477,15 @@ class DebugPanel(Widget):
             self._build_ai_model_tab,
         ]
 
+        # 首次打开时若在 popup.open 后异步加 tab，tab 条会短暂挤在一起；
+        # 这里改为打开前一次性构建，避免首帧抖动。
+        try:
+            for _builder in list(self._debug_tab_build_queue):
+                _builder(tp)
+            self._debug_tab_build_queue = []
+        except Exception:
+            pass
+
         tp.bind(current_tab=lambda inst, val: self._update_tab_highlight(inst, val))
         Clock.schedule_once(
             lambda dt: self._update_tab_highlight(tp, tp.current_tab), 0
@@ -614,7 +623,8 @@ class DebugPanel(Widget):
         self._debug_tp = tp
         popup.open()
         try:
-            self._schedule_build_next_debug_tab()
+            if getattr(self, "_debug_tab_build_queue", None):
+                self._schedule_build_next_debug_tab()
         except Exception:
             pass
 

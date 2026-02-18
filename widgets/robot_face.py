@@ -19,8 +19,7 @@ from kivy.graphics import (
     StencilPop,
     StencilUnUse,
 )
-from app.theme import COLORS, FONT
-from kivy.core.text import Label as CoreLabel
+from app.theme import COLORS
 from widgets.runtime_status import RuntimeStatusLogger
 
 
@@ -35,6 +34,8 @@ class RobotFace(Widget):
         self.eye_scale = 1.0
         # 面部垂直居中偏移（+上移，-下移），单位为组件高度比例
         self.face_center_bias = 0.0
+        # 面部线条/圆角统一缩放（1.0 为当前默认，>1 更粗更圆，<1 更细）
+        self.face_stroke_scale = 1.3
 
         # ===== 动画状态 =====
         self.eye_open = 1.0
@@ -57,8 +58,6 @@ class RobotFace(Widget):
         self._draw_pending = False
         self._force_draw = True
         self._last_draw_snapshot = None
-        self._speech_text_cached = None
-        self._speech_texture_cached = None
 
         # 自动眨眼
         blink_interval = 3.6
@@ -78,9 +77,6 @@ class RobotFace(Widget):
         self.bind(pos=lambda *_: self.request_draw(force=True))
         self.bind(size=lambda *_: self.request_draw(force=True))
 
-        # 说话字母显示缓冲
-        self.speech_text = ""
-        self._speech_clear_ev = None
         try:
             RuntimeStatusLogger.log_info("RobotFace 初始化完成")
         except Exception:
@@ -102,7 +98,6 @@ class RobotFace(Widget):
             round(float(self.look_y), 3),
             round(float(self.breath), 3),
             str(self.target_emotion),
-            str(self.speech_text or ""),
             int(self.width),
             int(self.height),
             int(self.x),
@@ -133,39 +128,9 @@ class RobotFace(Widget):
             except Exception:
                 pass
 
-    def _get_speech_texture(self):
-        text = str(self.speech_text or "")
-        if not text:
-            return None
-        if text == self._speech_text_cached and self._speech_texture_cached is not None:
-            return self._speech_texture_cached
-        try:
-            label = CoreLabel(text=text, font_size=16, font_name=FONT)
-            label.refresh()
-            self._speech_text_cached = text
-            self._speech_texture_cached = label.texture
-            return self._speech_texture_cached
-        except Exception:
-            return None
-
     def show_speaking_text(self, text, timeout=0.6):
-        # 设置要显示的实时说话字母（短片段）
-        try:
-            self.speech_text = str(text)
-        except Exception:
-            self.speech_text = ""
-        # 重置清除计时
-        if self._speech_clear_ev:
-            self._speech_clear_ev.cancel()
-        self._speech_clear_ev = Clock.schedule_once(self._clear_speech_text, timeout)
-        self.request_draw(force=True)
-
-    def _clear_speech_text(self, dt=None):
-        self.speech_text = ""
-        self._speech_text_cached = None
-        self._speech_texture_cached = None
-        self._speech_clear_ev = None
-        self.request_draw(force=True)
+        # 兼容外部调用：已移除说话字母渲染功能，仅保留接口不做处理
+        return
 
     # ================= 外部接口 =================
     def set_emotion(self, emo):
@@ -350,7 +315,7 @@ class RobotFace(Widget):
 
         r, g, b = color[0], color[1], color[2]
         emo = str(emo_override or self.target_emotion)
-        glow_w, mid_w, core_w = dp(35), dp(18), dp(10)
+        glow_w, mid_w, core_w = self._sdp(22), self._sdp(11), self._sdp(10)
 
         for idx, ex in enumerate(eyes_x):
             x0 = ex + eye_w * 0.08
@@ -433,9 +398,9 @@ class RobotFace(Widget):
                 py = (1 - t) * (1 - t) * y0 + 2 * (1 - t) * t * y1 + t * t * y2
                 points.extend([px, py])
 
-            Color(r, g, b, 0.16 * alpha)
+            Color(r, g, b, 0.05 * alpha)
             Line(points=points, width=glow_w, cap="round", joint="round")
-            Color(r, g, b, 0.38 * alpha)
+            Color(r, g, b, 0.20 * alpha)
             Line(points=points, width=mid_w, cap="round", joint="round")
             Color(r, g, b, 1.0 * alpha)
             Line(points=points, width=core_w, cap="round", joint="round")
@@ -446,6 +411,7 @@ class RobotFace(Widget):
         eyes_x = [x + w * 0.15, x + w * 0.57]
         center_offset = h * float(getattr(self, "face_center_bias", 0.0) or 0.0)
         eye_y = y + h * 0.31 + center_offset
+        eye_radius = self._sdp(40)
 
         tex = None
         if self.camera_view and self.camera_view.texture:
@@ -453,7 +419,7 @@ class RobotFace(Widget):
 
         for idx, ex in enumerate(eyes_x):
             StencilPush()
-            RoundedRectangle(pos=(ex, eye_y), size=(eye_w, eye_h), radius=[40])
+            RoundedRectangle(pos=(ex, eye_y), size=(eye_w, eye_h), radius=[eye_radius])
             StencilUse()
 
             # ---------- 画视频或机器人眼底 ----------
@@ -470,7 +436,7 @@ class RobotFace(Widget):
 
                 # 先绘制与嘴巴相同的背景色，避免纹理缩放时露出黑色边缘
                 Color(base_color[0], base_color[1], base_color[2], 1.0)
-                RoundedRectangle(pos=(ex, eye_y), size=(eye_w, eye_h), radius=[40])
+                RoundedRectangle(pos=(ex, eye_y), size=(eye_w, eye_h), radius=[eye_radius])
 
                 # 再绘制摄像头纹理（白色调保证颜色不变形）
                 Color(1, 1, 1, 1)
@@ -525,7 +491,7 @@ class RobotFace(Widget):
             # ---------- 呼吸光效 ----------
             glow = 0.15 + 0.1 * math.sin(self.breath)
             Color(base_color[0], base_color[1], base_color[2], glow)
-            RoundedRectangle(pos=(ex, eye_y), size=(eye_w, eye_h), radius=[40])
+            RoundedRectangle(pos=(ex, eye_y), size=(eye_w, eye_h), radius=[eye_radius])
 
             StencilUnUse()
             StencilPop()
@@ -535,34 +501,39 @@ class RobotFace(Widget):
             # 外层柔和光（更大宽度、低透明度）
             Color(r_col, g_col, b_col, 0.18)
             Line(
-                rounded_rectangle=(ex - 6, eye_y - 6, eye_w + 12, eye_h + 12, 44),
-                width=dp(20),
+                rounded_rectangle=(
+                    ex - self._sdp(6),
+                    eye_y - self._sdp(6),
+                    eye_w + self._sdp(12),
+                    eye_h + self._sdp(12),
+                    eye_radius + self._sdp(4),
+                ),
+                width=self._sdp(20),
             )
             # 中层光晕
             Color(r_col, g_col, b_col, 0.34)
             Line(
-                rounded_rectangle=(ex - 4, eye_y - 4, eye_w + 8, eye_h + 8, 42),
-                width=dp(10),
+                rounded_rectangle=(
+                    ex - self._sdp(4),
+                    eye_y - self._sdp(4),
+                    eye_w + self._sdp(8),
+                    eye_h + self._sdp(8),
+                    eye_radius + self._sdp(2),
+                ),
+                width=self._sdp(10),
             )
             # 核心轮廓线（更粗）
             Color(r_col, g_col, b_col, 1.0)
             Line(
-                rounded_rectangle=(ex - 3, eye_y - 3, eye_w + 6, eye_h + 6, 40),
-                width=dp(3.5),
+                rounded_rectangle=(
+                    ex - self._sdp(3),
+                    eye_y - self._sdp(3),
+                    eye_w + self._sdp(6),
+                    eye_h + self._sdp(6),
+                    eye_radius,
+                ),
+                width=self._sdp(3.5),
             )
-
-        # 如果有说话字母，显示在嘴部上方靠中间位置
-        if self.speech_text:
-            try:
-                tex = self._get_speech_texture()
-                if tex is None:
-                    return
-                tx = x + w * 0.5 - tex.size[0] / 2
-                ty = y + h * 0.35
-                Color(1, 1, 1, 0.95)
-                Rectangle(texture=tex, pos=(tx, ty), size=tex.size)
-            except Exception:
-                pass
 
     def _get_android_camera_geom_transform(self):
         """Android 纹理兜底几何变换：避免部分设备 tex_coords 不生效。"""
@@ -601,7 +572,7 @@ class RobotFace(Widget):
 
         # 眼底
         Color(r, g, b, 0.25)
-        RoundedRectangle(pos=(ex, ey), size=(ew, eh), radius=[40])
+        RoundedRectangle(pos=(ex, ey), size=(ew, eh), radius=[self._sdp(40)])
 
         # 瞳孔随眼球动
         pw = ew * 0.35
@@ -610,7 +581,7 @@ class RobotFace(Widget):
         py = ey + eh * 0.5 - ph / 2 + self.look_y * eh * 0.15
 
         Color(1, 1, 1, 0.35)
-        RoundedRectangle(pos=(px, py), size=(pw, ph), radius=[20])
+        RoundedRectangle(pos=(px, py), size=(pw, ph), radius=[self._sdp(20)])
 
     # ---------- 眼皮遮罩 ----------
     def _draw_eyelids(self, ex, ey, ew, eh, open_ratio):
@@ -622,9 +593,9 @@ class RobotFace(Widget):
 
         # 眼皮改为不透明以遮挡视频或底图（眨眼时不透明）
         Color(0, 0, 0, 1.0)
-        RoundedRectangle(pos=(ex, ey + eh - cover), size=(ew, cover), radius=[90])
+        RoundedRectangle(pos=(ex, ey + eh - cover), size=(ew, cover), radius=[self._sdp(90)])
         Color(0, 0, 0, 1.0)
-        RoundedRectangle(pos=(ex, ey), size=(ew, cover * 0.35), radius=[50])
+        RoundedRectangle(pos=(ex, ey), size=(ew, cover * 0.35), radius=[self._sdp(50)])
 
     # ================= 嘴巴系统 =================
     def _draw_mouth(self, x, y, w, h, color, emo_override=None, alpha=1.0):
@@ -643,7 +614,7 @@ class RobotFace(Widget):
         left_bias = -smile_bias
         right_bias = smile_bias
 
-        G_W, M_W, C_W = dp(35), dp(18), dp(10)
+        G_W, M_W, C_W = self._sdp(22), self._sdp(11), self._sdp(10)
 
         emo = str(emo_override or self.target_emotion)
         open_amt = min(1.2, self.mouth_open + (0.08 if self.talking else 0.0))
@@ -682,11 +653,11 @@ class RobotFace(Widget):
 
             elif emo == "surprised":
                 size = mw * (0.34 + open_amt * 0.45)
-                Color(r, g, b, 0.15 * alpha)
+                Color(r, g, b, 0.05 * alpha)
                 Ellipse(
                     pos=(mx + mw * 0.5 - size / 2, my - size / 2), size=(size, size)
                 )
-                Color(r, g, b, 0.5 * alpha)
+                Color(r, g, b, 0.22 * alpha)
                 Ellipse(
                     pos=(mx + mw * 0.5 - size * 0.45, my - size * 0.45),
                     size=(size * 0.9, size * 0.9),
@@ -722,9 +693,18 @@ class RobotFace(Widget):
             else:
                 pts = [mx, my + left_bias * 0.2, mx + mw, my + right_bias * 0.2]
 
-            Color(r, g, b, 0.15 * alpha)
+            Color(r, g, b, 0.05 * alpha)
             Line(points=pts, width=G_W, cap="round", joint="round")
-            Color(r, g, b, 0.4 * alpha)
+            Color(r, g, b, 0.20 * alpha)
             Line(points=pts, width=M_W, cap="round", joint="round")
             Color(r, g, b, 1.0 * alpha)
             Line(points=pts, width=C_W, cap="round", joint="round")
+
+    def _sdp(self, value):
+        """按 face_stroke_scale 缩放的 dp 值。"""
+        try:
+            scale = float(getattr(self, "face_stroke_scale", 1.0) or 1.0)
+        except Exception:
+            scale = 1.0
+        scale = max(0.2, min(3.0, scale))
+        return dp(float(value) * scale)

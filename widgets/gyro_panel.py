@@ -122,6 +122,10 @@ class GyroPanel(Widget):
         SKY_COLOR = (0.18, 0.06, 0.28, 0.95)   # 暗紫调的天空
         GROUND_COLOR = (0.04, 0.02, 0.06, 0.95) # 更暗的地面
         r, g, b = NEON_CYAN
+        HORIZON_ALPHA = 0.48
+        TICK_ALPHA = 0.36
+        CROSS_ALPHA = 0.50
+        ARROW_ALPHA_SCALE = 0.48
 
         # 由 pitch（前后）决定地平线的垂直偏移；roll 决定旋转角（缩放以便小面板也能明显可见）
         pitch_offset = (self.pitch / 25.0) * (h * 0.5)  # 降低灵敏度，使范围更合理
@@ -140,12 +144,12 @@ class GyroPanel(Widget):
 
             # 绘制地平线 (加长线条保证旋转后能覆盖屏幕)
             # 使用相对中心的坐标绘制
-            Color(NEON_CYAN[0], NEON_CYAN[1], NEON_CYAN[2], 0.95)
+            Color(NEON_CYAN[0], NEON_CYAN[1], NEON_CYAN[2], HORIZON_ALPHA)
             # 线条更加长，确保旋转大角度时不会露馅
             Line(points=[cx - w * 1.5, cy + pitch_offset, cx + w * 1.5, cy + pitch_offset], width=1.5)
 
             # 刻度
-            Color(r, g, b, 0.8)
+            Color(r, g, b, TICK_ALPHA)
             # 将刻度也通过偏移绘制，使其跟随地平线移动
             for off in [-2, -1, 1, 2]: # 简化刻度
                 ly = cy + pitch_offset + off * dp(20)
@@ -158,7 +162,7 @@ class GyroPanel(Widget):
             PopMatrix()
 
             # 中心十字准星（不随旋转），更精致
-            Color(NEON_PINK[0], NEON_PINK[1], NEON_PINK[2], 1)
+            Color(NEON_PINK[0], NEON_PINK[1], NEON_PINK[2], CROSS_ALPHA)
             Line(points=[cx - 8, cy, cx - 3, cy], width=1.6)
             Line(points=[cx + 3, cy, cx + 8, cy], width=1.6)
             Line(points=[cx, cy - 8, cx, cy - 3], width=1.6)
@@ -172,7 +176,7 @@ class GyroPanel(Widget):
             Rectangle(texture=roll_tex, pos=(cx - roll_tex.size[0] / 2, cy - dp(34)), size=roll_tex.size)
 
             # 左右指向箭头（提示倾斜方向）
-            arrow_alpha = min(1.0, abs(self.roll) / 30.0 + 0.1)  # 降低roll阈值，提高灵敏度
+            arrow_alpha = min(1.0, abs(self.roll) / 30.0 + 0.1) * ARROW_ALPHA_SCALE  # 降低透明度，避免抢视觉中心
             Color(NEON_CYAN[0], NEON_CYAN[1], NEON_CYAN[2], arrow_alpha)
             if self.roll > 2:
                 Line(points=[cx + dp(30), cy, cx + dp(50), cy, cx + dp(46), cy + dp(4)], width=1.6)
@@ -180,7 +184,7 @@ class GyroPanel(Widget):
                 Line(points=[cx - dp(30), cy, cx - dp(50), cy, cx - dp(46), cy + dp(4)], width=1.6)
 
             # 前后提示箭头（基于 pitch）
-            p_alpha = min(1.0, abs(self.pitch) / 30.0 + 0.1)  # 降低pitch阈值
+            p_alpha = min(1.0, abs(self.pitch) / 30.0 + 0.1) * ARROW_ALPHA_SCALE  # 降低透明度，避免抢视觉中心
             Color(NEON_CYAN[0], NEON_CYAN[1], NEON_CYAN[2], p_alpha)
             if self.pitch > 3:
                 Line(points=[cx, cy - dp(30), cx, cy - dp(50), cx + dp(4), cy - dp(46)], width=1.6)
