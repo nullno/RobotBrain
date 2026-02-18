@@ -7,6 +7,7 @@ from kivy.graphics import (
     RoundedRectangle,
     Line,
     Ellipse,
+    Rectangle,
     StencilPush,
     StencilUse,
     StencilPop,
@@ -44,20 +45,29 @@ class RobotFace(Widget):
         # 说话状态
         self.talking = False
         self._talk_event = None
+        self._draw_pending = False
+        self._force_draw = True
+        self._last_draw_snapshot = None
+        self._speech_text_cached = None
+        self._speech_texture_cached = None
 
         # 自动眨眼
-        Clock.schedule_interval(self._auto_blink, 3.2)
+        blink_interval = 3.6
+        Clock.schedule_interval(self._auto_blink, blink_interval)
+
+        anim_interval = 1.0 / 30.0
 
         # 呼吸灯动画
-        Clock.schedule_interval(self._update_breath, 1 / 60)
+        Clock.schedule_interval(self._update_breath, anim_interval)
 
         # 眼球运动动画
-        Clock.schedule_interval(self._update_eye_motion, 1 / 60)
+        Clock.schedule_interval(self._update_eye_motion, anim_interval)
 
         # 情绪过渡
-        Clock.schedule_interval(self._update_state, 1 / 60)
+        Clock.schedule_interval(self._update_state, anim_interval)
 
-        self.bind(pos=self.draw, size=self.draw)
+        self.bind(pos=lambda *_: self.request_draw(force=True))
+        self.bind(size=lambda *_: self.request_draw(force=True))
 
         # 说话字母显示缓冲
         self.speech_text = ""
@@ -66,6 +76,68 @@ class RobotFace(Widget):
             RuntimeStatusLogger.log_info("RobotFace 初始化完成")
         except Exception:
             pass
+        self.request_draw(force=True)
+
+    def _snapshot(self):
+        tex_obj = None
+        try:
+            if self.camera_view is not None:
+                tex_obj = getattr(self.camera_view, "texture", None)
+        except Exception:
+            tex_obj = None
+        return (
+            round(float(self.eye_open), 3),
+            round(float(self.target_eye_open), 3),
+            round(float(self.mouth_open), 3),
+            round(float(self.look_x), 3),
+            round(float(self.look_y), 3),
+            round(float(self.breath), 3),
+            str(self.target_emotion),
+            str(self.speech_text or ""),
+            int(self.width),
+            int(self.height),
+            int(self.x),
+            int(self.y),
+            id(tex_obj),
+        )
+
+    def request_draw(self, force=False):
+        if force:
+            self._force_draw = True
+        if self._draw_pending:
+            return
+        self._draw_pending = True
+        Clock.schedule_once(self._draw_if_needed, 0)
+
+    def _draw_if_needed(self, dt=0):
+        self._draw_pending = False
+        try:
+            snap = self._snapshot()
+            if (not self._force_draw) and (snap == self._last_draw_snapshot):
+                return
+            self._force_draw = False
+            self._last_draw_snapshot = snap
+            self.draw()
+        except Exception:
+            try:
+                self.draw()
+            except Exception:
+                pass
+
+    def _get_speech_texture(self):
+        text = str(self.speech_text or "")
+        if not text:
+            return None
+        if text == self._speech_text_cached and self._speech_texture_cached is not None:
+            return self._speech_texture_cached
+        try:
+            label = CoreLabel(text=text, font_size=16, font_name=FONT)
+            label.refresh()
+            self._speech_text_cached = text
+            self._speech_texture_cached = label.texture
+            return self._speech_texture_cached
+        except Exception:
+            return None
 
     def show_speaking_text(self, text, timeout=0.6):
         # 设置要显示的实时说话字母（短片段）
@@ -77,12 +149,14 @@ class RobotFace(Widget):
         if self._speech_clear_ev:
             self._speech_clear_ev.cancel()
         self._speech_clear_ev = Clock.schedule_once(self._clear_speech_text, timeout)
-        self.draw()
+        self.request_draw(force=True)
 
     def _clear_speech_text(self, dt=None):
         self.speech_text = ""
+        self._speech_text_cached = None
+        self._speech_texture_cached = None
         self._speech_clear_ev = None
-        self.draw()
+        self.request_draw(force=True)
 
     # def on_touch_down(self, touch):
     #     # 点击脸部弹出一个简易对话输入框，用于测试 AI 对话
@@ -135,6 +209,7 @@ class RobotFace(Widget):
     # ================= 外部接口 =================
     def set_emotion(self, emo):
         self.target_emotion = emo
+        self.request_draw()
         # try:
         #     RuntimeStatusLogger.log_info(f"RobotFace 情绪设为: {emo}")
         # except Exception:
@@ -151,10 +226,12 @@ class RobotFace(Widget):
             self._talk_event.cancel()
             self._talk_event = None
         self.mouth_open = 0.0
+        self.request_draw()
 
     def look_at(self, x_norm, y_norm=0):
         self.target_look_x = max(-1, min(1, x_norm))
         self.target_look_y = max(-1, min(1, y_norm))
+        self.request_draw()
 
     def naughty_look(self):
         self.target_look_x = random.uniform(-1, 1)
@@ -167,24 +244,32 @@ class RobotFace(Widget):
 
     def _talk_step(self, dt):
         self.mouth_open = random.uniform(0.2, 1.0)
+        self.request_draw()
 
     def _update_breath(self, dt):
         self.breath += dt * 2
         if self.breath > math.pi * 2:
             self.breath = 0
+        self.request_draw()
 
     def _update_eye_motion(self, dt):
         speed = 6 * dt
+        prev_x = self.look_x
+        prev_y = self.look_y
         self.look_x += (self.target_look_x - self.look_x) * speed
         self.look_y += (self.target_look_y - self.look_y) * speed
+        if abs(self.look_x - prev_x) > 0.001 or abs(self.look_y - prev_y) > 0.001:
+            self.request_draw()
 
         if not self.talking and random.random() < 0.01:
             self.naughty_look()
 
     def _update_state(self, dt):
         speed = 7 * dt
+        prev_eye = self.eye_open
         self.eye_open += (self.target_eye_open - self.eye_open) * speed
-        self.draw()
+        if abs(self.eye_open - prev_eye) > 0.001:
+            self.request_draw()
 
     # ================= 主绘制 =================
     def draw(self, *args):
@@ -231,18 +316,22 @@ class RobotFace(Widget):
                 # 再绘制摄像头纹理（白色调保证颜色不变形）
                 Color(1, 1, 1, 1)
                 try:
-                    u0, v0 = tex.uvpos
-                    us, vs = tex.uvsize
-                    tex_coords = [
-                        u0,
-                        v0,
-                        u0 + us,
-                        v0,
-                        u0 + us,
-                        v0 + vs,
-                        u0,
-                        v0 + vs,
-                    ]
+                    cam = self.camera_view
+                    if cam is not None and hasattr(cam, "get_effective_tex_coords"):
+                        tex_coords = cam.get_effective_tex_coords(tex)
+                    else:
+                        u0, v0 = tex.uvpos
+                        us, vs = tex.uvsize
+                        tex_coords = [
+                            u0,
+                            v0,
+                            u0 + us,
+                            v0,
+                            u0 + us,
+                            v0 + vs,
+                            u0,
+                            v0 + vs,
+                        ]
                 except Exception:
                     tex_coords = None
                 RoundedRectangle(
@@ -289,9 +378,9 @@ class RobotFace(Widget):
         # 如果有说话字母，显示在嘴部上方靠中间位置
         if self.speech_text:
             try:
-                label = CoreLabel(text=self.speech_text, font_size=16, font_name=FONT)
-                label.refresh()
-                tex = label.texture
+                tex = self._get_speech_texture()
+                if tex is None:
+                    return
                 tx = x + w * 0.5 - tex.size[0] / 2
                 ty = y + h * 0.35
                 Color(1, 1, 1, 0.95)

@@ -233,7 +233,8 @@ def init_runtime_loops(app):
     app._demo_step = 0
     Clock.schedule_interval(app._update_loop, 0.1)
     Clock.schedule_interval(app._demo_emotion_loop, 4.0)
-    Clock.schedule_interval(app._demo_eye_move, 0.05)
+    eye_move_interval = 0.08
+    Clock.schedule_interval(app._demo_eye_move, eye_move_interval)
 
     app._last_loop_error = None
     app._last_loop_error_time = 0

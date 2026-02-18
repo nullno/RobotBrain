@@ -29,6 +29,8 @@ class CameraView(Image):
         self._android_camera_started = False
         self._display_rotate = None
         self._display_scale = None
+        self._android_fix_mode = self.DEFAULT_ANDROID_FIX_MODE
+        self._last_display_mode = None
 
         try:
             self._load_saved_android_fix_mode()
@@ -83,9 +85,7 @@ class CameraView(Image):
     def _apply_android_texture_transform(self, texture, camera_idx):
         """对 Android 摄像头纹理应用稳定的 uv 变换。"""
         try:
-            mode = str(
-                os.environ.get("RB_ANDROID_FRONT_FIX", self.DEFAULT_ANDROID_FIX_MODE)
-            ).strip().lower()
+            mode = self.get_android_front_fix_mode()
             is_front = int(camera_idx) in self._android_front_indices if camera_idx != -1 else False
 
             # Android 相机纹理普遍存在 Y 轴反向，默认先做垂直翻转
@@ -142,9 +142,7 @@ class CameraView(Image):
             if platform != "android":
                 return
             self._setup_display_transform()
-            mode = str(
-                os.environ.get("RB_ANDROID_FRONT_FIX", self.DEFAULT_ANDROID_FIX_MODE)
-            ).strip().lower()
+            mode = self.get_android_front_fix_mode()
 
             angle = 0.0
             sx = 1.0
@@ -164,6 +162,7 @@ class CameraView(Image):
                 self._display_scale.x = sx
                 self._display_scale.y = sy
             self._update_display_transform_origin()
+            self._last_display_mode = mode
         except Exception:
             pass
 
@@ -183,9 +182,7 @@ class CameraView(Image):
     def _apply_fix_mode_to_desktop_frame(self, frame):
         """将与 Android 一致的翻转模式应用到桌面 OpenCV 帧。"""
         try:
-            mode = str(
-                os.environ.get("RB_ANDROID_FRONT_FIX", self.DEFAULT_ANDROID_FIX_MODE)
-            ).strip().lower()
+            mode = self.get_android_front_fix_mode()
             if mode in ("rotate180", "180", "default"):
                 return self.cv2.rotate(frame, self.cv2.ROTATE_180)
             if mode in ("vflip", "vertical"):
@@ -234,6 +231,7 @@ class CameraView(Image):
         except Exception:
             pass
         mode = self._normalize_fix_mode(mode)
+        self._android_fix_mode = mode
         os.environ["RB_ANDROID_FRONT_FIX"] = mode
         return mode
 
@@ -324,11 +322,12 @@ class CameraView(Image):
                         def _on_text(inst, val, camera_idx=idx):
                             try:
                                 if val:
-                                    # 复制一个子纹理并通过 uv 变换修正方向（比 flip_* 更稳定）
-                                    tex = val.get_region(0, 0, val.width, val.height)
+                                    # 直接复用相机纹理，避免每帧复制 get_region 带来的 CPU 开销
+                                    tex = val
                                     is_front, mode = self._apply_android_texture_transform(tex, camera_idx)
                                     self.texture = tex
-                                    self._apply_android_display_transform()
+                                    if mode != self._last_display_mode:
+                                        self._apply_android_display_transform()
                                     if not self._android_texture_ready_logged:
                                         RuntimeStatusLogger.log_info(
                                             f'Android 摄像头 texture 就绪 (index={camera_idx}, front={is_front}, mode={mode})'
@@ -399,6 +398,7 @@ class CameraView(Image):
         """设置摄像头方向修正模式（Android/桌面统一）。"""
         try:
             m = self._normalize_fix_mode(mode)
+            self._android_fix_mode = m
             os.environ["RB_ANDROID_FRONT_FIX"] = m
             self._save_android_fix_mode(m)
             self._apply_mode_to_current_android_texture()
@@ -410,6 +410,31 @@ class CameraView(Image):
             return m
         except Exception:
             return self.DEFAULT_ANDROID_FIX_MODE
+
+    def get_android_front_fix_mode(self):
+        """读取当前视觉修正模式（以实例状态为准）。"""
+        try:
+            m = self._normalize_fix_mode(getattr(self, "_android_fix_mode", self.DEFAULT_ANDROID_FIX_MODE))
+            self._android_fix_mode = m
+            return m
+        except Exception:
+            return self.DEFAULT_ANDROID_FIX_MODE
+
+    def get_effective_tex_coords(self, texture=None):
+        """返回与当前视觉模式一致的 tex_coords（供外部绘制链路复用）。"""
+        try:
+            mode = self.get_android_front_fix_mode()
+            if mode in ("rotate180", "180", "default"):
+                u0, v0, us, vs = 1.0, 1.0, -1.0, -1.0
+            elif mode in ("vflip", "vertical"):
+                u0, v0, us, vs = 0.0, 1.0, 1.0, -1.0
+            elif mode in ("hflip", "horizontal"):
+                u0, v0, us, vs = 1.0, 0.0, -1.0, 1.0
+            else:
+                u0, v0, us, vs = 0.0, 0.0, 1.0, 1.0
+            return [u0, v0, u0 + us, v0, u0 + us, v0 + vs, u0, v0 + vs]
+        except Exception:
+            return None
 
     def restart_camera(self):
         """重启相机以重新探测设备与索引。"""
@@ -440,6 +465,7 @@ class CameraView(Image):
             self._android_camera_started = False
             self._android_texture_ready_logged = False
             self._android_front_indices = set()
+            self._last_display_mode = None
             self._start_android()
             return True
         except Exception:

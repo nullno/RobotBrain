@@ -15,7 +15,7 @@ version = 0.1
 # - plyer: 跨平台设备功能API
 # - requests: HTTP库
 # - opencv, numpy: 视觉处理
-requirements = python3,kivy==2.3.0,pyjnius,plyer,requests,pyserial
+requirements = python3,kivy==2.3.0,pyjnius,plyer,requests,pyserial,edge-tts,pygame
 
 # UI配置
 fullscreen = 1
@@ -36,6 +36,7 @@ android.wakelock = True
 
 # 打包优化
 # android.add_src = 
+p4a.extra_args = --release
 
 # 自动接受SDK许可
 android.accept_sdk_license = True
@@ -73,5 +74,5 @@ android.privacy_policy =
 
 
 [buildozer]
-log_level = 2
+log_level = 1
 warn_on_root = 0

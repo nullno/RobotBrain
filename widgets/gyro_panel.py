@@ -16,6 +16,7 @@ class GyroPanel(Widget):
         self._target_pitch = 0
         self._target_roll = 0
         self._target_yaw = 0
+        self._text_tex_cache = {}
         
         self.bind(pos=self.draw, size=self.draw)
         try:
@@ -25,19 +26,25 @@ class GyroPanel(Widget):
         
         # 启动动画循环用于平滑过渡
         from kivy.clock import Clock
-        Clock.schedule_interval(self._animate_smooth, 1.0 / 60.0)
+        self._anim_interval = 1.0 / 30.0
+        Clock.schedule_interval(self._animate_smooth, self._anim_interval)
 
     def _animate_smooth(self, dt):
         # 简单的线性插值平滑处理 (Lerp)，平滑系数 0.15
-        alpha = 0.15
+        alpha = 0.2
+        changed = False
         if abs(self.pitch - self._target_pitch) > 0.01:
             self.pitch += (self._target_pitch - self.pitch) * alpha
+            changed = True
         if abs(self.roll - self._target_roll) > 0.01:
             self.roll += (self._target_roll - self.roll) * alpha
+            changed = True
         if abs(self.yaw - self._target_yaw) > 0.01:
             self.yaw += (self._target_yaw - self.yaw) * alpha
-            
-        self.draw()
+            changed = True
+
+        if changed:
+            self.draw()
 
     def update(self, pitch, roll, yaw=0):
         # 仅更新目标值，实际绘制由 _animate_smooth 接管
@@ -56,9 +63,20 @@ class GyroPanel(Widget):
 
     def _get_text_texture(self, text, color):
         """生成数字纹理"""
-        label = CoreLabel(text=text, font_size=11, font_name=FONT)
+        key = str(text)
+        if key in self._text_tex_cache:
+            return self._text_tex_cache[key]
+        label = CoreLabel(text=key, font_size=11, font_name=FONT)
         label.refresh()
-        return label.texture
+        tex = label.texture
+        self._text_tex_cache[key] = tex
+        if len(self._text_tex_cache) > 64:
+            try:
+                first_key = next(iter(self._text_tex_cache.keys()))
+                self._text_tex_cache.pop(first_key, None)
+            except Exception:
+                pass
+        return tex
 
     def draw(self, *args):
         self.canvas.clear()

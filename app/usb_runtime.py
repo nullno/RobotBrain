@@ -1,5 +1,6 @@
 import threading
 import time
+from types import SimpleNamespace
 
 from kivy.clock import Clock
 from kivy.utils import platform
@@ -8,6 +9,59 @@ from widgets.runtime_status import RuntimeStatusLogger
 from services.servo_bus import ServoBus
 from services.imu import IMUReader
 from services.motion_controller import MotionController
+
+
+def _probe_online_ids_by_read(mgr, servo_ids):
+    """在 scan=0 时兜底：通过读寄存器探测可通信的舵机 ID。"""
+    online_ids = []
+    if not mgr:
+        return online_ids
+
+    for sid in servo_ids:
+        try:
+            pos = mgr.read_data_by_name(sid, "CURRENT_POSITION")
+            if pos is None:
+                continue
+            pos_i = int(pos)
+            if 0 <= pos_i <= 4095:
+                online_ids.append(int(sid))
+                try:
+                    info_dict = getattr(mgr, "servo_info_dict", None)
+                    if isinstance(info_dict, dict):
+                        if sid not in info_dict:
+                            info_dict[sid] = SimpleNamespace(
+                                servo_id=int(sid),
+                                is_online=True,
+                            )
+                        else:
+                            info_dict[sid].is_online = True
+                except Exception:
+                    pass
+        except Exception:
+            continue
+
+    return sorted(set(online_ids))
+
+
+def _probe_online_ids_fast(mgr, preferred_ids=None, full_ids=None):
+    """快速探测：先探测历史在线 ID，再按需全量探测。"""
+    try:
+        pref = [int(x) for x in (preferred_ids or []) if 1 <= int(x) <= 250]
+    except Exception:
+        pref = []
+    try:
+        full = [int(x) for x in (full_ids or list(range(1, 26))) if 1 <= int(x) <= 250]
+    except Exception:
+        full = list(range(1, 26))
+
+    seen = set()
+    pref = [x for x in pref if not (x in seen or seen.add(x))]
+    all_ids = [x for x in full if not (x in seen or seen.add(x))]
+
+    online = _probe_online_ids_by_read(mgr, pref) if pref else []
+    if online:
+        return online
+    return _probe_online_ids_by_read(mgr, all_ids)
 
 
 def _get_android_servo_baud_candidates(app):
@@ -119,6 +173,7 @@ def _retry_android_servo_scan_with_baud_fallback(app, source="连接"):
 
         scan_ids = list(range(1, 26))
         online_ids = []
+        preferred_ids = list(getattr(app, "_last_online_servo_ids", []) or [])
         for idx in range(3):
             try:
                 mgr.servo_scan(scan_ids)
@@ -138,9 +193,23 @@ def _retry_android_servo_scan_with_baud_fallback(app, source="连接"):
                 break
             time.sleep(0.25 + 0.2 * idx)
 
+        if not online_ids:
+            try:
+                online_ids = _probe_online_ids_fast(
+                    mgr,
+                    preferred_ids=preferred_ids,
+                    full_ids=scan_ids,
+                )
+            except Exception:
+                online_ids = []
+
         if online_ids:
+            try:
+                app._last_online_servo_ids = list(online_ids)
+            except Exception:
+                pass
             RuntimeStatusLogger.log_info(
-                f"{source}后0/25，切换波特率重连成功（baud={baud}），在线 {len(online_ids)} 个"
+                f"{source}后0/25，切换波特率重连后探测到在线 {len(online_ids)} 个（baud={baud}）"
             )
         else:
             RuntimeStatusLogger.log_info(
@@ -343,6 +412,7 @@ def schedule_servo_scan_after_connect(app, source="连接"):
 
                 scan_ids = list(range(1, 26))
                 online_ids = []
+                preferred_ids = list(getattr(app, "_last_online_servo_ids", []) or [])
                 for idx in range(3):
                     try:
                         mgr.servo_scan(scan_ids)
@@ -363,14 +433,28 @@ def schedule_servo_scan_after_connect(app, source="连接"):
 
                     time.sleep(0.25 + 0.2 * idx)
 
+                if not online_ids:
+                    try:
+                        online_ids = _probe_online_ids_fast(
+                            mgr,
+                            preferred_ids=preferred_ids,
+                            full_ids=scan_ids,
+                        )
+                    except Exception:
+                        online_ids = []
+
                 if online_ids:
+                    try:
+                        app._last_online_servo_ids = list(online_ids)
+                    except Exception:
+                        pass
                     app._update_usb_state(
                         connect="up",
                         scan=f"ok({len(online_ids)})",
-                        detail=f"online={len(online_ids)}",
+                        detail=f"online={len(online_ids)} ids={online_ids}",
                     )
                     RuntimeStatusLogger.log_info(
-                        f"{source}后舵机扫描完成，在线 {len(online_ids)} 个"
+                        f"{source}后舵机扫描/探测完成，在线 {len(online_ids)} 个，ids={online_ids}"
                     )
                 else:
                     recovered_ids = []
@@ -381,10 +465,10 @@ def schedule_servo_scan_after_connect(app, source="连接"):
                         app._update_usb_state(
                             connect="up",
                             scan=f"ok({len(recovered_ids)})",
-                            detail=f"online={len(recovered_ids)}",
+                            detail=f"online={len(recovered_ids)} ids={recovered_ids}",
                         )
                         RuntimeStatusLogger.log_info(
-                            f"{source}后初次扫描0/25，重连重扫恢复成功，在线 {len(recovered_ids)} 个"
+                            f"{source}后初次扫描0/25，重连重扫恢复成功，在线 {len(recovered_ids)} 个，ids={recovered_ids}"
                         )
                     else:
                         tried_bauds = _get_android_servo_baud_candidates(app) if platform == "android" else [115200]

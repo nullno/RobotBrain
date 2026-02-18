@@ -268,6 +268,17 @@ class ServoStatusCard(FloatLayout):
 # ===================== 主调试面板 =====================
 class DebugPanel(Widget):
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._debug_popup = None
+        self._debug_tp = None
+        self._debug_tab_build_queue = []
+        self._debug_tab_build_ev = None
+        self._last_status_refresh_req = 0.0
+        self._status_cards_cache = None
+        self._status_cards_cache_time = 0.0
+        self._status_cache_ttl = 1.2
+
     # ---------------- TAB 样式 ----------------
     def _style_tab(self, tab):
         tab.background_normal = ""
@@ -294,6 +305,18 @@ class DebugPanel(Widget):
     # -------------------------------------------------
 
     def open_debug(self):
+        if self._debug_popup is not None:
+            try:
+                self._debug_popup.open()
+                tp = getattr(self, "_debug_tp", None)
+                cur = getattr(tp, "current_tab", None)
+                if cur and getattr(cur, "text", "") == "连接状态":
+                    threading.Thread(target=self.refresh_servo_status, daemon=True).start()
+                return
+            except Exception:
+                self._debug_popup = None
+                self._debug_tp = None
+
         app = App.get_running_app()
         accent_blue = (0.2, 0.7, 0.95, 1.0)
 
@@ -438,25 +461,12 @@ class DebugPanel(Widget):
         t_status.add_widget(sv)
         tp.add_widget(t_status)
 
-        try:
-            self._build_single_servo_tab(tp)
-        except Exception:
-            pass
-
-        try:
-            self._build_balance_debug_tab(tp)
-        except Exception:
-            pass
-
-        try:
-            self._build_vision_settings_tab(tp)
-        except Exception:
-            pass
-
-        try:
-            self._build_ai_model_tab(tp)
-        except Exception:
-            pass
+        self._debug_tab_build_queue = [
+            self._build_single_servo_tab,
+            self._build_balance_debug_tab,
+            self._build_vision_settings_tab,
+            self._build_ai_model_tab,
+        ]
 
         tp.bind(current_tab=lambda inst, val: self._update_tab_highlight(inst, val))
         Clock.schedule_once(
@@ -585,11 +595,39 @@ class DebugPanel(Widget):
 
         def _on_tab_switch(instance, value):
             if value and getattr(value, "text", "") == "连接状态":
-                threading.Thread(target=self.refresh_servo_status, daemon=True).start()
+                now = time.time()
+                if (now - getattr(self, "_last_status_refresh_req", 0.0)) >= 0.8:
+                    self._last_status_refresh_req = now
+                    threading.Thread(target=self.refresh_servo_status, daemon=True).start()
 
         tp.bind(current_tab=_on_tab_switch)
-
+        self._debug_popup = popup
+        self._debug_tp = tp
         popup.open()
+        try:
+            self._schedule_build_next_debug_tab()
+        except Exception:
+            pass
+
+    def _schedule_build_next_debug_tab(self):
+        if getattr(self, "_debug_tab_build_ev", None) is not None:
+            return
+        self._debug_tab_build_ev = Clock.schedule_once(self._build_next_debug_tab, 0)
+
+    def _build_next_debug_tab(self, dt=0):
+        self._debug_tab_build_ev = None
+        queue = getattr(self, "_debug_tab_build_queue", None) or []
+        tp = getattr(self, "_debug_tp", None)
+        popup = getattr(self, "_debug_popup", None)
+        if not queue or tp is None or popup is None:
+            return
+        try:
+            builder = queue.pop(0)
+            builder(tp)
+        except Exception:
+            pass
+        if queue:
+            self._debug_tab_build_ev = Clock.schedule_once(self._build_next_debug_tab, 0)
 
     # ---------------- 原有功能代码 ----------------
 
@@ -729,61 +767,79 @@ class DebugPanel(Widget):
         if status_grid is None:
             return
 
+        now = time.time()
+        if (
+            self._status_cards_cache is not None
+            and (now - float(getattr(self, "_status_cards_cache_time", 0.0) or 0.0))
+            < float(getattr(self, "_status_cache_ttl", 1.2) or 1.2)
+        ):
+            cards = list(self._status_cards_cache)
+
+            def _render_cached(dt=0):
+                grid = getattr(self, "_status_grid", None)
+                if grid is None:
+                    return
+                try:
+                    grid.clear_widgets()
+                    for sid, data, online in cards:
+                        grid.add_widget(ServoStatusCard(sid, data=data, online=online))
+                except Exception:
+                    pass
+
+            Clock.schedule_once(_render_cached, 0)
+            return
+
         app = App.get_running_app()
         mgr = getattr(app, "servo_bus", None)
 
-        def _clear(dt=0):
-            grid = getattr(self, "_status_grid", None)
-            if grid is not None:
-                grid.clear_widgets()
-
-        Clock.schedule_once(_clear, 0)
-
+        cards = []
         if not mgr or getattr(mgr, "is_mock", False):
             max_id = 25
             for sid in range(1, max_id + 1):
-                Clock.schedule_once(
-                    lambda dt, s=sid: (
-                        getattr(self, "_status_grid", None)
-                        and getattr(self, "_status_grid", None).add_widget(
-                            ServoStatusCard(s, data=None, online=False)
-                        )
-                    ),
-                    0,
-                )
-            return
+                cards.append((sid, None, False))
+        else:
+            mgr = app.servo_bus.manager
+            known_ids = set(getattr(mgr, "servo_info_dict", {}).keys())
+            max_known = max(known_ids) if known_ids else 25
+            max_id = max(max_known, getattr(mgr, "max_id", 25))
 
-        mgr = app.servo_bus.manager
-        known_ids = set(getattr(mgr, "servo_info_dict", {}).keys())
-        max_known = max(known_ids) if known_ids else 25
-        max_id = max(max_known, getattr(mgr, "max_id", 25))
+            for sid in range(1, max_id + 1):
+                data = None
+                online = False
 
-        for sid in range(1, max_id + 1):
-            data = None
-            online = False
+                if sid in known_ids:
+                    try:
+                        # 先读取位置探活，离线时避免温度/电压额外 IO
+                        pos = mgr.read_data_by_name(sid, "CURRENT_POSITION")
+                        if pos is not None:
+                            temp = mgr.read_data_by_name(sid, "CURRENT_TEMPERATURE")
+                            volt = mgr.read_data_by_name(sid, "CURRENT_VOLTAGE")
+                            torque_flag = mgr.read_data_by_name(sid, "TORQUE_ENABLE")
+                            online = bool(getattr(mgr.servo_info_dict.get(sid, None), "is_online", True))
+                            data = dict(pos=pos, temp=temp, volt=volt, torque=torque_flag)
+                        else:
+                            online = False
+                            data = None
+                    except Exception:
+                        data = None
+                        online = False
+                cards.append((sid, data, online))
 
-            if sid in known_ids:
-                try:
-                    pos = mgr.read_data_by_name(sid, "CURRENT_POSITION")
-                    temp = mgr.read_data_by_name(sid, "CURRENT_TEMPERATURE")
-                    volt = mgr.read_data_by_name(sid, "CURRENT_VOLTAGE")
-                    torque_flag = mgr.read_data_by_name(sid, "TORQUE_ENABLE")
-                    online = mgr.servo_info_dict[sid].is_online
+        self._status_cards_cache = list(cards)
+        self._status_cards_cache_time = now
 
-                    data = dict(pos=pos, temp=temp, volt=volt, torque=torque_flag)
-                except Exception:
-                    data = None
-                    online = False
+        def _render(dt=0):
+            grid = getattr(self, "_status_grid", None)
+            if grid is None:
+                return
+            try:
+                grid.clear_widgets()
+                for sid, data, online in cards:
+                    grid.add_widget(ServoStatusCard(sid, data=data, online=online))
+            except Exception:
+                pass
 
-            Clock.schedule_once(
-                lambda dt, s=sid, d=data, o=online: (
-                    getattr(self, "_status_grid", None)
-                    and getattr(self, "_status_grid", None).add_widget(
-                        ServoStatusCard(s, data=d, online=o)
-                    )
-                ),
-                0,
-            )
+        Clock.schedule_once(_render, 0)
 
     # ------------------------------------------------------
 

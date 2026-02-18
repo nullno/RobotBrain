@@ -5,6 +5,7 @@ from kivy.metrics import dp
 from kivy.app import App
 from kivy.clock import Clock
 from widgets.runtime_status import RuntimeStatusLogger
+from widgets.camera_view import CameraView
 
 
 class VisionSettingsPanel(BoxLayout):
@@ -71,7 +72,23 @@ class VisionSettingsPanel(BoxLayout):
             app = App.get_running_app()
             root = getattr(app, "root_widget", None)
             if root and getattr(root, "ids", None):
-                return root.ids.get("camera_view")
+                cam = root.ids.get("camera_view")
+                if cam is not None:
+                    return cam
+
+            def _walk(widget):
+                if isinstance(widget, CameraView):
+                    return widget
+                for child in getattr(widget, "children", []):
+                    found = _walk(child)
+                    if found is not None:
+                        return found
+                return None
+
+            if root is not None:
+                found = _walk(root)
+                if found is not None:
+                    return found
         except Exception:
             pass
         return None
@@ -121,12 +138,8 @@ class VisionSettingsPanel(BoxLayout):
             return
         try:
             mode = "rotate180"
-            try:
-                import os
-
-                mode = str(os.environ.get("RB_ANDROID_FRONT_FIX", "rotate180"))
-            except Exception:
-                pass
+            if hasattr(cam, "get_android_front_fix_mode"):
+                mode = str(cam.get_android_front_fix_mode())
             idx = getattr(cam, "_camera_index", None)
             self._status.text = f"视觉设置: index={idx}, 模式={mode}"
         except Exception:

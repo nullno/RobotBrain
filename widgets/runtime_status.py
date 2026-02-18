@@ -49,9 +49,11 @@ class RuntimeStatusPanel(BoxLayout):
         self.width = dp(280)
         self.height = dp(100)
         
-        # 日志缓冲（最多保留最近的 100 条）
-        self.logs = deque(maxlen=100)
+        # 日志缓冲（最多保留最近的 80 条）
+        self.logs = deque(maxlen=80)
         self._lock = threading.Lock()
+        self._dirty = True
+        self._last_render_text = None
         
         # 绘制背景
         with self.canvas.before:
@@ -103,8 +105,8 @@ class RuntimeStatusPanel(BoxLayout):
         self.scroll_view.add_widget(self.log_label)
         self.add_widget(self.scroll_view)
         
-        # 启动日志刷新定时器
-        Clock.schedule_interval(self._refresh_display, 0.2)
+        # 启动日志刷新定时器（仅在内容变化时刷新）
+        Clock.schedule_interval(self._refresh_display, 0.25)
     
     def add_log(self, message: str, category: str = 'info'):
         """
@@ -140,16 +142,24 @@ class RuntimeStatusPanel(BoxLayout):
         
         with self._lock:
             self.logs.append(formatted_log)
+            self._dirty = True
     
     def _refresh_display(self, dt):
         """定时刷新显示"""
         with self._lock:
+            if not self._dirty:
+                return
+
             if self.logs:
-                # 将所有日志连接起来，最后 20 条
-                all_logs = '\n'.join(list(self.logs))
-                self.log_label.text = all_logs
+                # 仅渲染最近 30 条，降低 UI 文本重排开销
+                all_logs = '\n'.join(list(self.logs)[-30:])
             else:
-                self.log_label.text = '[color=888888][等待信息...][/color]'
+                all_logs = '[color=888888][等待信息...][/color]'
+
+            if all_logs != self._last_render_text:
+                self.log_label.text = all_logs
+                self._last_render_text = all_logs
+            self._dirty = False
 
 
 class RuntimeStatusLogger:
@@ -162,6 +172,9 @@ class RuntimeStatusLogger:
     # 启动期缓冲：当面板尚未创建时，将日志缓存起来，set_panel 时刷新到面板
     _buffer = deque(maxlen=400)
     _buf_lock = threading.Lock()
+    _last_msg_key = None
+    _last_msg_time = 0.0
+    _repeat_drop_count = 0
     
     @classmethod
     def set_panel(cls, panel: RuntimeStatusPanel):
@@ -183,36 +196,64 @@ class RuntimeStatusLogger:
     @classmethod
     def log(cls, message: str, category: str = 'info'):
         """添加日志"""
+        try:
+            msg_text = str(message)
+        except Exception:
+            msg_text = ""
+        cat = str(category or 'info')
+
+        # 高频重复日志去重（窗口内相同内容直接丢弃），并在下一条变化时补充摘要
+        now = time.time()
+        key = (cat, msg_text)
+        if key == cls._last_msg_key and (now - cls._last_msg_time) < 0.8:
+            cls._repeat_drop_count += 1
+            return
+
+        if cls._repeat_drop_count > 0:
+            repeat_note = f"(重复 {cls._repeat_drop_count} 条已折叠)"
+            try:
+                if cls._panel:
+                    cls._panel.add_log(repeat_note, 'info')
+                else:
+                    with cls._buf_lock:
+                        cls._buffer.append((repeat_note, 'info'))
+            except Exception:
+                pass
+            cls._repeat_drop_count = 0
+
+        cls._last_msg_key = key
+        cls._last_msg_time = now
+
         if cls._panel:
             try:
-                cls._panel.add_log(message, category)
+                cls._panel.add_log(msg_text, cat)
             except Exception:
                 # 如果面板添加失败，回退到 logging
                 try:
-                    if category == 'error':
-                        logging.getLogger().error(message)
+                    if cat == 'error':
+                        logging.getLogger().error(msg_text)
                     else:
-                        logging.getLogger().info(message)
+                        logging.getLogger().info(msg_text)
                 except Exception:
                     try:
-                        print(message)
+                        print(msg_text)
                     except Exception:
                         pass
         else:
             # 面板尚未初始化：缓存到缓冲区，并同时写入 logging
             try:
                 with cls._buf_lock:
-                    cls._buffer.append((message, category))
+                    cls._buffer.append((msg_text, cat))
             except Exception:
                 pass
             try:
-                if category == 'error':
-                    logging.getLogger().error(message)
+                if cat == 'error':
+                    logging.getLogger().error(msg_text)
                 else:
-                    logging.getLogger().info(message)
+                    logging.getLogger().info(msg_text)
             except Exception:
                 try:
-                    print(message)
+                    print(msg_text)
                 except Exception:
                     pass
     
