@@ -386,7 +386,7 @@ def init_motion_controller_after_connect(app):
         app.motion_controller = None
 
 
-def schedule_servo_scan_after_connect(app, source="连接"):
+def schedule_servo_scan_after_connect(app, source="连接", allow_extra_retry=True):
     """连接成功后在后台重扫舵机，避免设备刚枚举完成时首轮扫描漏检。"""
     try:
         if getattr(app, "_servo_scan_in_progress", False):
@@ -480,6 +480,25 @@ def schedule_servo_scan_after_connect(app, source="连接"):
                         RuntimeStatusLogger.log_error(
                             f"{source}后串口已连接，但未扫描到舵机（0/25），请检查舵机供电/接线/ID/波特率；已尝试波特率={tried_bauds}，并已放宽通信超时/重试"
                         )
+
+                        # Android 首次连接后总线可能仍在稳定，追加一次延迟补扫（仅一次，避免循环）
+                        if platform == "android" and bool(allow_extra_retry):
+                            try:
+                                RuntimeStatusLogger.log_info("将于 1.2s 后执行一次补扫（Android）")
+                            except Exception:
+                                pass
+
+                            try:
+                                Clock.schedule_once(
+                                    lambda _dt: schedule_servo_scan_after_connect(
+                                        app,
+                                        source=f"{source}/补扫",
+                                        allow_extra_retry=False,
+                                    ),
+                                    1.2,
+                                )
+                            except Exception:
+                                pass
 
                 try:
                     Clock.schedule_once(app._safe_refresh_ui, 0)

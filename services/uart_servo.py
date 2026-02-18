@@ -177,7 +177,13 @@ class UartServoManager:
 
 	def find_servo(self):
 		'''搜索舵机'''
-		ret, response_packet = self.send_request(254, self.CMD_TYPE_PING, b'', wait_response=True, retry_ntime=3)
+		ret, response_packet = self.send_request(
+			254,
+			self.CMD_TYPE_PING,
+			b'',
+			wait_response=True,
+			retry_ntime=max(3, int(getattr(self, 'RETRY_NTIME', 3) or 3)),
+		)
 		if ret:
 		# 提取读取到的数据位
 			servo_id, data_size, servo_status, param_bytes = Packet.unpack(response_packet)
@@ -187,7 +193,13 @@ class UartServoManager:
 
 	def ping(self, servo_id):
 		'''舵机通讯检测'''
-		ret, response_packet = self.send_request(servo_id, self.CMD_TYPE_PING, b'', wait_response=True, retry_ntime=3)
+		ret, response_packet = self.send_request(
+			servo_id,
+			self.CMD_TYPE_PING,
+			b'',
+			wait_response=True,
+			retry_ntime=max(3, int(getattr(self, 'RETRY_NTIME', 3) or 3)),
+		)
 		if ret and servo_id not in self.servo_info_dict.keys():
 			# 创建舵机对象
 			self.servo_info_dict[servo_id] = UartServoInfo(servo_id)
@@ -329,6 +341,8 @@ class UartServoManager:
 	def servo_scan(self, servo_id_list=[1]):
 		'''舵机扫描'''
 		for servo_id in servo_id_list:
+			# Android USB 串口链路存在抖动时，命令间稍作间隔可显著降低回包丢失
+			time.sleep(max(0.0, float(getattr(self, 'DELAY_BETWEEN_CMD', 0.001) or 0.001)))
 			# 尝试ping一下舵机
 			if self.ping(servo_id):
 				print("发现舵机: {}".format(servo_id))

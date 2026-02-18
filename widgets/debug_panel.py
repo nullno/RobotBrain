@@ -278,6 +278,15 @@ class DebugPanel(Widget):
         self._status_cards_cache = None
         self._status_cards_cache_time = 0.0
         self._status_cache_ttl = 1.2
+        self._writable_servo_ids = set()
+
+    def _mark_servo_writable(self, sid):
+        try:
+            sid = int(sid)
+            if sid > 0:
+                self._writable_servo_ids.add(sid)
+        except Exception:
+            pass
 
     # ---------------- TAB 样式 ----------------
     def _style_tab(self, tab):
@@ -791,6 +800,7 @@ class DebugPanel(Widget):
 
         app = App.get_running_app()
         mgr = getattr(app, "servo_bus", None)
+        writable_ids = set(getattr(self, "_writable_servo_ids", set()) or set())
 
         cards = []
         if not mgr or getattr(mgr, "is_mock", False):
@@ -800,6 +810,20 @@ class DebugPanel(Widget):
         else:
             mgr = app.servo_bus.manager
             known_ids = set(getattr(mgr, "servo_info_dict", {}).keys())
+
+            # 读回链路不稳定时，尽量用 ping 补一次在线列表
+            if not known_ids:
+                try:
+                    probe_ids = sorted(writable_ids) if writable_ids else list(range(1, 26))
+                    for sid in probe_ids:
+                        try:
+                            if mgr.ping(int(sid)):
+                                known_ids.add(int(sid))
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
             max_known = max(known_ids) if known_ids else 25
             max_id = max(max_known, getattr(mgr, "max_id", 25))
 
@@ -823,6 +847,10 @@ class DebugPanel(Widget):
                     except Exception:
                         data = None
                         online = False
+                elif sid in writable_ids:
+                    # 写通道可用但读回失败：仍标记为在线（读值未知）
+                    online = True
+                    data = dict(pos="?", temp="?", volt="?", torque=None)
                 cards.append((sid, data, online))
 
         self._status_cards_cache = list(cards)
@@ -1498,6 +1526,7 @@ class DebugPanel(Widget):
                         dur = 500
                     
                     mgr.set_position_time(sid, pos, time_ms=dur)
+                    self._mark_servo_writable(sid)
                     msg = f"ID {sid} 转到 {angle_deg}° ({dur}ms)"
                     Clock.schedule_once(lambda dt, m=msg: self._show_info_popup(m))
                 except Exception as e:
@@ -1532,7 +1561,23 @@ class DebugPanel(Widget):
                     pos = mgr.read_data_by_name(sid, "CURRENT_POSITION")
                     temp = mgr.read_data_by_name(sid, "CURRENT_TEMPERATURE")
                     volt = mgr.read_data_by_name(sid, "CURRENT_VOLTAGE")
-                    msg = f"ID {sid} -> pos:{pos} temp:{temp}C volt:{volt}V"
+
+                    if pos is None and temp is None and volt is None:
+                        ping_ok = False
+                        try:
+                            ping_ok = bool(mgr.ping(sid))
+                        except Exception:
+                            ping_ok = False
+
+                        if ping_ok:
+                            self._mark_servo_writable(sid)
+                            msg = f"ID {sid} 在线，但读回不可用（当前链路仅写入稳定）"
+                        elif sid in set(getattr(self, "_writable_servo_ids", set()) or set()):
+                            msg = f"ID {sid} 可控制，但读取状态不可用（请以动作为准）"
+                        else:
+                            msg = f"ID {sid} 读取失败：未收到返回数据"
+                    else:
+                        msg = f"ID {sid} -> pos:{pos} temp:{temp}C volt:{volt}V"
                     Clock.schedule_once(lambda dt, m=msg: self._show_info_popup(m))
                 except Exception as e:
                     msg = f"读取失败: {e}"
@@ -1574,6 +1619,7 @@ class DebugPanel(Widget):
                 cur = mgr.read_data_by_name(sid, "TORQUE_ENABLE")
                 new = 0x01 if not cur else 0x00
                 mgr.write_data_by_name(sid, "TORQUE_ENABLE", new)
+                self._mark_servo_writable(sid)
                 Clock.schedule_once(lambda dt: _update_torque_label(), 0.2)
                 self._show_info_popup("已切换扭矩")
             except Exception as ex:
@@ -1602,6 +1648,7 @@ class DebugPanel(Widget):
 
             stop_flag = {"running": True}
             self._spin_controllers[sid] = stop_flag
+            self._mark_servo_writable(sid)
 
             def _run_spin():
                 mgr = app.servo_bus.manager

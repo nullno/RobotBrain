@@ -154,6 +154,8 @@ def open_first_usb_serial(baud=115200, open_timeout_ms=1000, prefer_device_id=No
                 self._port = port
                 self._conn = connection
                 self._lock = threading.Lock()
+                # Android USB Host 栈抖动较大，适度放宽单次 read 超时有助于收齐应答帧
+                self._read_timeout_ms = 60
 
             def write(self, data):
                 try:
@@ -169,7 +171,7 @@ def open_first_usb_serial(baud=115200, open_timeout_ms=1000, prefer_device_id=No
                 try:
                     # 读取当前可用的数据（短超时以保证非阻塞返回）
                     with self._lock:
-                        data = self._port.read(4096, 20)
+                        data = self._port.read(4096, int(self._read_timeout_ms))
                     if data is None:
                         return b''
                     try:

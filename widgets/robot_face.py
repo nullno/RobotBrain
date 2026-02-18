@@ -2,12 +2,18 @@ import math
 import random
 from kivy.uix.widget import Widget
 from kivy.clock import Clock
+from kivy.metrics import dp
+from kivy.utils import platform
 from kivy.graphics import (
     Color,
     RoundedRectangle,
     Line,
     Ellipse,
     Rectangle,
+    PushMatrix,
+    PopMatrix,
+    Rotate,
+    Scale,
     StencilPush,
     StencilUse,
     StencilPop,
@@ -344,7 +350,7 @@ class RobotFace(Widget):
 
         r, g, b = color[0], color[1], color[2]
         emo = str(emo_override or self.target_emotion)
-        glow_w, mid_w, core_w = 35, 18, 10
+        glow_w, mid_w, core_w = dp(35), dp(18), dp(10)
 
         for idx, ex in enumerate(eyes_x):
             x0 = ex + eye_w * 0.08
@@ -468,31 +474,48 @@ class RobotFace(Widget):
 
                 # 再绘制摄像头纹理（白色调保证颜色不变形）
                 Color(1, 1, 1, 1)
-                try:
-                    cam = self.camera_view
-                    if cam is not None and hasattr(cam, "get_effective_tex_coords"):
-                        tex_coords = cam.get_effective_tex_coords(tex)
-                    else:
-                        u0, v0 = tex.uvpos
-                        us, vs = tex.uvsize
-                        tex_coords = [
-                            u0,
-                            v0,
-                            u0 + us,
-                            v0,
-                            u0 + us,
-                            v0 + vs,
-                            u0,
-                            v0 + vs,
-                        ]
-                except Exception:
-                    tex_coords = None
-                RoundedRectangle(
-                    texture=tex,
-                    pos=(ex - ox + shift_x, eye_y - oy + shift_y),
-                    size=(draw_w, draw_h),
-                    tex_coords=tex_coords,
-                )
+                draw_pos = (ex - ox + shift_x, eye_y - oy + shift_y)
+                draw_size = (draw_w, draw_h)
+
+                if platform == "android":
+                    angle, sx, sy = self._get_android_camera_geom_transform()
+                    cx = ex + eye_w * 0.5 + shift_x
+                    cy = eye_y + eye_h * 0.5 + shift_y
+                    PushMatrix()
+                    Rotate(angle=angle, origin=(cx, cy))
+                    Scale(x=sx, y=sy, z=1.0, origin=(cx, cy))
+                    RoundedRectangle(
+                        texture=tex,
+                        pos=draw_pos,
+                        size=draw_size,
+                    )
+                    PopMatrix()
+                else:
+                    try:
+                        cam = self.camera_view
+                        if cam is not None and hasattr(cam, "get_effective_tex_coords"):
+                            tex_coords = cam.get_effective_tex_coords(tex)
+                        else:
+                            u0, v0 = tex.uvpos
+                            us, vs = tex.uvsize
+                            tex_coords = [
+                                u0,
+                                v0,
+                                u0 + us,
+                                v0,
+                                u0 + us,
+                                v0 + vs,
+                                u0,
+                                v0 + vs,
+                            ]
+                    except Exception:
+                        tex_coords = None
+                    RoundedRectangle(
+                        texture=tex,
+                        pos=draw_pos,
+                        size=draw_size,
+                        tex_coords=tex_coords,
+                    )
             else:
                 self._draw_robot_eye_base(ex, eye_y, eye_w, eye_h, base_color)
 
@@ -513,19 +536,19 @@ class RobotFace(Widget):
             Color(r_col, g_col, b_col, 0.18)
             Line(
                 rounded_rectangle=(ex - 6, eye_y - 6, eye_w + 12, eye_h + 12, 44),
-                width=20,
+                width=dp(20),
             )
             # 中层光晕
             Color(r_col, g_col, b_col, 0.34)
             Line(
                 rounded_rectangle=(ex - 4, eye_y - 4, eye_w + 8, eye_h + 8, 42),
-                width=10,
+                width=dp(10),
             )
             # 核心轮廓线（更粗）
             Color(r_col, g_col, b_col, 1.0)
             Line(
                 rounded_rectangle=(ex - 3, eye_y - 3, eye_w + 6, eye_h + 6, 40),
-                width=3.5,
+                width=dp(3.5),
             )
 
         # 如果有说话字母，显示在嘴部上方靠中间位置
@@ -540,6 +563,24 @@ class RobotFace(Widget):
                 Rectangle(texture=tex, pos=(tx, ty), size=tex.size)
             except Exception:
                 pass
+
+    def _get_android_camera_geom_transform(self):
+        """Android 纹理兜底几何变换：避免部分设备 tex_coords 不生效。"""
+        try:
+            mode = "rotate180"
+            cam = self.camera_view
+            if cam is not None and hasattr(cam, "get_android_front_fix_mode"):
+                mode = str(cam.get_android_front_fix_mode() or "rotate180").lower()
+
+            if mode in ("rotate180", "180", "default"):
+                return 180.0, 1.0, 1.0
+            if mode in ("vflip", "vertical"):
+                return 0.0, 1.0, -1.0
+            if mode in ("hflip", "horizontal"):
+                return 0.0, -1.0, 1.0
+            return 0.0, 1.0, 1.0
+        except Exception:
+            return 180.0, 1.0, 1.0
 
     # ---------- 无摄像头眼睛底图 ----------
     def _draw_robot_eye_base(self, ex, ey, ew, eh, color):
@@ -602,7 +643,7 @@ class RobotFace(Widget):
         left_bias = -smile_bias
         right_bias = smile_bias
 
-        G_W, M_W, C_W = 35, 18, 10
+        G_W, M_W, C_W = dp(35), dp(18), dp(10)
 
         emo = str(emo_override or self.target_emotion)
         open_amt = min(1.2, self.mouth_open + (0.08 if self.talking else 0.0))
