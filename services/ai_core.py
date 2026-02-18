@@ -13,6 +13,21 @@ from kivy.event import EventDispatcher
 from kivy.logger import Logger
 from kivy.utils import platform
 
+if platform == "android":
+    try:
+        from jnius import autoclass, PythonJavaClass, java_method
+        from android.runnable import run_on_ui_thread
+    except Exception:
+        autoclass = None
+        PythonJavaClass = None
+        java_method = None
+        run_on_ui_thread = None
+else:
+    autoclass = None
+    PythonJavaClass = None
+    java_method = None
+    run_on_ui_thread = None
+
 
 @dataclass
 class ModelProfile:
@@ -22,6 +37,61 @@ class ModelProfile:
     vision_model: str
     api_key_env: str = "ROBOTBRAIN_LLM_API_KEY"
     timeout_sec: int = 60
+
+
+if platform == "android" and PythonJavaClass is not None and java_method is not None:
+    class _AndroidRecognitionListener(PythonJavaClass):
+        __javainterfaces__ = ["android/speech/RecognitionListener"]
+        __javacontext__ = "app"
+
+        def __init__(self, owner):
+            super().__init__()
+            self._owner = owner
+
+        @java_method("(Landroid/os/Bundle;)V")
+        def onReadyForSpeech(self, params):
+            pass
+
+        @java_method("()V")
+        def onBeginningOfSpeech(self):
+            pass
+
+        @java_method("(F)V")
+        def onRmsChanged(self, rmsdB):
+            pass
+
+        @java_method("([B)V")
+        def onBufferReceived(self, buffer):
+            pass
+
+        @java_method("()V")
+        def onEndOfSpeech(self):
+            pass
+
+        @java_method("(I)V")
+        def onError(self, error):
+            try:
+                self._owner._on_android_stt_error(int(error))
+            except Exception:
+                pass
+
+        @java_method("(Landroid/os/Bundle;)V")
+        def onResults(self, results):
+            try:
+                self._owner._on_android_stt_results(results, is_final=True)
+            except Exception:
+                pass
+
+        @java_method("(Landroid/os/Bundle;)V")
+        def onPartialResults(self, partialResults):
+            try:
+                self._owner._on_android_stt_results(partialResults, is_final=False)
+            except Exception:
+                pass
+
+        @java_method("(ILandroid/os/Bundle;)V")
+        def onEvent(self, eventType, params):
+            pass
 
 
 class VoiceAI(EventDispatcher):
@@ -43,6 +113,11 @@ class VoiceAI(EventDispatcher):
         self._voice_stop_listener = None
         self._voice_thread = None
         self._voice_running = False
+        self._android_speech_recognizer = None
+        self._android_recognition_listener = None
+        self._android_recognizer_intent = None
+        self._android_listen_start_ts = 0.0
+        self._android_sr_cls = None
         self._stt_ignore_until = 0.0
         self._perf = {
             "stt_wait_ms": 0,
@@ -182,6 +257,8 @@ class VoiceAI(EventDispatcher):
             except Exception:
                 pass
 
+            return self._start_voice_capture_android(language=language)
+
         try:
             import speech_recognition as sr
         except Exception:
@@ -288,9 +365,146 @@ class VoiceAI(EventDispatcher):
             self._voice_running = False
             return False
 
+    def _start_voice_capture_android(self, language="zh-CN"):
+        if platform != "android":
+            return False
+        if autoclass is None or run_on_ui_thread is None:
+            self.last_voice_error = "Android 语音识别依赖未就绪（pyjnius/android.runnable）"
+            Logger.warning(f"AI: {self.last_voice_error}")
+            return False
+
+        try:
+            SpeechRecognizer = autoclass("android.speech.SpeechRecognizer")
+            RecognizerIntent = autoclass("android.speech.RecognizerIntent")
+            Intent = autoclass("android.content.Intent")
+            PythonActivity = autoclass("org.kivy.android.PythonActivity")
+            activity = PythonActivity.mActivity
+
+            if not SpeechRecognizer.isRecognitionAvailable(activity):
+                self.last_voice_error = "设备不支持 Android SpeechRecognizer"
+                Logger.warning(f"AI: {self.last_voice_error}")
+                return False
+
+            self._android_sr_cls = SpeechRecognizer
+            if self._android_recognition_listener is None:
+                self._android_recognition_listener = _AndroidRecognitionListener(self)
+
+            if self._android_speech_recognizer is None:
+                self._android_speech_recognizer = SpeechRecognizer.createSpeechRecognizer(activity)
+            self._android_speech_recognizer.setRecognitionListener(self._android_recognition_listener)
+
+            intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, str(language or "zh-CN"))
+            intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, True)
+            intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            try:
+                intent.putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, activity.getPackageName())
+            except Exception:
+                pass
+            self._android_recognizer_intent = intent
+
+            self._voice_running = True
+            self._dispatch_speech_on_main("[系统] 对话已开始，请直接说话。")
+            self._android_start_listening(delay_sec=0.0)
+            Logger.info("AI: Android voice capture started.")
+            return True
+        except Exception as e:
+            self.last_voice_error = f"Android 语音识别启动失败: {e}"
+            Logger.error(f"AI: {self.last_voice_error}")
+            self._voice_running = False
+            return False
+
+    def _android_start_listening(self, delay_sec=0.0):
+        if platform != "android":
+            return
+
+        def _kick(_dt):
+            if (not self._voice_running) or self._android_speech_recognizer is None:
+                return
+
+            if time.time() < float(getattr(self, "_stt_ignore_until", 0.0) or 0.0):
+                Clock.schedule_once(lambda _d: self._android_start_listening(0.2), 0.2)
+                return
+
+            self._android_listen_start_ts = time.time()
+
+            @run_on_ui_thread
+            def _do_start():
+                try:
+                    self._android_speech_recognizer.cancel()
+                except Exception:
+                    pass
+                try:
+                    self._android_speech_recognizer.startListening(self._android_recognizer_intent)
+                except Exception as e:
+                    self.last_voice_error = f"Android 开始监听失败: {e}"
+                    Logger.warning(f"AI: {self.last_voice_error}")
+                    Clock.schedule_once(lambda _d: self._android_start_listening(0.35), 0.35)
+
+            _do_start()
+
+        Clock.schedule_once(_kick, max(0.0, float(delay_sec)))
+
+    def _on_android_stt_results(self, results_bundle, is_final=True):
+        if (not self._voice_running) or results_bundle is None:
+            return
+
+        if time.time() < float(getattr(self, "_stt_ignore_until", 0.0) or 0.0):
+            if is_final:
+                self._android_start_listening(delay_sec=0.2)
+            return
+
+        text = ""
+        try:
+            key = getattr(self._android_sr_cls, "RESULTS_RECOGNITION", "results_recognition")
+            arr = results_bundle.getStringArrayList(key)
+            if arr and arr.size() > 0:
+                text = str(arr.get(0) or "").strip()
+        except Exception:
+            text = ""
+
+        if text:
+            now = time.time()
+            stt_ms = int(max(0.0, (now - float(self._android_listen_start_ts or now)) * 1000.0))
+            self._perf["stt_wait_ms"] = 0
+            self._perf["stt_rec_ms"] = max(0, stt_ms)
+            self._perf["updated_at"] = now
+
+            if is_final:
+                try:
+                    Logger.info(f"AI STT(Android): {text}")
+                except Exception:
+                    pass
+                self._dispatch_speech_on_main(f"[我] {text}")
+                self.send_realtime_text(text, is_final=True)
+            else:
+                self.send_realtime_text(text, is_final=False, debounce_sec=0.35)
+
+        if is_final:
+            self._android_start_listening(delay_sec=0.08)
+
+    def _on_android_stt_error(self, error_code):
+        if not self._voice_running:
+            return
+
+        # 常见可恢复错误不提示用户，直接重启监听
+        no_match = int(getattr(self._android_sr_cls, "ERROR_NO_MATCH", 7) or 7)
+        timeout = int(getattr(self._android_sr_cls, "ERROR_SPEECH_TIMEOUT", 6) or 6)
+        busy = int(getattr(self._android_sr_cls, "ERROR_RECOGNIZER_BUSY", 8) or 8)
+        if int(error_code) in (no_match, timeout, busy):
+            self._android_start_listening(delay_sec=0.18)
+            return
+
+        self.last_voice_error = f"Android 语音识别错误码: {error_code}"
+        Logger.warning(f"AI: {self.last_voice_error}")
+        self._android_start_listening(delay_sec=0.35)
+
     def stop_voice_capture(self):
         try:
             self._voice_running = False
+            if platform == "android":
+                self._stop_voice_capture_android()
             if self._voice_stop_listener:
                 self._voice_stop_listener(wait_for_stop=False)
             self._voice_stop_listener = None
@@ -303,6 +517,35 @@ class VoiceAI(EventDispatcher):
         except Exception as e:
             self.last_voice_error = str(e)
             return False
+
+    def _stop_voice_capture_android(self):
+        if platform != "android" or self._android_speech_recognizer is None:
+            return
+
+        if run_on_ui_thread is None:
+            return
+
+        recognizer = self._android_speech_recognizer
+        self._android_speech_recognizer = None
+        self._android_recognizer_intent = None
+        self._android_recognition_listener = None
+
+        @run_on_ui_thread
+        def _do_stop():
+            try:
+                recognizer.stopListening()
+            except Exception:
+                pass
+            try:
+                recognizer.cancel()
+            except Exception:
+                pass
+            try:
+                recognizer.destroy()
+            except Exception:
+                pass
+
+        _do_stop()
 
     def get_last_voice_error(self):
         return str(self.last_voice_error or "")

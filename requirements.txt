@@ -5,5 +5,5 @@ pyserial>=3.5
 requests>=2.31.0
 SpeechRecognition>=3.10.0
 PyAudio>=0.2.14; platform_system != "Android"
-edge-tts>=6.1.12
-pygame>=2.5.2
+edge-tts>=6.1.12; platform_system != "Android"
+pygame>=2.5.2; platform_system != "Android"

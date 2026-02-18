@@ -15,7 +15,7 @@ version = 0.1
 # - plyer: 跨平台设备功能API
 # - requests: HTTP库
 # - opencv, numpy: 视觉处理
-requirements = python3,kivy==2.3.0,pyjnius,plyer,requests,pyserial,edge-tts,pygame
+requirements = python3,kivy==2.3.0,pyjnius,plyer,requests,pyserial
 
 # UI配置
 fullscreen = 1

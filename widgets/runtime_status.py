@@ -48,7 +48,7 @@ class RuntimeStatusPanel(BoxLayout):
         # UI 尺寸设置
         self._expanded_width = dp(280)
         self._expanded_height = dp(100)
-        self._collapsed_width = dp(180)
+        self._collapsed_width = dp(220)
         self._collapsed_height = dp(32)
         self._expanded = True
         self.width = self._expanded_width

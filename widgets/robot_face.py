@@ -15,12 +15,6 @@ from kivy.graphics import (
 )
 from app.theme import COLORS, FONT
 from kivy.core.text import Label as CoreLabel
-from kivy.uix.popup import Popup
-from kivy.uix.textinput import TextInput
-from kivy.uix.anchorlayout import AnchorLayout
-from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.button import Button
-from kivy.app import App
 from widgets.runtime_status import RuntimeStatusLogger
 
 
@@ -33,6 +27,8 @@ class RobotFace(Widget):
         self._emotion_blend = 1.0
         self.camera_view = None
         self.eye_scale = 1.0
+        # 面部垂直居中偏移（+上移，-下移），单位为组件高度比例
+        self.face_center_bias = 0.0
 
         # ===== 动画状态 =====
         self.eye_open = 1.0
@@ -164,54 +160,6 @@ class RobotFace(Widget):
         self._speech_texture_cached = None
         self._speech_clear_ev = None
         self.request_draw(force=True)
-
-    # def on_touch_down(self, touch):
-    #     # 点击脸部弹出一个简易对话输入框，用于测试 AI 对话
-    #     if self.collide_point(*touch.pos):
-    #         self._open_ai_input()
-    #         return True
-    #     return super().on_touch_down(touch)
-
-    def _open_ai_input(self):
-        layout = BoxLayout(orientation="vertical", spacing=8, padding=8)
-        ti = TextInput(
-            hint_text="对机器人说些什么...",
-            size_hint=(1, None),
-            height=120,
-            multiline=True,
-            font_name=FONT,
-        )
-        btn_bar = BoxLayout(size_hint=(1, None), height=40)
-        send = Button(text="发送")
-        cancel = Button(text="取消")
-        btn_bar.add_widget(cancel)
-        btn_bar.add_widget(send)
-        layout.add_widget(ti)
-        layout.add_widget(btn_bar)
-
-        popup = Popup(
-            title="与机器人对话",
-            content=layout,
-            size_hint=(0.9, None),
-            height=240,
-            background="",
-            background_color=(0, 0, 0, 0),
-        )
-
-        def _send(*args):
-            txt = ti.text.strip()
-            if txt:
-                try:
-                    app = App.get_running_app()
-                    if hasattr(app, "ai_core") and app.ai_core:
-                        app.ai_core.process_input(user_text=txt)
-                except Exception:
-                    pass
-            popup.dismiss()
-
-        send.bind(on_release=_send)
-        cancel.bind(on_release=lambda *a: popup.dismiss())
-        popup.open()
 
     # ================= 外部接口 =================
     def set_emotion(self, emo):
@@ -391,7 +339,8 @@ class RobotFace(Widget):
 
         eye_w, eye_h = w * 0.28, h * 0.5 * self.eye_scale
         eyes_x = [x + w * 0.15, x + w * 0.57]
-        eye_y = y + h * 0.35
+        center_offset = h * float(getattr(self, "face_center_bias", 0.0) or 0.0)
+        eye_y = y + h * 0.31 + center_offset
 
         r, g, b = color[0], color[1], color[2]
         emo = str(emo_override or self.target_emotion)
@@ -404,7 +353,7 @@ class RobotFace(Widget):
 
             talk_raise = self.mouth_open * h * 0.012 if self.talking else 0.0
             eye_squeeze = (1.0 - max(0.0, min(1.0, self.eye_open))) * h * 0.004
-            brow_base_y = eye_y + eye_h + h * 0.09 - self.look_y * eye_h * 0.06 + talk_raise - eye_squeeze
+            brow_base_y = eye_y + eye_h + h * 0.2 - self.look_y * eye_h * 0.06 + talk_raise - eye_squeeze
             breath_jitter = math.sin(self.breath + idx * 0.8) * h * 0.004
             gaze_tilt = self.look_x * h * 0.008
 
@@ -489,7 +438,8 @@ class RobotFace(Widget):
     def _draw_eyes(self, x, y, w, h, base_color):
         eye_w, eye_h = w * 0.28, h * 0.5 * self.eye_scale
         eyes_x = [x + w * 0.15, x + w * 0.57]
-        eye_y = y + h * 0.35
+        center_offset = h * float(getattr(self, "face_center_bias", 0.0) or 0.0)
+        eye_y = y + h * 0.31 + center_offset
 
         tex = None
         if self.camera_view and self.camera_view.texture:
@@ -642,10 +592,11 @@ class RobotFace(Widget):
             return
 
         r, g, b = color[0], color[1], color[2]
+        center_offset = h * float(getattr(self, "face_center_bias", 0.0) or 0.0)
         talk_boost = self.mouth_open * h * 0.012 if self.talking else 0.0
         breath_bob = math.sin(self.breath * 1.4) * h * 0.006
         mx = x + w * 0.4 + self.look_x * w * 0.01
-        my = y + h * 0.05 + talk_boost + breath_bob
+        my = y + h * 0.02 + center_offset + talk_boost + breath_bob
         mw = w * 0.2
         smile_bias = self.look_x * h * 0.015
         left_bias = -smile_bias

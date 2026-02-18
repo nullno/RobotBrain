@@ -6,6 +6,7 @@ import asyncio
 import tempfile
 
 from kivy.clock import Clock
+from kivy.utils import platform as _kivy_platform
 
 
 def on_ai_action(app, instance, action, emotion):
@@ -176,14 +177,47 @@ def _speak_once(app, txt):
             ai_core._stt_ignore_until = time.time() + estimate + 0.4
     except Exception:
         pass
+    if _try_android_tts(app, txt):
+        return
+
     if _try_edge_tts(app, txt):
         return
 
-    app._tts_channel = "edge-tts-failed"
+    app._tts_channel = "tts-failed"
     print(f"AI says: {txt}")
 
 
+def _try_android_tts(app, txt):
+    if _kivy_platform != "android":
+        return False
+
+    try:
+        tts_start = time.time()
+        from plyer import tts
+
+        tts.speak(txt)
+
+        # plyer/Android TTS 为异步接口，按文本长度做阻塞估计，避免队列语音重叠
+        estimate_sec = min(9.0, max(1.2, len(str(txt or "")) / 5.0))
+        time.sleep(estimate_sec)
+
+        app._tts_channel = "android-system-tts"
+        app._tts_last_error = ""
+        app._tts_last_ms = int((time.time() - tts_start) * 1000)
+        return True
+    except Exception as e:
+        try:
+            app._tts_last_error = f"android-tts: {e}"
+            app._tts_last_ms = -1
+        except Exception:
+            pass
+        print(f"TTS (android system) failed: {e}")
+        return False
+
+
 def _try_edge_tts(app, txt):
+    if _kivy_platform == "android":
+        return False
     try:
         tts_start = time.time()
         import edge_tts
