@@ -12,6 +12,9 @@ class GyroPanel(Widget):
         self.pitch = 0
         self.roll = 0
         self.yaw = 0
+        self._expanded = True
+        self._expanded_hint_y = 0.1
+        self._collapsed_hint_y = 0.06
         # 增加平滑缓冲变量
         self._target_pitch = 0
         self._target_roll = 0
@@ -45,6 +48,27 @@ class GyroPanel(Widget):
 
         if changed:
             self.draw()
+
+    def on_touch_down(self, touch):
+        try:
+            if self.collide_point(*touch.pos) and bool(getattr(touch, 'is_double_tap', False)):
+                self.toggle_visible()
+                return True
+        except Exception:
+            pass
+        return super().on_touch_down(touch)
+
+    def toggle_visible(self):
+        self._expanded = not self._expanded
+        if self._expanded:
+            self.size_hint = (1, self._expanded_hint_y)
+            try:
+                RuntimeStatusLogger.log_info('顶部陀螺仪已展开（双击可隐藏）')
+            except Exception:
+                pass
+        else:
+            self.size_hint = (1, self._collapsed_hint_y)
+        self.draw()
 
     def update(self, pitch, roll, yaw=0):
         # 仅更新目标值，实际绘制由 _animate_smooth 接管
@@ -80,6 +104,9 @@ class GyroPanel(Widget):
 
     def draw(self, *args):
         self.canvas.clear()
+
+        if not self._expanded:
+            return
 
         # 新实现（小巧精致版）：去掉边框，绘制旋转的地平线以直观展示前后（pitch）和左右（roll）倾角
         from kivy.metrics import dp

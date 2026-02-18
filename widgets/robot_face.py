@@ -29,6 +29,8 @@ class RobotFace(Widget):
         super().__init__(**kwargs)
         self.emotion = "normal"
         self.target_emotion = "normal"
+        self._prev_emotion = "normal"
+        self._emotion_blend = 1.0
         self.camera_view = None
         self.eye_scale = 1.0
 
@@ -36,6 +38,7 @@ class RobotFace(Widget):
         self.eye_open = 1.0
         self.target_eye_open = 1.0
         self.mouth_open = 0.0
+        self.target_mouth_open = 0.0
         self.look_x = 0.0  # -1 ~ 1
         self.look_y = 0.0  # -1 ~ 1
         self.target_look_x = 0.0
@@ -45,6 +48,10 @@ class RobotFace(Widget):
         # 说话状态
         self.talking = False
         self._talk_event = None
+        self._talk_pattern = [(0.34, 1), (0.48, 1), (0.82, 2)]  # 短-短-长
+        self._talk_pattern_index = 0
+        self._talk_hold_remaining = 0
+        self._talk_current_level = 0.0
         self._draw_pending = False
         self._force_draw = True
         self._last_draw_snapshot = None
@@ -208,7 +215,12 @@ class RobotFace(Widget):
 
     # ================= 外部接口 =================
     def set_emotion(self, emo):
-        self.target_emotion = emo
+        new_emo = str(emo or "normal")
+        if new_emo == self.target_emotion:
+            return
+        self._prev_emotion = self.target_emotion
+        self.target_emotion = new_emo
+        self._emotion_blend = 0.0
         self.request_draw()
         # try:
         #     RuntimeStatusLogger.log_info(f"RobotFace 情绪设为: {emo}")
@@ -218,14 +230,20 @@ class RobotFace(Widget):
     def start_talking(self):
         if not self.talking:
             self.talking = True
+            self._talk_pattern_index = 0
+            self._talk_hold_remaining = 0
+            self._talk_current_level = 0.25
+            self.target_mouth_open = max(0.18, self.target_mouth_open)
             self._talk_event = Clock.schedule_interval(self._talk_step, 0.15)
+            self.request_draw()
 
     def stop_talking(self):
         self.talking = False
         if self._talk_event:
             self._talk_event.cancel()
             self._talk_event = None
-        self.mouth_open = 0.0
+        self._talk_hold_remaining = 0
+        self.target_mouth_open = 0.0
         self.request_draw()
 
     def look_at(self, x_norm, y_norm=0):
@@ -243,7 +261,35 @@ class RobotFace(Widget):
         Clock.schedule_once(lambda dt: setattr(self, "target_eye_open", 1.0), 0.15)
 
     def _talk_step(self, dt):
-        self.mouth_open = random.uniform(0.2, 1.0)
+        if self._talk_hold_remaining > 0:
+            self._talk_hold_remaining -= 1
+            base_level = self._talk_current_level
+        else:
+            base_level, hold_steps = self._talk_pattern[self._talk_pattern_index]
+            self._talk_pattern_index = (self._talk_pattern_index + 1) % len(self._talk_pattern)
+            self._talk_hold_remaining = max(0, int(hold_steps) - 1)
+            self._talk_current_level = float(base_level)
+
+        # 不同情绪的口型力度缩放
+        emo_scale = {
+            "happy": 1.05,
+            "sad": 0.88,
+            "angry": 1.1,
+            "surprised": 1.2,
+            "sleepy": 0.72,
+            "thinking": 0.86,
+            "wink": 0.92,
+        }.get(str(self.target_emotion), 1.0)
+
+        # 语流中的短停顿：模拟自然断句
+        if random.random() < 0.12:
+            target = random.uniform(0.08, 0.2)
+            self._talk_hold_remaining = 0
+        else:
+            jitter = random.uniform(-0.06, 0.06)
+            target = (base_level + jitter) * emo_scale
+
+        self.target_mouth_open = max(0.06, min(1.0, target))
         self.request_draw()
 
     def _update_breath(self, dt):
@@ -271,16 +317,173 @@ class RobotFace(Widget):
         if abs(self.eye_open - prev_eye) > 0.001:
             self.request_draw()
 
+        mouth_speed = 11 * dt
+        prev_mouth = self.mouth_open
+        self.mouth_open += (self.target_mouth_open - self.mouth_open) * mouth_speed
+        if abs(self.mouth_open - prev_mouth) > 0.001:
+            self.request_draw()
+
+        if self._emotion_blend < 1.0:
+            prev_blend = self._emotion_blend
+            self._emotion_blend = min(1.0, self._emotion_blend + dt * 5.0)
+            if abs(self._emotion_blend - prev_blend) > 0.0001:
+                self.request_draw()
+
     # ================= 主绘制 =================
     def draw(self, *args):
         self.canvas.clear()
-        base_color = COLORS.get(self.target_emotion, COLORS["primary"])
+        prev_color = COLORS.get(self._prev_emotion, COLORS["primary"])
+        target_color = COLORS.get(self.target_emotion, COLORS["primary"])
+        blend = max(0.0, min(1.0, self._emotion_blend))
+        base_color = (
+            prev_color[0] + (target_color[0] - prev_color[0]) * blend,
+            prev_color[1] + (target_color[1] - prev_color[1]) * blend,
+            prev_color[2] + (target_color[2] - prev_color[2]) * blend,
+            1.0,
+        )
         w, h = self.size
         x, y = self.pos
 
         with self.canvas:
             self._draw_eyes(x, y, w, h, base_color)
-            self._draw_mouth(x, y, w, h, base_color)
+            if self._prev_emotion != self.target_emotion and blend < 1.0:
+                self._draw_eyebrows(
+                    x,
+                    y,
+                    w,
+                    h,
+                    prev_color,
+                    emo_override=self._prev_emotion,
+                    alpha=(1.0 - blend),
+                )
+                self._draw_mouth(
+                    x,
+                    y,
+                    w,
+                    h,
+                    prev_color,
+                    emo_override=self._prev_emotion,
+                    alpha=(1.0 - blend),
+                )
+            self._draw_eyebrows(
+                x,
+                y,
+                w,
+                h,
+                target_color,
+                emo_override=self.target_emotion,
+                alpha=blend,
+            )
+            self._draw_mouth(
+                x,
+                y,
+                w,
+                h,
+                target_color,
+                emo_override=self.target_emotion,
+                alpha=blend,
+            )
+
+    def _draw_eyebrows(self, x, y, w, h, color, emo_override=None, alpha=1.0):
+        alpha = max(0.0, min(1.0, float(alpha)))
+        if alpha <= 0.001:
+            return
+
+        eye_w, eye_h = w * 0.28, h * 0.5 * self.eye_scale
+        eyes_x = [x + w * 0.15, x + w * 0.57]
+        eye_y = y + h * 0.35
+
+        r, g, b = color[0], color[1], color[2]
+        emo = str(emo_override or self.target_emotion)
+        glow_w, mid_w, core_w = 35, 18, 10
+
+        for idx, ex in enumerate(eyes_x):
+            x0 = ex + eye_w * 0.08
+            x2 = ex + eye_w * 0.92
+            x1 = (x0 + x2) * 0.5
+
+            talk_raise = self.mouth_open * h * 0.012 if self.talking else 0.0
+            eye_squeeze = (1.0 - max(0.0, min(1.0, self.eye_open))) * h * 0.004
+            brow_base_y = eye_y + eye_h + h * 0.09 - self.look_y * eye_h * 0.06 + talk_raise - eye_squeeze
+            breath_jitter = math.sin(self.breath + idx * 0.8) * h * 0.004
+            gaze_tilt = self.look_x * h * 0.008
+
+            outer_raise = 0.0
+            inner_raise = 0.0
+            arch_lift = h * 0.018
+
+            if emo == "happy":
+                outer_raise = h * 0.05
+                inner_raise = h * 0.046
+                arch_lift = h * 0.048
+            elif emo == "sad":
+                outer_raise = -h * 0.03
+                inner_raise = h * 0.052
+                arch_lift = h * 0.004
+            elif emo == "angry":
+                outer_raise = h * 0.036
+                inner_raise = -h * 0.045
+                arch_lift = h * 0.002
+            elif emo == "surprised":
+                outer_raise = h * 0.062
+                inner_raise = h * 0.062
+                arch_lift = h * 0.052
+            elif emo == "sleepy":
+                outer_raise = -h * 0.026
+                inner_raise = -h * 0.02
+                arch_lift = h * 0.002
+            elif emo == "thinking":
+                outer_raise = h * 0.008
+                inner_raise = h * 0.01
+                if idx == 1:
+                    outer_raise += h * 0.034
+                    inner_raise += h * 0.038
+                    arch_lift = h * 0.026
+                else:
+                    arch_lift = h * 0.014
+            elif emo == "wink":
+                outer_raise = h * 0.006
+                inner_raise = h * 0.006
+                wink_side = 0 if self.look_x <= 0 else 1
+                if idx == wink_side:
+                    outer_raise += h * 0.032
+                    inner_raise += h * 0.032
+                arch_lift = h * 0.018
+            else:
+                outer_raise = h * 0.004
+                inner_raise = h * 0.005
+                arch_lift = h * 0.016
+
+            if idx == 0:
+                outer_raise -= gaze_tilt * 0.4
+                inner_raise += gaze_tilt * 0.4
+            else:
+                outer_raise += gaze_tilt * 0.4
+                inner_raise -= gaze_tilt * 0.4
+
+            # 左眼：内侧在右；右眼：内侧在左
+            if idx == 0:
+                y0 = brow_base_y + outer_raise + breath_jitter
+                y2 = brow_base_y + inner_raise + breath_jitter
+            else:
+                y0 = brow_base_y + inner_raise + breath_jitter
+                y2 = brow_base_y + outer_raise + breath_jitter
+            y1 = min(y0, y2) + arch_lift
+
+            points = []
+            steps = 18
+            for i in range(steps + 1):
+                t = i / steps
+                px = (1 - t) * (1 - t) * x0 + 2 * (1 - t) * t * x1 + t * t * x2
+                py = (1 - t) * (1 - t) * y0 + 2 * (1 - t) * t * y1 + t * t * y2
+                points.extend([px, py])
+
+            Color(r, g, b, 0.16 * alpha)
+            Line(points=points, width=glow_w, cap="round", joint="round")
+            Color(r, g, b, 0.38 * alpha)
+            Line(points=points, width=mid_w, cap="round", joint="round")
+            Color(r, g, b, 1.0 * alpha)
+            Line(points=points, width=core_w, cap="round", joint="round")
 
     # ================= 眼睛系统 =================
     def _draw_eyes(self, x, y, w, h, base_color):
@@ -433,15 +636,25 @@ class RobotFace(Widget):
         RoundedRectangle(pos=(ex, ey), size=(ew, cover * 0.35), radius=[50])
 
     # ================= 嘴巴系统 =================
-    def _draw_mouth(self, x, y, w, h, color):
+    def _draw_mouth(self, x, y, w, h, color, emo_override=None, alpha=1.0):
+        alpha = max(0.0, min(1.0, float(alpha)))
+        if alpha <= 0.001:
+            return
+
         r, g, b = color[0], color[1], color[2]
-        mx, my = x + w * 0.4, y + h * 0.05
+        talk_boost = self.mouth_open * h * 0.012 if self.talking else 0.0
+        breath_bob = math.sin(self.breath * 1.4) * h * 0.006
+        mx = x + w * 0.4 + self.look_x * w * 0.01
+        my = y + h * 0.05 + talk_boost + breath_bob
         mw = w * 0.2
+        smile_bias = self.look_x * h * 0.015
+        left_bias = -smile_bias
+        right_bias = smile_bias
 
         G_W, M_W, C_W = 35, 18, 10
 
-        emo = self.target_emotion
-        open_amt = self.mouth_open
+        emo = str(emo_override or self.target_emotion)
+        open_amt = min(1.2, self.mouth_open + (0.08 if self.talking else 0.0))
 
         with self.canvas:
             pts = []
@@ -451,40 +664,42 @@ class RobotFace(Widget):
                 for i in range(steps + 1):
                     t = i / steps
                     px = mx + t * mw
-                    py = my + 25 - 70 * (4 * (t - 0.5) ** 2) - open_amt * 15
+                    side_offset = left_bias * (1 - t) + right_bias * t
+                    py = my + 25 - 70 * (4 * (t - 0.5) ** 2) - open_amt * 18 + side_offset
                     pts.extend([px, py])
 
             elif emo == "sad":
                 for i in range(steps + 1):
                     t = i / steps
                     px = mx + t * mw
-                    py = my - 25 + 70 * (4 * (t - 0.5) ** 2) + open_amt * 15
+                    side_offset = left_bias * (1 - t) + right_bias * t
+                    py = my - 25 + 70 * (4 * (t - 0.5) ** 2) + open_amt * 15 + side_offset * 0.4
                     pts.extend([px, py])
 
             elif emo == "angry":
                 pts = [
                     mx,
-                    my,
+                    my + left_bias * 0.3,
                     mx + mw * 0.3,
-                    my + 15,
+                    my + 15 + open_amt * 4,
                     mx + mw * 0.6,
-                    my - 15,
+                    my - 15 - open_amt * 4,
                     mx + mw,
-                    my,
+                    my + right_bias * 0.3,
                 ]
 
             elif emo == "surprised":
-                size = mw * (0.3 + open_amt * 0.4)
-                Color(r, g, b, 0.15)
+                size = mw * (0.34 + open_amt * 0.45)
+                Color(r, g, b, 0.15 * alpha)
                 Ellipse(
                     pos=(mx + mw * 0.5 - size / 2, my - size / 2), size=(size, size)
                 )
-                Color(r, g, b, 0.5)
+                Color(r, g, b, 0.5 * alpha)
                 Ellipse(
                     pos=(mx + mw * 0.5 - size * 0.45, my - size * 0.45),
                     size=(size * 0.9, size * 0.9),
                 )
-                Color(r, g, b, 1.0)
+                Color(r, g, b, 1.0 * alpha)
                 Ellipse(
                     pos=(mx + mw * 0.5 - size * 0.35, my - size * 0.35),
                     size=(size * 0.7, size * 0.7),
@@ -492,24 +707,32 @@ class RobotFace(Widget):
                 return
 
             elif emo == "sleepy":
-                pts = [mx, my, mx + mw, my]
+                pts = [mx, my - 4, mx + mw, my + right_bias * 0.2 - 4]
 
             elif emo == "thinking":
                 for i in range(steps + 1):
                     t = i / steps
                     px = mx + t * mw
-                    py = my + math.sin(t * 2.5 * math.pi * 2) * 15
+                    side_offset = left_bias * (1 - t) + right_bias * t
+                    py = my + math.sin(t * 2.5 * math.pi * 2) * 12 + side_offset * 0.55
                     pts.extend([px, py])
 
             elif emo == "wink":
-                pts = [mx, my, mx + mw * 0.4, my + 8, mx + mw * 0.8, my]
+                pts = [
+                    mx,
+                    my + left_bias * 0.25,
+                    mx + mw * 0.4,
+                    my + 10 + open_amt * 4,
+                    mx + mw * 0.8,
+                    my + right_bias * 0.25,
+                ]
 
             else:
-                pts = [mx, my, mx + mw, my]
+                pts = [mx, my + left_bias * 0.2, mx + mw, my + right_bias * 0.2]
 
-            Color(r, g, b, 0.15)
+            Color(r, g, b, 0.15 * alpha)
             Line(points=pts, width=G_W, cap="round", joint="round")
-            Color(r, g, b, 0.4)
+            Color(r, g, b, 0.4 * alpha)
             Line(points=pts, width=M_W, cap="round", joint="round")
-            Color(r, g, b, 1.0)
+            Color(r, g, b, 1.0 * alpha)
             Line(points=pts, width=C_W, cap="round", joint="round")

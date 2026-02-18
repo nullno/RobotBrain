@@ -44,10 +44,15 @@ def _pick_emoji_font():
 class RuntimeStatusPanel(BoxLayout):
     def __init__(self, **kwargs):
         super().__init__(orientation='vertical', size_hint=(None, None), **kwargs)
-        
+
         # UI 尺寸设置
-        self.width = dp(280)
-        self.height = dp(100)
+        self._expanded_width = dp(280)
+        self._expanded_height = dp(100)
+        self._collapsed_width = dp(180)
+        self._collapsed_height = dp(32)
+        self._expanded = True
+        self.width = self._expanded_width
+        self.height = self._expanded_height
         
         # 日志缓冲（最多保留最近的 80 条）
         self.logs = deque(maxlen=80)
@@ -107,6 +112,31 @@ class RuntimeStatusPanel(BoxLayout):
         
         # 启动日志刷新定时器（仅在内容变化时刷新）
         Clock.schedule_interval(self._refresh_display, 0.25)
+
+    def on_touch_down(self, touch):
+        try:
+            if self.collide_point(*touch.pos) and bool(getattr(touch, 'is_double_tap', False)):
+                self.toggle_visible()
+                return True
+        except Exception:
+            pass
+        return super().on_touch_down(touch)
+
+    def toggle_visible(self):
+        self._expanded = not self._expanded
+        if self._expanded:
+            self.width = self._expanded_width
+            self.height = self._expanded_height
+            self.log_label.text_size = (dp(270), None)
+            self.scroll_view.opacity = 1.0
+            self.scroll_view.disabled = False
+            self._dirty = True
+            RuntimeStatusLogger.log_info('日志面板已展开（双击可隐藏）')
+        else:
+            self.width = self._collapsed_width
+            self.height = self._collapsed_height
+            self.scroll_view.opacity = 0.0
+            self.scroll_view.disabled = True
     
     def add_log(self, message: str, category: str = 'info'):
         """
@@ -146,6 +176,9 @@ class RuntimeStatusPanel(BoxLayout):
     
     def _refresh_display(self, dt):
         """定时刷新显示"""
+        if not self._expanded:
+            return
+
         with self._lock:
             if not self._dirty:
                 return
