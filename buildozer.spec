@@ -36,7 +36,6 @@ android.wakelock = True
 
 # 打包优化
 # android.add_src = 
-p4a.extra_args = --release
 
 # 自动接受SDK许可
 android.accept_sdk_license = True
@@ -74,5 +73,5 @@ android.privacy_policy =
 
 
 [buildozer]
-log_level = 1
+log_level = 2
 warn_on_root = 0
