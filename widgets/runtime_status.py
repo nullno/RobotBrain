@@ -111,7 +111,8 @@ class RuntimeStatusPanel(BoxLayout):
         self.add_widget(self.scroll_view)
         
         # 启动日志刷新定时器（仅在内容变化时刷新）
-        Clock.schedule_interval(self._refresh_display, 0.25)
+        refresh_interval = 0.45 if _kivy_platform == 'android' else 0.25
+        Clock.schedule_interval(self._refresh_display, refresh_interval)
 
     def on_touch_down(self, touch):
         try:

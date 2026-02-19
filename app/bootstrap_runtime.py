@@ -231,9 +231,41 @@ def init_motion_controller(app, neutral):
 
 def init_runtime_loops(app):
     app._demo_step = 0
-    Clock.schedule_interval(app._update_loop, 0.1)
-    Clock.schedule_interval(app._demo_emotion_loop, 4.0)
-    eye_move_interval = 0.08
+
+    # 运行时性能档位：mobile(默认安卓) / desktop
+    runtime_profile = str(getattr(app, "_runtime_profile", "")).strip().lower()
+    if not runtime_profile:
+        runtime_profile = "mobile" if platform == "android" else "desktop"
+    app._runtime_profile = runtime_profile
+
+    update_interval = 0.12 if runtime_profile == "mobile" else 0.1
+    Clock.schedule_interval(app._update_loop, update_interval)
+
+    if runtime_profile == "mobile":
+        app._gyro_ui_period = float(getattr(app, "_gyro_ui_period", 0.22) or 0.22)
+        app._sync_compute_pose_threshold_deg = float(
+            getattr(app, "_sync_compute_pose_threshold_deg", 0.22) or 0.22
+        )
+        app._sync_compute_idle_period = float(
+            getattr(app, "_sync_compute_idle_period", 0.35) or 0.35
+        )
+    else:
+        app._gyro_ui_period = float(getattr(app, "_gyro_ui_period", 0.12) or 0.12)
+        app._sync_compute_pose_threshold_deg = float(
+            getattr(app, "_sync_compute_pose_threshold_deg", 0.16) or 0.16
+        )
+        app._sync_compute_idle_period = float(
+            getattr(app, "_sync_compute_idle_period", 0.22) or 0.22
+        )
+
+    # 发布/移动端默认关闭演示表情循环，减少主线程和 GPU 抢占
+    enable_demo_face_loop = bool(
+        getattr(app, "_enable_demo_face_loop", runtime_profile != "mobile")
+    )
+    if enable_demo_face_loop:
+        Clock.schedule_interval(app._demo_emotion_loop, 4.0)
+
+    eye_move_interval = 0.14 if runtime_profile == "mobile" else 0.08
     Clock.schedule_interval(app._demo_eye_move, eye_move_interval)
 
     app._last_loop_error = None

@@ -12,7 +12,7 @@ def balance_tuning_file(app):
 
 
 def save_balance_tuning(app):
-    """持久化当前平衡参数（gain_p/gain_r）与陀螺仪轴映射模式。"""
+    """持久化平衡参数、轴映射与性能调优参数。"""
     try:
         bc = getattr(app, "balance_ctrl", None)
         if not bc:
@@ -26,6 +26,14 @@ def save_balance_tuning(app):
             "gain_p": float(getattr(bc, "gain_p", 5.5)),
             "gain_r": float(getattr(bc, "gain_r", 4.2)),
             "gyro_axis_mode": axis_mode,
+            "gyro_ui_period": float(getattr(app, "_gyro_ui_period", 0.2) or 0.2),
+            "sync_compute_pose_threshold_deg": float(
+                getattr(app, "_sync_compute_pose_threshold_deg", 0.2) or 0.2
+            ),
+            "sync_compute_idle_period": float(
+                getattr(app, "_sync_compute_idle_period", getattr(app, "_sync_idle_period", 0.22))
+                or getattr(app, "_sync_idle_period", 0.22)
+            ),
         }
         with open(fp, "w", encoding="utf8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -35,7 +43,7 @@ def save_balance_tuning(app):
 
 
 def load_balance_tuning(app):
-    """加载并应用持久化的平衡参数与陀螺仪轴映射。"""
+    """加载并应用平衡参数、轴映射与性能调优参数。"""
     try:
         bc = getattr(app, "balance_ctrl", None)
         if not bc:
@@ -57,11 +65,29 @@ def load_balance_tuning(app):
         bc.gain_r = gr
         app._gyro_axis_mode = axis_mode
         app._gyro_axis_mode_logged = axis_mode
+        app._gyro_ui_period = float(obj.get("gyro_ui_period", getattr(app, "_gyro_ui_period", 0.2)) or 0.2)
+        app._sync_compute_pose_threshold_deg = float(
+            obj.get(
+                "sync_compute_pose_threshold_deg",
+                getattr(app, "_sync_compute_pose_threshold_deg", 0.2),
+            )
+            or 0.2
+        )
+        app._sync_compute_idle_period = float(
+            obj.get(
+                "sync_compute_idle_period",
+                getattr(app, "_sync_compute_idle_period", getattr(app, "_sync_idle_period", 0.22)),
+            )
+            or getattr(app, "_sync_idle_period", 0.22)
+        )
         if axis_mode == "auto":
             app._gyro_axis_samples = 0
         try:
             RuntimeStatusLogger.log_info(
-                f"已加载平衡参数: gain_p={gp:.2f}, gain_r={gr:.2f}, axis={axis_mode}"
+                "已加载平衡参数: "
+                f"gain_p={gp:.2f}, gain_r={gr:.2f}, axis={axis_mode}, "
+                f"ui={float(getattr(app, '_gyro_ui_period', 0.2)):.2f}s, "
+                f"compute={float(getattr(app, '_sync_compute_idle_period', 0.22)):.2f}s"
             )
         except Exception:
             pass

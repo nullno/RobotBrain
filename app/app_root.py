@@ -36,6 +36,26 @@ run_on_ui_thread = platform_runtime.get_run_on_ui_thread()
 
 
 class RobotDashboardApp(App):
+    def _targets_changed(self, new_targets, old_targets, threshold=3):
+        try:
+            if not isinstance(new_targets, dict) or not isinstance(old_targets, dict):
+                return True
+            if new_targets.keys() != old_targets.keys():
+                return True
+            th = int(max(0, threshold))
+            for sid, new_pos in new_targets.items():
+                old_pos = old_targets.get(sid)
+                if old_pos is None:
+                    return True
+                try:
+                    if abs(int(new_pos) - int(old_pos)) > th:
+                        return True
+                except Exception:
+                    return True
+            return False
+        except Exception:
+            return True
+
     # ================== UI / 状态代理 ==================
     def _update_usb_state(self, **kwargs):
         ui_runtime.update_usb_state(self, **kwargs)
@@ -166,17 +186,78 @@ class RobotDashboardApp(App):
     def _update_loop(self, dt):
         try:
             p, r, y = self._get_gyro_data()
+            now = time.time()
             self._latest_pitch = float(p)
             self._latest_roll = float(r)
             self._latest_yaw = float(y)
 
-            if "gyro_panel" in self.root_widget.ids:
-                self.root_widget.ids.gyro_panel.update(p, r, y)
+            gyro_ui_period = float(getattr(self, "_gyro_ui_period", 0.12) or 0.12)
+            last_gyro_ui_t = float(getattr(self, "_last_gyro_ui_update_time", 0.0) or 0.0)
+            if (now - last_gyro_ui_t) >= max(0.02, gyro_ui_period):
+                if "gyro_panel" in self.root_widget.ids:
+                    self.root_widget.ids.gyro_panel.update(p, r, y)
+                self._last_gyro_ui_update_time = now
 
             # 硬件同步
             if self.servo_bus and not getattr(self.servo_bus, "is_mock", True):
-                targets = self.balance_ctrl.compute(p, r, y)
-                self.servo_bus.move_sync(targets, time_ms=100)
+                active_period = float(getattr(self, "_sync_active_period", 0.1) or 0.1)
+                idle_period = float(getattr(self, "_sync_idle_period", 0.22) or 0.22)
+                pose_threshold = float(getattr(self, "_sync_pose_threshold_deg", 0.5) or 0.5)
+                target_threshold = int(getattr(self, "_sync_target_threshold", 3) or 3)
+                compute_pose_threshold = float(
+                    getattr(self, "_sync_compute_pose_threshold_deg", 0.2) or 0.2
+                )
+                compute_idle_period = float(
+                    getattr(self, "_sync_compute_idle_period", idle_period) or idle_period
+                )
+
+                last_compute_t = float(getattr(self, "_last_sync_compute_time", 0.0) or 0.0)
+                last_compute_pitch = float(getattr(self, "_last_sync_compute_pitch", 0.0) or 0.0)
+                last_compute_roll = float(getattr(self, "_last_sync_compute_roll", 0.0) or 0.0)
+                last_targets = getattr(self, "_last_sync_targets", None)
+
+                compute_due = (now - last_compute_t) >= max(0.05, compute_idle_period)
+                compute_pose_changed = (
+                    last_targets is None
+                    or abs(float(p) - last_compute_pitch) >= compute_pose_threshold
+                    or abs(float(r) - last_compute_roll) >= compute_pose_threshold
+                )
+
+                if compute_pose_changed or compute_due:
+                    targets = self.balance_ctrl.compute(p, r, y)
+                    self._last_sync_compute_time = now
+                    self._last_sync_compute_pitch = float(p)
+                    self._last_sync_compute_roll = float(r)
+                else:
+                    targets = last_targets
+                    if not isinstance(targets, dict):
+                        targets = None
+
+                last_send_t = float(getattr(self, "_last_sync_send_time", 0.0) or 0.0)
+                last_pitch = float(getattr(self, "_last_sync_pitch", 0.0) or 0.0)
+                last_roll = float(getattr(self, "_last_sync_roll", 0.0) or 0.0)
+
+                pose_changed = (
+                    abs(float(p) - last_pitch) >= pose_threshold
+                    or abs(float(r) - last_roll) >= pose_threshold
+                )
+                target_changed = self._targets_changed(targets, last_targets, threshold=target_threshold)
+                elapsed = now - last_send_t
+
+                should_send = False
+                if last_targets is None:
+                    should_send = True
+                elif pose_changed or target_changed:
+                    should_send = elapsed >= active_period
+                else:
+                    should_send = elapsed >= idle_period
+
+                if should_send:
+                    self.servo_bus.move_sync(targets, time_ms=100)
+                    self._last_sync_send_time = now
+                    self._last_sync_targets = dict(targets or {})
+                    self._last_sync_pitch = float(p)
+                    self._last_sync_roll = float(r)
         except Exception as e:
             try:
                 now = time.time()

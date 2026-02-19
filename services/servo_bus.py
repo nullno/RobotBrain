@@ -19,9 +19,11 @@ class ServoBus:
                 self.manager = UartServoManager(self.uart, servo_id_list=list(range(1, 26)))
                 # Android USB wrapper 延迟抖动更大，放宽收包超时与重试次数，减少误判 0/25
                 try:
-                    self.manager.RECEIVE_TIMEOUT = max(float(getattr(self.manager, 'RECEIVE_TIMEOUT', 0.02)), 0.08)
-                    self.manager.RETRY_NTIME = max(int(getattr(self.manager, 'RETRY_NTIME', 3)), 6)
+                    self.manager.RECEIVE_TIMEOUT = max(float(getattr(self.manager, 'RECEIVE_TIMEOUT', 0.02)), 0.24)
+                    self.manager.RETRY_NTIME = max(int(getattr(self.manager, 'RETRY_NTIME', 3)), 8)
                     self.manager.DELAY_BETWEEN_CMD = max(float(getattr(self.manager, 'DELAY_BETWEEN_CMD', 0.001)), 0.002)
+                    if hasattr(self.manager, 'enable_diagnostics'):
+                        self.manager.enable_diagnostics(True, tag='android-usb-servo', log_interval_sec=6.0)
                 except Exception:
                     pass
                 print(f"✅ JOHO SDK Link Start! (android usb wrapper)")

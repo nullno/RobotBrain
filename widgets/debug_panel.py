@@ -18,10 +18,9 @@ import subprocess
 import os
 import sys
 import time
-from widgets.bubble_level import BubbleLevel
 from widgets.universal_tip import UniversalTip
-from widgets.vision_settings_panel import VisionSettingsPanel
 from widgets.ai_model_panel import AIModelPanel
+from widgets.other_settings_panel import OtherSettingsPanel
 
 try:
     from widgets.runtime_status import RuntimeStatusLogger
@@ -208,6 +207,19 @@ class ServoStatusCard(FloatLayout):
 
         self.update_data(data)
 
+    def set_online(self, online):
+        try:
+            if online:
+                self.lbl_conn.color = (0.4, 1.0, 0.1, 1)
+                self._bg_color.rgba = (0.12, 0.16, 0.2, 0.2)
+                self._border_color.rgba = (0.2, 0.7, 0.95, 0.2)
+            else:
+                self.lbl_conn.color = (0.6, 0.6, 0.6, 0.6)
+                self._bg_color.rgba = (0.12, 0.12, 0.15, 0.7)
+                self._border_color.rgba = (0.4, 0.4, 0.45, 0.6)
+        except Exception:
+            pass
+
     def _update(self, *args):
         self._bg_rect.pos = self.pos
         self._bg_rect.size = self.size
@@ -222,10 +234,10 @@ class ServoStatusCard(FloatLayout):
     def update_data(self, data):
         self.body.clear_widgets()
         fields = [
-            ("角度", "20" if not data else str(data.get("pos", 0))),
+            ("角度", "-" if not data else str(data.get("pos", 0))),
             ("温度", "-" if not data else f"{data.get('temp',0)}°C"),
             ("电压", "-" if not data else f"{data.get('volt',0)}V"),
-            ("扭矩", "20" if not data else ("ON" if data.get("torque") else "OFF")),
+            ("扭矩", "-" if not data else ("ON" if data.get("torque") else "OFF")),
         ]
 
         for key, val in fields:
@@ -257,10 +269,7 @@ class ServoStatusCard(FloatLayout):
             self.body.add_widget(cell)
 
         try:
-            if data is None:
-                self.lbl_conn.color = (0.6, 0.6, 0.6, 0.6)
-            else:
-                self.lbl_conn.color = (0.4, 1.0, 0.1, 1)
+            self.set_online(data is not None)
         except Exception:
             pass
 
@@ -279,6 +288,16 @@ class DebugPanel(Widget):
         self._status_cards_cache_time = 0.0
         self._status_cache_ttl = 1.2
         self._writable_servo_ids = set()
+        self._status_slow_fields_cache = {}
+        self._status_slow_fields_interval = 3.0
+        self._status_data_cache = {}
+        self._status_card_widgets = {}
+        self._status_rr_index = 0
+        self._status_read_batch_size = 6
+        self._status_read_backoff = {}
+        self._status_backoff_base_sec = 0.8
+        self._status_backoff_max_sec = 5.0
+        self._lazy_tabs = {}
 
     def _mark_servo_writable(self, sid):
         try:
@@ -311,6 +330,43 @@ class DebugPanel(Widget):
             else:
                 tab._hl_color.rgba = (0, 0, 0, 0)
 
+    def _register_lazy_tab(self, tp, text, builder):
+        tab = TabbedPanelItem(text=text, font_size="15sp")
+        self._style_tab(tab)
+        tp.add_widget(tab)
+        self._lazy_tabs[str(text)] = {
+            "tab": tab,
+            "builder": builder,
+            "built": False,
+        }
+        return tab
+
+    def _ensure_lazy_tab_built(self, tp, tab):
+        if tp is None or tab is None:
+            return
+        text = str(getattr(tab, "text", "") or "")
+        item = self._lazy_tabs.get(text)
+        if not item:
+            return
+        if item.get("built"):
+            return
+        try:
+            builder = item.get("builder")
+            if callable(builder):
+                builder(tp, tab_item=tab)
+                item["built"] = True
+        except Exception:
+            pass
+
+    def _ensure_lazy_tab_built_deferred(self, tp, tab, delay=0):
+        def _do(_dt):
+            self._ensure_lazy_tab_built(tp, tab)
+
+        try:
+            Clock.schedule_once(_do, delay)
+        except Exception:
+            self._ensure_lazy_tab_built(tp, tab)
+
     # -------------------------------------------------
 
     def open_debug(self):
@@ -319,6 +375,7 @@ class DebugPanel(Widget):
                 self._debug_popup.open()
                 tp = getattr(self, "_debug_tp", None)
                 cur = getattr(tp, "current_tab", None)
+                self._ensure_lazy_tab_built(tp, cur)
                 if cur and getattr(cur, "text", "") == "连接状态":
                     threading.Thread(target=self.refresh_servo_status, daemon=True).start()
                 return
@@ -470,21 +527,10 @@ class DebugPanel(Widget):
         t_status.add_widget(sv)
         tp.add_widget(t_status)
 
-        self._debug_tab_build_queue = [
-            self._build_single_servo_tab,
-            self._build_balance_debug_tab,
-            self._build_vision_settings_tab,
-            self._build_ai_model_tab,
-        ]
-
-        # 首次打开时若在 popup.open 后异步加 tab，tab 条会短暂挤在一起；
-        # 这里改为打开前一次性构建，避免首帧抖动。
-        try:
-            for _builder in list(self._debug_tab_build_queue):
-                _builder(tp)
-            self._debug_tab_build_queue = []
-        except Exception:
-            pass
+        self._lazy_tabs = {}
+        self._register_lazy_tab(tp, "关节调试", self._build_single_servo_tab)
+        self._register_lazy_tab(tp, "AI模型", self._build_ai_model_tab)
+        self._register_lazy_tab(tp, "高级设置", self._build_other_settings_tab)
 
         tp.bind(current_tab=lambda inst, val: self._update_tab_highlight(inst, val))
         Clock.schedule_once(
@@ -604,14 +650,16 @@ class DebugPanel(Widget):
 
         def _on_popup_dismiss(*_):
             try:
-                if hasattr(self, "_balance_level") and self._balance_level:
-                    self._balance_level.stop_tracking()
+                panel = getattr(self, "_other_settings_panel", None)
+                if panel and hasattr(panel, "on_panel_closed"):
+                    panel.on_panel_closed()
             except Exception:
                 pass
 
         popup.bind(on_dismiss=_on_popup_dismiss)
 
         def _on_tab_switch(instance, value):
+            self._ensure_lazy_tab_built_deferred(tp, value, 0)
             if value and getattr(value, "text", "") == "连接状态":
                 now = time.time()
                 if (now - getattr(self, "_last_status_refresh_req", 0.0)) >= 0.8:
@@ -622,6 +670,7 @@ class DebugPanel(Widget):
         self._debug_popup = popup
         self._debug_tp = tp
         popup.open()
+        self._ensure_lazy_tab_built_deferred(tp, getattr(tp, "current_tab", None), 0)
         try:
             if getattr(self, "_debug_tab_build_queue", None):
                 self._schedule_build_next_debug_tab()
@@ -781,6 +830,66 @@ class DebugPanel(Widget):
                 RuntimeStatusLogger.log_error(f"释放扭矩失败: {e}")
 
     # ===================== 舵机状态刷新 =====================
+    def _render_status_cards(self, cards):
+        grid = getattr(self, "_status_grid", None)
+        if grid is None:
+            return
+        try:
+            card_map = getattr(self, "_status_card_widgets", None)
+            if not isinstance(card_map, dict):
+                card_map = {}
+                self._status_card_widgets = card_map
+
+            sid_set = set(int(sid) for sid, _data, _online in cards)
+            old_sids = set(card_map.keys())
+            for sid in sorted(old_sids - sid_set):
+                try:
+                    widget = card_map.pop(sid, None)
+                    if widget is not None:
+                        grid.remove_widget(widget)
+                except Exception:
+                    pass
+
+            wanted_order = []
+            for sid, data, online in cards:
+                sid = int(sid)
+                wanted_order.append(sid)
+                widget = card_map.get(sid)
+                if widget is None:
+                    widget = ServoStatusCard(sid, data=data, online=online)
+                    card_map[sid] = widget
+                    try:
+                        grid.add_widget(widget)
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        widget.update_data(data)
+                        widget.set_online(bool(online))
+                    except Exception:
+                        pass
+
+            current_widgets = list(getattr(grid, "children", []))
+            current_sids = []
+            for w in current_widgets:
+                try:
+                    current_sids.append(int(getattr(w, "sid", -1)))
+                except Exception:
+                    current_sids.append(-1)
+            expected_sids = list(reversed(wanted_order))
+
+            if current_sids != expected_sids:
+                try:
+                    grid.clear_widgets()
+                    for sid in wanted_order:
+                        widget = card_map.get(sid)
+                        if widget is not None:
+                            grid.add_widget(widget)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     def refresh_servo_status(self):
         status_grid = getattr(self, "_status_grid", None)
         if status_grid is None:
@@ -795,15 +904,7 @@ class DebugPanel(Widget):
             cards = list(self._status_cards_cache)
 
             def _render_cached(dt=0):
-                grid = getattr(self, "_status_grid", None)
-                if grid is None:
-                    return
-                try:
-                    grid.clear_widgets()
-                    for sid, data, online in cards:
-                        grid.add_widget(ServoStatusCard(sid, data=data, online=online))
-                except Exception:
-                    pass
+                self._render_status_cards(cards)
 
             Clock.schedule_once(_render_cached, 0)
             return
@@ -837,45 +938,100 @@ class DebugPanel(Widget):
             max_known = max(known_ids) if known_ids else 25
             max_id = max(max_known, getattr(mgr, "max_id", 25))
 
+            known_sorted = sorted(int(sid) for sid in known_ids if int(sid) > 0)
+            batch_size = int(max(1, getattr(self, "_status_read_batch_size", 6) or 6))
+            ids_to_probe = set()
+            if known_sorted:
+                rr = int(getattr(self, "_status_rr_index", 0) or 0)
+                rr = rr % len(known_sorted)
+                end = rr + min(batch_size, len(known_sorted))
+                if end <= len(known_sorted):
+                    probe_list = known_sorted[rr:end]
+                else:
+                    probe_list = known_sorted[rr:] + known_sorted[: (end % len(known_sorted))]
+                ids_to_probe = set(probe_list)
+                self._status_rr_index = end % len(known_sorted)
+
             for sid in range(1, max_id + 1):
-                data = None
-                online = False
+                cache_data = dict(self._status_data_cache.get(sid, {}) or {})
+                data = cache_data.get("data")
+                online = bool(cache_data.get("online", False))
 
                 if sid in known_ids:
-                    try:
-                        # 先读取位置探活，离线时避免温度/电压额外 IO
-                        pos = mgr.read_data_by_name(sid, "CURRENT_POSITION")
-                        if pos is not None:
-                            temp = mgr.read_data_by_name(sid, "CURRENT_TEMPERATURE")
-                            volt = mgr.read_data_by_name(sid, "CURRENT_VOLTAGE")
-                            torque_flag = mgr.read_data_by_name(sid, "TORQUE_ENABLE")
-                            online = bool(getattr(mgr.servo_info_dict.get(sid, None), "is_online", True))
-                            data = dict(pos=pos, temp=temp, volt=volt, torque=torque_flag)
-                        else:
-                            online = False
+                    if sid in ids_to_probe:
+                        backoff = dict(self._status_read_backoff.get(sid, {}) or {})
+                        next_allowed_ts = float(backoff.get("next_ts", 0.0) or 0.0)
+                        if now < next_allowed_ts:
+                            self._status_data_cache[sid] = {
+                                "data": data,
+                                "online": bool(online),
+                                "ts": now,
+                            }
+                            cards.append((sid, data, online))
+                            continue
+                        try:
+                            # 每轮仅读取少量 ID，降低串口峰值压力
+                            pos = mgr.read_data_by_name(sid, "CURRENT_POSITION")
+                            if pos is not None:
+                                cache = self._status_slow_fields_cache.get(sid, {})
+                                last_ts = float(cache.get("_ts", 0.0) or 0.0)
+                                if (now - last_ts) >= float(getattr(self, "_status_slow_fields_interval", 3.0) or 3.0):
+                                    temp = mgr.read_data_by_name(sid, "CURRENT_TEMPERATURE")
+                                    volt = mgr.read_data_by_name(sid, "CURRENT_VOLTAGE")
+                                    torque_flag = mgr.read_data_by_name(sid, "TORQUE_ENABLE")
+                                    cache = {
+                                        "temp": temp,
+                                        "volt": volt,
+                                        "torque": torque_flag,
+                                        "_ts": now,
+                                    }
+                                    self._status_slow_fields_cache[sid] = cache
+                                temp = cache.get("temp")
+                                volt = cache.get("volt")
+                                torque_flag = cache.get("torque")
+                                online = bool(getattr(mgr.servo_info_dict.get(sid, None), "is_online", True))
+                                data = dict(pos=pos, temp=temp, volt=volt, torque=torque_flag)
+                                self._status_read_backoff[sid] = {"fail_count": 0, "next_ts": 0.0}
+                            else:
+                                online = False
+                                data = None
+                                fail_count = int(backoff.get("fail_count", 0) or 0) + 1
+                                base_sec = float(getattr(self, "_status_backoff_base_sec", 0.8) or 0.8)
+                                max_sec = float(getattr(self, "_status_backoff_max_sec", 5.0) or 5.0)
+                                wait_sec = min(max_sec, base_sec * (2 ** max(0, fail_count - 1)))
+                                self._status_read_backoff[sid] = {
+                                    "fail_count": fail_count,
+                                    "next_ts": now + wait_sec,
+                                }
+                        except Exception:
                             data = None
-                    except Exception:
-                        data = None
-                        online = False
+                            online = False
+                            fail_count = int(backoff.get("fail_count", 0) or 0) + 1
+                            base_sec = float(getattr(self, "_status_backoff_base_sec", 0.8) or 0.8)
+                            max_sec = float(getattr(self, "_status_backoff_max_sec", 5.0) or 5.0)
+                            wait_sec = min(max_sec, base_sec * (2 ** max(0, fail_count - 1)))
+                            self._status_read_backoff[sid] = {
+                                "fail_count": fail_count,
+                                "next_ts": now + wait_sec,
+                            }
                 elif sid in writable_ids:
                     # 写通道可用但读回失败：仍标记为在线（读值未知）
                     online = True
-                    data = dict(pos="?", temp="?", volt="?", torque=None)
+                    if data is None:
+                        data = dict(pos="?", temp="?", volt="?", torque=None)
+
+                self._status_data_cache[sid] = {
+                    "data": data,
+                    "online": bool(online),
+                    "ts": now,
+                }
                 cards.append((sid, data, online))
 
         self._status_cards_cache = list(cards)
         self._status_cards_cache_time = now
 
         def _render(dt=0):
-            grid = getattr(self, "_status_grid", None)
-            if grid is None:
-                return
-            try:
-                grid.clear_widgets()
-                for sid, data, online in cards:
-                    grid.add_widget(ServoStatusCard(sid, data=data, online=online))
-            except Exception:
-                pass
+            self._render_status_cards(cards)
 
         Clock.schedule_once(_render, 0)
 
@@ -950,10 +1106,11 @@ class DebugPanel(Widget):
                 RuntimeStatusLogger.log_error(f"动作 {action} 执行失败: {e}")
             self._show_info_popup(f"动作执行失败: {e}")
 
-    # ================= 平衡调试 =================
-    def _build_ai_model_tab(self, tp):
-        t_ai_model = TabbedPanelItem(text="AI模型", font_size="15sp")
-        self._style_tab(t_ai_model)
+    # ================= 其他功能页 =================
+    def _build_ai_model_tab(self, tp, tab_item=None):
+        t_ai_model = tab_item if tab_item is not None else TabbedPanelItem(text="AI模型", font_size="15sp")
+        if tab_item is None:
+            self._style_tab(t_ai_model)
 
         sv = ScrollView(size_hint=(1, 1))
         sv.do_scroll_x = False
@@ -972,284 +1129,56 @@ class DebugPanel(Widget):
         Clock.schedule_once(lambda dt: _sync_panel_height(None, None), 0)
 
         sv.add_widget(panel)
+        try:
+            t_ai_model.clear_widgets()
+        except Exception:
+            pass
         t_ai_model.add_widget(sv)
-        tp.add_widget(t_ai_model)
+        if tab_item is None:
+            tp.add_widget(t_ai_model)
 
-    def _build_balance_debug_tab(self, tp):
-        app = App.get_running_app()
-        t_balance = TabbedPanelItem(text="平衡调试", font_size="15sp")
-        self._style_tab(t_balance)
+    # ================= 其他设置 =================
+    def _build_other_settings_tab(self, tp, tab_item=None):
+        t_other = tab_item if tab_item is not None else TabbedPanelItem(text="高级设置", font_size="15sp")
+        if tab_item is None:
+            self._style_tab(t_other)
 
         sv = ScrollView(size_hint=(1, 1))
         sv.do_scroll_x = False
         sv.do_scroll_y = True
 
-        root = BoxLayout(
-            orientation="vertical",
-            padding=(dp(12), dp(20), dp(12), dp(12)),
-            spacing=dp(10),
-            size_hint_y=None,
+        panel = OtherSettingsPanel(
+            show_message=self._show_info_popup,
+            debug_panel=self,
+            button_factory=lambda **kwargs: TechButton(**kwargs),
         )
-        root.bind(minimum_height=root.setter("height"))
+        self._other_settings_panel = panel
 
-        tip = Label(
-            text="实时调节平衡增益（越大越灵敏）：Pitch=gain_p，Roll=gain_r",
-            size_hint_y=None,
-            height=dp(26),
-            color=(0.75, 0.85, 0.95, 1),
-        )
-        root.add_widget(tip)
-
-        def _read_gains():
-            bc = getattr(app, "balance_ctrl", None)
-            if not bc:
-                return 0.0, 0.0
+        def _sync_panel_height(_inst, _val):
             try:
-                return float(getattr(bc, "gain_p", 0.0)), float(getattr(bc, "gain_r", 0.0))
-            except Exception:
-                return 0.0, 0.0
-
-        def _read_axis_mode():
-            try:
-                mode = str(getattr(app, "_gyro_axis_mode", "auto"))
-                if mode not in ("auto", "normal", "swapped"):
-                    mode = "auto"
-                return mode
-            except Exception:
-                return "auto"
-
-        axis_mode_label = Label(
-            text="轴映射: auto",
-            size_hint_y=None,
-            height=dp(24),
-            color=(0.8, 0.9, 1, 1),
-            halign="left",
-            valign="middle",
-        )
-        axis_mode_label.bind(size=axis_mode_label.setter("text_size"))
-
-        def _set_axis_mode(mode):
-            if mode not in ("auto", "normal", "swapped"):
-                return
-            try:
-                app._gyro_axis_mode = mode
-                if mode == "auto":
-                    app._gyro_axis_samples = 0
-                axis_mode_label.text = f"轴映射: {mode}"
-                try:
-                    RuntimeStatusLogger.log_info(f"陀螺仪轴映射已设置: {mode}")
-                except Exception:
-                    pass
-                try:
-                    if hasattr(app, "save_balance_tuning"):
-                        app.save_balance_tuning()
-                except Exception:
-                    pass
+                panel.height = max(panel.minimum_height, sv.height)
             except Exception:
                 pass
 
-        def _apply_gain(attr_name, text_value, lbl):
-            bc = getattr(app, "balance_ctrl", None)
-            if not bc:
-                self._show_info_popup("BalanceController 不存在")
-                return
-            try:
-                val = float(text_value)
-                val = max(0.0, min(20.0, val))
-                setattr(bc, attr_name, val)
-                lbl.text = f"当前: {val:.2f}"
-                try:
-                    RuntimeStatusLogger.log_info(f"平衡参数已更新: {attr_name}={val:.2f}")
-                except Exception:
-                    pass
-                try:
-                    if hasattr(app, "save_balance_tuning"):
-                        app.save_balance_tuning()
-                except Exception:
-                    pass
-            except Exception:
-                self._show_info_popup("请输入有效数字")
+        sv.bind(height=_sync_panel_height)
+        panel.bind(minimum_height=lambda *_: _sync_panel_height(None, None))
+        Clock.schedule_once(lambda dt: _sync_panel_height(None, None), 0)
 
-        def _step_gain(attr_name, delta, inp, lbl):
-            bc = getattr(app, "balance_ctrl", None)
-            if not bc:
-                self._show_info_popup("BalanceController 不存在")
-                return
-            try:
-                cur = float(getattr(bc, attr_name, 0.0))
-                new_v = max(0.0, min(20.0, cur + delta))
-                setattr(bc, attr_name, new_v)
-                inp.text = f"{new_v:.2f}"
-                lbl.text = f"当前: {new_v:.2f}"
-                try:
-                    RuntimeStatusLogger.log_info(f"平衡参数已更新: {attr_name}={new_v:.2f}")
-                except Exception:
-                    pass
-                try:
-                    if hasattr(app, "save_balance_tuning"):
-                        app.save_balance_tuning()
-                except Exception:
-                    pass
-            except Exception:
-                pass
-
-        def _make_gain_row(title, attr_name, init_v):
-            row = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(8))
-            lbl_name = Label(
-                text=title,
-                size_hint=(None, 1),
-                width=dp(110),
-                color=(0.3, 0.85, 1, 1),
-                halign="left",
-                valign="middle",
-            )
-            lbl_name.bind(size=lbl_name.setter("text_size"))
-
-            btn_dec = TechButton(
-                text="-",
-                size_hint=(None, None),
-                size=(dp(44), dp(36)),
-                border_color=(1.0, 0.35, 0.35, 1),
-                fill_color=(1.0, 0.35, 0.35, 0.25),
-            )
-            inp = TextInput(
-                text=f"{init_v:.2f}",
-                multiline=False,
-                size_hint=(None, None),
-                size=(dp(90), dp(36)),
-                input_filter="float",
-                halign="center",
-            )
-            btn_inc = TechButton(
-                text="+",
-                size_hint=(None, None),
-                size=(dp(44), dp(36)),
-                border_color=(0.2, 0.9, 0.7, 1),
-                fill_color=(0.2, 0.9, 0.7, 0.25),
-            )
-            btn_apply = TechButton(
-                text="应用",
-                size_hint=(None, None),
-                size=(dp(70), dp(36)),
-            )
-            lbl_cur = Label(
-                text=f"当前: {init_v:.2f}",
-                color=(0.8, 0.9, 1, 1),
-                halign="left",
-                valign="middle",
-            )
-            lbl_cur.bind(size=lbl_cur.setter("text_size"))
-
-            btn_dec.bind(on_release=lambda *_: _step_gain(attr_name, -0.2, inp, lbl_cur))
-            btn_inc.bind(on_release=lambda *_: _step_gain(attr_name, 0.2, inp, lbl_cur))
-            btn_apply.bind(on_release=lambda *_: _apply_gain(attr_name, inp.text, lbl_cur))
-
-            row.add_widget(lbl_name)
-            row.add_widget(btn_dec)
-            row.add_widget(inp)
-            row.add_widget(btn_inc)
-            row.add_widget(btn_apply)
-            row.add_widget(lbl_cur)
-            return row, inp, lbl_cur
-
-        p0, r0 = _read_gains()
-        row_p, inp_p, lbl_p = _make_gain_row("Pitch 增益", "gain_p", p0)
-        row_r, inp_r, lbl_r = _make_gain_row("Roll 增益", "gain_r", r0)
-
-        root.add_widget(row_p)
-        root.add_widget(row_r)
-
-        axis_row = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(8))
-        btn_auto = TechButton(text="映射: Auto", size_hint=(None, None), size=(dp(110), dp(36)))
-        btn_normal = TechButton(text="Normal", size_hint=(None, None), size=(dp(90), dp(36)))
-        btn_swapped = TechButton(text="Swapped", size_hint=(None, None), size=(dp(100), dp(36)))
-        btn_auto.bind(on_release=lambda *_: _set_axis_mode("auto"))
-        btn_normal.bind(on_release=lambda *_: _set_axis_mode("normal"))
-        btn_swapped.bind(on_release=lambda *_: _set_axis_mode("swapped"))
-        axis_row.add_widget(btn_auto)
-        axis_row.add_widget(btn_normal)
-        axis_row.add_widget(btn_swapped)
-        root.add_widget(axis_row)
-        root.add_widget(axis_mode_label)
-
-        actions = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(8))
-        btn_refresh = TechButton(text="读取当前")
-        btn_reset = TechButton(text="恢复默认(横屏)")
-
-        def _refresh(*_):
-            p, r = _read_gains()
-            inp_p.text = f"{p:.2f}"
-            inp_r.text = f"{r:.2f}"
-            lbl_p.text = f"当前: {p:.2f}"
-            lbl_r.text = f"当前: {r:.2f}"
-            axis_mode_label.text = f"轴映射: {_read_axis_mode()}"
-
-        def _reset(*_):
-            bc = getattr(app, "balance_ctrl", None)
-            if not bc:
-                self._show_info_popup("BalanceController 不存在")
-                return
-            try:
-                bc.gain_p = 5.5
-                bc.gain_r = 4.2
-                app._gyro_axis_mode = "auto"
-                app._gyro_axis_samples = 0
-                _refresh()
-                RuntimeStatusLogger.log_info("平衡参数已恢复默认: gain_p=5.50, gain_r=4.20")
-                try:
-                    if hasattr(app, "save_balance_tuning"):
-                        app.save_balance_tuning()
-                except Exception:
-                    pass
-            except Exception:
-                pass
-
-        btn_refresh.bind(on_release=_refresh)
-        btn_reset.bind(on_release=_reset)
-        actions.add_widget(btn_refresh)
-        actions.add_widget(btn_reset)
-        root.add_widget(actions)
-
-        root.add_widget(BoxLayout(size_hint_y=None, height=dp(6)))
-
-        bubble_anchor = AnchorLayout(
-            anchor_x="center",
-            anchor_y="center",
-            size_hint_y=None,
-            height=dp(190),
-        )
-        self._balance_level = BubbleLevel(
-            size_hint=(None, None),
-            size=(dp(160), dp(160)),
-        )
-        bubble_anchor.add_widget(self._balance_level)
-        root.add_widget(bubble_anchor)
-
+        sv.add_widget(panel)
         try:
-            self._balance_level.start_tracking()
+            t_other.clear_widgets()
         except Exception:
             pass
-
-        _refresh()
-
-        sv.add_widget(root)
-        t_balance.add_widget(sv)
-        tp.add_widget(t_balance)
-
-    # ================= 视觉设置 =================
-    def _build_vision_settings_tab(self, tp):
-        t_vision = TabbedPanelItem(text="视觉设置", font_size="15sp")
-        self._style_tab(t_vision)
-
-        panel = VisionSettingsPanel(show_message=self._show_info_popup)
-        t_vision.add_widget(panel)
-        tp.add_widget(t_vision)
+        t_other.add_widget(sv)
+        if tab_item is None:
+            tp.add_widget(t_other)
 
     # ================= 单舵机快捷调试 =================
-    def _build_single_servo_tab(self, tp):
+    def _build_single_servo_tab(self, tp, tab_item=None):
         app = App.get_running_app()
-        t_single = TabbedPanelItem(text="关节调试", font_size="15sp")
-        self._style_tab(t_single)
+        t_single = tab_item if tab_item is not None else TabbedPanelItem(text="关节调试", font_size="15sp")
+        if tab_item is None:
+            self._style_tab(t_single)
 
         sv = ScrollView(size_hint=(1, 1))
 
@@ -1475,8 +1404,13 @@ class DebugPanel(Widget):
         sv.bind(width=_reflow_single_grid)
         Clock.schedule_once(lambda dt: _reflow_single_grid(None, sv.width), 0)
 
+        try:
+            t_single.clear_widgets()
+        except Exception:
+            pass
         t_single.add_widget(sv)
-        tp.add_widget(t_single)
+        if tab_item is None:
+            tp.add_widget(t_single)
 
         # ---------- helpers ----------
         def _get_sid():

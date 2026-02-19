@@ -118,8 +118,105 @@ class UartServoManager:
 		self.pkt_buffer = PacketBuffer()		# 数据帧缓冲区
   		# 创建舵机信息字典
 		self.servo_info_dict = {}				# 舵机信息字典
+		# 诊断统计（默认关闭，可在上层按平台开启）
+		self._diag_enabled = False
+		self._diag_tag = 'uart-servo'
+		self._diag_log_interval_sec = 5.0
+		self._diag_last_log_ts = 0.0
+		self._diag_stat = {
+			'wait_req': 0,
+			'wait_ok': 0,
+			'wait_fail': 0,
+			'read_req': 0,
+			'read_ok': 0,
+			'read_fail': 0,
+			'ping_req': 0,
+			'ping_ok': 0,
+			'ping_fail': 0,
+			'total_retry_used': 0,
+			'last_rsp_len': 0,
+			'last_error': '',
+		}
 		# 舵机扫描
 		self.servo_scan(servo_id_list)
+
+	def enable_diagnostics(self, enabled=True, tag='uart-servo', log_interval_sec=5.0):
+		'''开启/关闭通信诊断统计与周期日志。'''
+		self._diag_enabled = bool(enabled)
+		self._diag_tag = str(tag or 'uart-servo')
+		try:
+			self._diag_log_interval_sec = max(1.0, float(log_interval_sec))
+		except Exception:
+			self._diag_log_interval_sec = 5.0
+
+	def get_diagnostics_snapshot(self):
+		'''获取当前诊断快照。'''
+		try:
+			return dict(self._diag_stat)
+		except Exception:
+			return {}
+
+	def _diag_cmd_name(self, cmd_type):
+		if cmd_type == self.CMD_TYPE_READ_DATA:
+			return 'READ'
+		if cmd_type == self.CMD_TYPE_PING:
+			return 'PING'
+		if cmd_type == self.CMD_TYPE_WRITE_DATA:
+			return 'WRITE'
+		return f'CMD{int(cmd_type)}'
+
+	def _diag_record_wait_response(self, cmd_type, ok, retry_used, rsp_len=0, err=''):
+		if not self._diag_enabled:
+			return
+		st = self._diag_stat
+		st['wait_req'] += 1
+		if ok:
+			st['wait_ok'] += 1
+		else:
+			st['wait_fail'] += 1
+		if cmd_type == self.CMD_TYPE_READ_DATA:
+			st['read_req'] += 1
+			if ok:
+				st['read_ok'] += 1
+			else:
+				st['read_fail'] += 1
+		elif cmd_type == self.CMD_TYPE_PING:
+			st['ping_req'] += 1
+			if ok:
+				st['ping_ok'] += 1
+			else:
+				st['ping_fail'] += 1
+
+		st['total_retry_used'] += int(max(0, retry_used))
+		st['last_rsp_len'] = int(max(0, rsp_len))
+		if err:
+			st['last_error'] = str(err)
+
+		now = time.time()
+		if (now - float(self._diag_last_log_ts or 0.0)) < float(self._diag_log_interval_sec):
+			return
+		self._diag_last_log_ts = now
+
+		wait_req = max(1, int(st.get('wait_req', 0) or 0))
+		read_req = int(st.get('read_req', 0) or 0)
+		read_fail = int(st.get('read_fail', 0) or 0)
+		wait_fail = int(st.get('wait_fail', 0) or 0)
+		avg_retry = float(st.get('total_retry_used', 0) or 0) / float(wait_req)
+		read_fail_rate = (100.0 * float(read_fail) / float(read_req)) if read_req > 0 else 0.0
+		wait_fail_rate = 100.0 * float(wait_fail) / float(wait_req)
+		logging.info(
+			"[%s] %s req=%d ok=%d fail=%d fail_rate=%.1f%% read_fail_rate=%.1f%% avg_retry=%.2f last_rsp_len=%d last_err=%s",
+			self._diag_tag,
+			self._diag_cmd_name(cmd_type),
+			wait_req,
+			int(st.get('wait_ok', 0) or 0),
+			wait_fail,
+			wait_fail_rate,
+			read_fail_rate,
+			avg_retry,
+			int(st.get('last_rsp_len', 0) or 0),
+			str(st.get('last_error', '') or '-'),
+		)
 	
 	def receive_response(self):
 		'''接收单个数据帧'''
@@ -171,8 +268,21 @@ class UartServoManager:
 				time.sleep(self.DELAY_BETWEEN_CMD)
 				response_packet =  self.receive_response()
 				if response_packet is not None:
+					self._diag_record_wait_response(
+						cmd_type=cmd_type,
+						ok=True,
+						retry_used=(i + 1),
+						rsp_len=len(response_packet),
+					)
 					return True, response_packet
 			# 发送失败
+			self._diag_record_wait_response(
+				cmd_type=cmd_type,
+				ok=False,
+				retry_used=retry_ntime,
+				rsp_len=0,
+				err='response-timeout-or-invalid-packet',
+			)
 			return False, None
 
 	def find_servo(self):
