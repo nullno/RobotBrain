@@ -257,7 +257,23 @@ class UartServoManager:
 	def send_request(self, servo_id, cmd_type, param_bytes, wait_response=False, retry_ntime=None):
 		'''发送请求'''
 		with self._io_lock:
+			try:
+				req_sid = int(servo_id)
+			except Exception:
+				req_sid = servo_id
+			accept_any_sid = bool(req_sid == SERVO_ID_BRODCAST)
+
 			if wait_response:
+				# 清空解析队列与缓冲状态，避免上一条指令残留回包被本次请求误消费
+				try:
+					if hasattr(self.pkt_buffer, 'packet_bytes_list'):
+						self.pkt_buffer.packet_bytes_list.clear()
+				except Exception:
+					pass
+				try:
+					self.pkt_buffer.empty_buffer()
+				except Exception:
+					pass
 				# 清空串口缓冲区
 				self.uart.readall()
 
@@ -278,6 +294,23 @@ class UartServoManager:
 					time.sleep(self.DELAY_BETWEEN_CMD)
 					response_packet =  self.receive_response()
 					if response_packet is not None:
+						# 响应ID过滤：只接受当前请求ID（广播发现请求除外）
+						try:
+							unpack_ret = Packet.unpack(response_packet)
+							if unpack_ret is None:
+								continue
+							rsp_sid = int(unpack_ret[0])
+							if (not accept_any_sid) and (rsp_sid != req_sid):
+								self._diag_record_wait_response(
+									cmd_type=cmd_type,
+									ok=False,
+									retry_used=(i + 1),
+									rsp_len=len(response_packet),
+									err=f'mismatch-response-id req={req_sid} rsp={rsp_sid}',
+								)
+								continue
+						except Exception:
+							continue
 						self._diag_record_wait_response(
 							cmd_type=cmd_type,
 							ok=True,
