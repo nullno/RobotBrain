@@ -15,67 +15,107 @@ class PacketBuffer:
 	def __init__(self, is_debug=False):
 		self.is_debug = is_debug
 		self.packet_bytes_list = []
+		self._stream = bytearray()
 		# 清空缓存区域
 		self.empty_buffer()
+
+	def _find_first_header_idx(self):
+		try:
+			buf = bytes(self._stream)
+			headers = Packet.response_headers()
+			best = None
+			for hdr in headers:
+				idx = buf.find(hdr)
+				if idx >= 0 and (best is None or idx < best):
+					best = idx
+			return best
+		except Exception:
+			return None
+
+	def _try_parse_headerless_from_start(self):
+		'''兼容手机端偶发丢帧头场景：尝试将 [id,size,...,checksum] 还原为完整响应包。'''
+		try:
+			if len(self._stream) < 5:
+				return False
+
+			data_size = int(self._stream[1])
+			if data_size < 2 or data_size > 64:
+				return False
+
+			payload_len = data_size + 2  # id + size + status + param + checksum
+			if len(self._stream) < payload_len:
+				return False
+
+			payload = bytes(self._stream[:payload_len])
+			for hdr in Packet.response_headers():
+				frame = hdr + payload
+				ret, _ = Packet.is_response_legal(frame)
+				if ret:
+					self.packet_bytes_list.append(frame)
+					del self._stream[:payload_len]
+					return True
+			return False
+		except Exception:
+			return False
+
+	def _extract_packets(self):
+		'''从流缓存中尽可能提取有效数据帧（含错位/丢帧头容错）。'''
+		while True:
+			if len(self._stream) < 5:
+				return
+
+			hdr_idx = self._find_first_header_idx()
+
+			if hdr_idx is None:
+				if self._try_parse_headerless_from_start():
+					continue
+				# 无法识别则滑动丢弃 1 字节，避免死锁
+				del self._stream[0]
+				continue
+
+			if hdr_idx > 0:
+				# 头前缀若能还原为无头有效帧，优先恢复；否则丢弃噪声前缀
+				if self._try_parse_headerless_from_start():
+					continue
+				del self._stream[:hdr_idx]
+				if len(self._stream) < 5:
+					return
+
+			# 现在默认头在 0 位置
+			if len(self._stream) < 4:
+				return
+			data_size = int(self._stream[3])
+			if data_size < 2 or data_size > 64:
+				del self._stream[0]
+				continue
+
+			total_len = data_size + 4
+			if len(self._stream) < total_len:
+				return
+
+			frame = bytes(self._stream[:total_len])
+			ret, _ = Packet.is_response_legal(frame)
+			if ret:
+				self.packet_bytes_list.append(frame)
+				del self._stream[:total_len]
+				continue
+
+			# 当前头疑似伪头，滑动一字节继续找
+			del self._stream[0]
 	
 	def update(self, next_byte):
 		'''将新的字节添加到Packet中转站'''
-		
-		# < int > 转换为 bytearray
-		next_byte = struct.pack(">B", next_byte)
-		# print(f"next_byte = {next_byte}")
-		if not self.header_flag:
-			
-			# 接收帧头
-			if len(self.header) < Packet.HEADER_LEN:
-				# 向Header追加字节
-				self.header += next_byte
-				if len(self.header) == Packet.HEADER_LEN and self.header == Packet.HEADERS[Packet.PKT_TYPE_RESPONSE]:
-					# print(f"recv header: {self.header}")
-					self.header_flag = True
-			elif len(self.header) == Packet.HEADER_LEN:
-				# 首字节出队列
-				self.header = self.header[1:] + next_byte
-				# 查看Header是否匹配
-				if self.header == Packet.HEADERS[Packet.PKT_TYPE_RESPONSE]:
-					# print('header: {}'.format(self.header))
-					self.header_flag = True
-		elif not self.servo_id_flag:
-			# 接收舵机ID
-			self.servo_id += next_byte
-			self.servo_id_flag = True
-			# print(f"servo_id : {self.servo_id}")
-		elif not self.data_size_flag:
-			# 填充参数尺寸
-			self.data_size += next_byte
-			self.data_size_flag = True 
-			# 参数长度
-			self.param_len = struct.unpack('>B', self.data_size)[0] - 2
-			# print(f"参数长度:  {self.param_len}")
-			if self.param_len == 0:
-				self.param_bytes_flag = True
-		elif not self.servo_status_flag:
-			# 舵机状态
-			self.servo_status += next_byte
-			self.servo_status_flag = True
-			# print(f"servo_status: {self.servo_status}")
-		elif not self.param_bytes_flag:
-			# 填充参数
-			if len(self.param_bytes) < self.param_len:
-				self.param_bytes += next_byte
-				if len(self.param_bytes) == self.param_len:
-					self.param_bytes_flag = True
-		else:
-			# 计算校验和
-			tmp_packet_bytes = self.header + self.servo_id + self.data_size + self.servo_status + self.param_bytes + next_byte
-			# print(f"tmp_packet_bytes : {tmp_packet_bytes}")
-			ret, result = Packet.is_response_legal(tmp_packet_bytes)
-			if ret:
-				self.checksum_flag = True
-				# 将新的Packet数据添加到中转列表里
-				self.packet_bytes_list.append(tmp_packet_bytes)
-			# 重新清空缓冲区
-			self.empty_buffer()
+		try:
+			# < int > 转换为 bytearray
+			next_b = struct.pack(">B", next_byte)
+		except Exception:
+			return
+
+		self._stream.extend(next_b)
+		# 限制流缓存大小，防止异常情况下无限增长
+		if len(self._stream) > 512:
+			del self._stream[:-256]
+		self._extract_packets()
 		
 	def empty_buffer(self):
 		# 数据帧是否准备好
@@ -95,6 +135,8 @@ class PacketBuffer:
 		# 参数
 		self.param_bytes = b''
 		self.param_bytes_flag = False
+		# 流缓存
+		self._stream = bytearray()
 	
 	def has_valid_packet(self):
 		'''是否有有效的包'''

@@ -207,11 +207,21 @@ class ServoStatusCard(FloatLayout):
         )
 
     def update_data(self, data):
+        def _format_voltage(v):
+            try:
+                fv = float(v)
+            except Exception:
+                return "-"
+            # 兼容两种固件：有的直接返回 V（如 8/9），有的返回 0.1V（如 87 -> 8.7V）
+            if fv > 30:
+                fv = fv / 10.0
+            return f"{fv:.1f}V"
+
         self.body.clear_widgets()
         fields = [
             ("角度", "-" if not data else str(data.get("pos", 0))),
             ("温度", "-" if not data else f"{data.get('temp',0)}°C"),
-            ("电压", "-" if not data else f"{data.get('volt',0)}V"),
+            ("电压", "-" if not data else _format_voltage(data.get("volt", 0))),
             ("扭矩", "-" if not data else ("ON" if data.get("torque") else "OFF")),
         ]
 

@@ -25,6 +25,11 @@ class Packet:
 	CHECKSUM_LEN = 1 # 校验和长度
 
 	@classmethod
+	def response_headers(cls):
+		'''兼容的响应帧头集合。'''
+		return (cls.HEADERS[cls.PKT_TYPE_RESPONSE], cls.HEADERS[cls.PKT_TYPE_REQUEST])
+
+	@classmethod
 	def calc_checksum_request(cls, servo_id, data_size, cmd_type, param_bytes):
 		'''计算请求包的校验和'''
 		bytes_buffer = struct.pack('>BBB', servo_id, data_size, cmd_type) + param_bytes
@@ -39,10 +44,8 @@ class Packet:
 	@classmethod
 	def is_response_legal(cls, packet_bytes):
 		'''检验响应包是否合法'''
-		# 获取帧头
-		header = cls.HEADERS[cls.PKT_TYPE_RESPONSE]
-		# 帧头检验
-		if packet_bytes[:cls.HEADER_LEN] != cls.HEADERS[cls.PKT_TYPE_RESPONSE]:
+		# 帧头检验（兼容 FF F5 / FF FF 两种响应头）
+		if packet_bytes[:cls.HEADER_LEN] not in cls.response_headers():
 			return False, None
 		# 提取ID, 数据长度
 		idx_status = cls.HEADER_LEN + cls.ID_LEN + cls.SIZE_LEN + cls.STATUS_LEN
