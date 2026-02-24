@@ -21,6 +21,7 @@ import time
 from widgets.universal_tip import UniversalTip
 from widgets.ai_model_panel import AIModelPanel
 from widgets.other_settings_panel import OtherSettingsPanel
+from widgets.angle_knob import AngleKnob
 
 try:
     from widgets.runtime_status import RuntimeStatusLogger
@@ -1369,6 +1370,42 @@ class DebugPanel(Widget):
         control_panel.add_widget(row_cycle)
         
         box.add_widget(control_panel)
+
+        # ---------- 4. 拟物角度旋钮 ----------
+        knob_wrap = BoxLayout(
+            orientation="vertical",
+            size_hint_y=None,
+            height=dp(230),
+            padding=(dp(15), dp(8)),
+            spacing=dp(6),
+        )
+        with knob_wrap.canvas.before:
+            Color(0.12, 0.14, 0.17, 0.6)
+            kw_bg = RoundedRectangle(radius=[8])
+            Color(1, 1, 1, 0.1)
+            kw_border = Line(width=1)
+
+        def _update_kw_bg(inst, _):
+            kw_bg.pos = inst.pos
+            kw_bg.size = inst.size
+            kw_border.rounded_rectangle = (inst.x, inst.y, inst.width, inst.height, 8)
+
+        knob_wrap.bind(pos=_update_kw_bg, size=_update_kw_bg)
+
+        knob_caption = Label(
+            text="ANGLE 0-360",
+            color=(0.7, 0.8, 0.9, 1),
+            font_size="14sp",
+            size_hint_y=None,
+            height=dp(24),
+        )
+        knob_wrap.add_widget(knob_caption)
+
+        knob_anchor = AnchorLayout(anchor_x="center", anchor_y="center")
+        angle_knob = AngleKnob(size=(dp(180), dp(180)))
+        knob_anchor.add_widget(angle_knob)
+        knob_wrap.add_widget(knob_anchor)
+        box.add_widget(knob_wrap)
         sv.add_widget(box)
 
         def _reflow_single_grid(instance, width):
@@ -1446,7 +1483,7 @@ class DebugPanel(Widget):
                 pass
             return False
 
-        def _move_to_angle(angle_deg):
+        def _move_to_angle(angle_deg, show_tip=True):
             app = App.get_running_app()
             sid = _get_sid()
             if (
@@ -1471,22 +1508,48 @@ class DebugPanel(Widget):
                     
                     mgr.set_position_time(sid, pos, time_ms=dur)
                     self._mark_servo_writable(sid)
-                    msg = f"ID {sid} 转到 {angle_deg}° ({dur}ms)"
-                    Clock.schedule_once(lambda dt, m=msg: self._show_info_popup(m))
+                    if show_tip:
+                        msg = f"ID {sid} 转到 {angle_deg}° ({dur}ms)"
+                        Clock.schedule_once(lambda dt, m=msg: self._show_info_popup(m))
                 except Exception as e:
                     msg = f"移动失败: {e}"
                     Clock.schedule_once(lambda dt, m=msg: self._show_info_popup(m))
 
             threading.Thread(target=_do, daemon=True).start()
 
+        knob_sync_state = {"busy": False}
+
+        def _set_knob_and_text(value):
+            try:
+                v = float(value)
+            except Exception:
+                v = 0.0
+            knob_sync_state["busy"] = True
+            angle_knob.set_value(v)
+            ti_c_angle.text = str(int(round(max(0.0, min(360.0, v)))))
+            Clock.schedule_once(lambda dt: knob_sync_state.__setitem__("busy", False), 0)
+
         def _move_zero(_):
             _move_to_angle(0)
+            _set_knob_and_text(0)
 
         def _move_60(_):
             _move_to_angle(60)
+            _set_knob_and_text(60)
 
         def _move_360(_):
             _move_to_angle(360)
+            _set_knob_and_text(360)
+
+        def _move_knob_angle(dt=None):
+            try:
+                if knob_sync_state.get("busy"):
+                    return
+                ang = float(getattr(angle_knob, "value", 0.0))
+                ti_c_angle.text = str(int(round(ang)))
+                _move_to_angle(ang, show_tip=False)
+            except Exception:
+                pass
 
         def _read_status(_):
             app = App.get_running_app()
@@ -1522,6 +1585,11 @@ class DebugPanel(Widget):
                             msg = f"ID {sid} 读取失败：未收到返回数据"
                     else:
                         msg = f"ID {sid} -> pos:{pos} temp:{temp}C volt:{volt}V"
+                        try:
+                            deg = max(0.0, min(360.0, (float(pos) / 4095.0) * 360.0))
+                            Clock.schedule_once(lambda dt, d=deg: _set_knob_and_text(d), 0)
+                        except Exception:
+                            pass
                     Clock.schedule_once(lambda dt, m=msg: self._show_info_popup(m))
                 except Exception as e:
                     msg = f"读取失败: {e}"
@@ -1717,6 +1785,7 @@ class DebugPanel(Widget):
             try:
                 ang = float(ti_c_angle.text)
                 _move_to_angle(ang)
+                _set_knob_and_text(ang)
             except:
                 self._show_info_popup("请输入有效角度数字")
         btn_c_go.bind(on_release=_do_c_go)
@@ -1804,6 +1873,10 @@ class DebugPanel(Widget):
         btn_spin.bind(on_release=_spin_toggle)
         btn_set_id.bind(on_release=_set_id)
         btn_motor_mode.bind(on_release=_set_motor_mode)
+
+        knob_move_trigger = Clock.create_trigger(_move_knob_angle, 0.04)
+        angle_knob.bind(value=lambda *_: knob_move_trigger())
+        Clock.schedule_once(lambda dt: _set_knob_and_text(0), 0)
 
         # 更新扭矩显示当 ID 变化时，并在创建时立即刷新一次扭矩状态
         self._single_id_label.bind(

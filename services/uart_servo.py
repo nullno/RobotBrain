@@ -112,7 +112,7 @@ class UartServoManager:
 	CMD_TYPE_SYNC_WRITE = 0x83	# 同步写
 	# 电机控制
 	POSITION_DEADAREA = 10		# 舵机位置控制 死区 	 
-	def __init__(self, uart, servo_id_list=[1]):
+	def __init__(self, uart, servo_id_list=None, auto_scan=True):
 		'''初始化舵机管理器'''
 		self.uart = uart						# 串口
 		self.pkt_buffer = PacketBuffer()		# 数据帧缓冲区
@@ -137,8 +137,14 @@ class UartServoManager:
 			'last_rsp_len': 0,
 			'last_error': '',
 		}
-		# 舵机扫描
-		self.servo_scan(servo_id_list)
+		# 舵机扫描（可由上层延后到后台线程执行，避免阻塞启动）
+		if auto_scan:
+			try:
+				ids = list(servo_id_list or [])
+			except Exception:
+				ids = []
+			if ids:
+				self.servo_scan(ids)
 
 	def enable_diagnostics(self, enabled=True, tag='uart-servo', log_interval_sec=5.0):
 		'''开启/关闭通信诊断统计与周期日志。'''

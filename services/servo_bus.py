@@ -16,7 +16,11 @@ class ServoBus:
 
             if is_uart_wrapper:
                 self.uart = port
-                self.manager = UartServoManager(self.uart, servo_id_list=list(range(1, 26)))
+                self.manager = UartServoManager(
+                    self.uart,
+                    servo_id_list=list(range(1, 26)),
+                    auto_scan=False,
+                )
                 # Android USB wrapper 延迟抖动更大，放宽收包超时与重试次数，减少误判 0/25
                 try:
                     self.manager.RECEIVE_TIMEOUT = max(float(getattr(self.manager, 'RECEIVE_TIMEOUT', 0.02)), 0.24)
@@ -35,7 +39,11 @@ class ServoBus:
                     bytesize=8, timeout=0
                 )
                 # 默认管理 1-25 号舵机
-                self.manager = UartServoManager(self.uart, servo_id_list=list(range(1, 26)))
+                self.manager = UartServoManager(
+                    self.uart,
+                    servo_id_list=list(range(1, 26)),
+                    auto_scan=False,
+                )
                 # 实体串口同样适度放宽，提升 USB 转串口芯片在高负载下的应答稳定性
                 try:
                     self.manager.RECEIVE_TIMEOUT = max(float(getattr(self.manager, 'RECEIVE_TIMEOUT', 0.02)), 0.05)

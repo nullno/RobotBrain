@@ -532,6 +532,7 @@ def try_auto_connect(app, candidate_ports=None, list_ports_module=None):
                     app._mark_usb_connected_after_permission(status)
                     init_motion_controller_after_connect(app)
                     RuntimeStatusLogger.log_info(f"自动连接 Android USB 串口成功（baud={baud}）")
+                    schedule_servo_scan_after_connect(app, "自动连接")
                     Clock.schedule_once(app._safe_refresh_ui, 0)
                     return True
                 else:
@@ -609,6 +610,10 @@ def try_auto_connect(app, candidate_ports=None, list_ports_module=None):
                     init_motion_controller_after_connect(app)
                     try:
                         RuntimeStatusLogger.log_info(f"自动连接串口成功: {cand}")
+                    except Exception:
+                        pass
+                    try:
+                        schedule_servo_scan_after_connect(app, "自动连接")
                     except Exception:
                         pass
                     try:
