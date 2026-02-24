@@ -23,6 +23,8 @@ _monitor_thread = None
 _stop_event = None
 _last_devices = set()
 _callbacks = []
+_last_android_scan_err = ""
+_last_android_scan_err_ts = 0.0
 # Android 下检测到 OTG 插入时，默认不弹“打开应用/Intent”提示；
 # 应用已在前台运行时该弹窗会干扰调试。
 _android_popup_enabled = False
@@ -47,6 +49,7 @@ def _chip_name_by_vid_pid(vid, pid):
 
 def _scan_devices():
     """跨平台扫描可用串口/设备端点，返回一个字符串集合表示设备标识。"""
+    global _last_android_scan_err, _last_android_scan_err_ts
     devices = set()
     try:
         if _kivy_platform == 'android':
@@ -77,7 +80,23 @@ def _scan_devices():
                     chip = _chip_name_by_vid_pid(vid, pid)
                     devices.add(f"{chip}::VID={vid}:PID={pid}::{name}")
             except Exception:
-                pass
+                try:
+                    err = str(sys.exc_info()[1] or "unknown")
+                except Exception:
+                    err = "unknown"
+                try:
+                    now = time.time()
+                    should_log = (err != str(_last_android_scan_err)) or ((now - float(_last_android_scan_err_ts or 0.0)) > 6.0)
+                    if should_log:
+                        _last_android_scan_err = err
+                        _last_android_scan_err_ts = now
+                        msg = f"Android USB 枚举失败: {err}"
+                        if RuntimeStatusLogger:
+                            Clock.schedule_once(lambda dt, m=msg: RuntimeStatusLogger.log_error(m))
+                        else:
+                            logging.error(msg)
+                except Exception:
+                    pass
         elif sys.platform.startswith('win'):
             # Windows: 使用 pyserial 列出串口设备（COMx）
             try:

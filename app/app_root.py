@@ -200,6 +200,11 @@ class RobotDashboardApp(App):
 
             # 硬件同步
             if self.servo_bus and not getattr(self.servo_bus, "is_mock", True):
+                # USB 刚连接/重连与扫描阶段，暂缓主循环同步，避免串口争用导致主线程卡顿
+                usb_busy_until = float(getattr(self, "_usb_busy_until", 0.0) or 0.0)
+                if now < usb_busy_until or bool(getattr(self, "_servo_scan_in_progress", False)):
+                    return
+
                 active_period = float(getattr(self, "_sync_active_period", 0.1) or 0.1)
                 idle_period = float(getattr(self, "_sync_idle_period", 0.22) or 0.22)
                 pose_threshold = float(getattr(self, "_sync_pose_threshold_deg", 0.5) or 0.5)

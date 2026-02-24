@@ -11,6 +11,34 @@ from services.imu import IMUReader
 from services.motion_controller import MotionController
 
 
+def _mark_usb_transient_busy(app, seconds=2.4):
+    """标记 USB 连接/重连短暂忙碌窗口，避免主循环并发占用串口。"""
+    try:
+        now = time.time()
+        until = now + float(max(0.2, seconds))
+        cur = float(getattr(app, "_usb_busy_until", 0.0) or 0.0)
+        if until > cur:
+            app._usb_busy_until = until
+    except Exception:
+        pass
+
+
+def _schedule_safe_refresh_ui_throttled(app, delay=0.0, min_interval=0.35):
+    """节流 UI 刷新，避免 USB 事件风暴时主线程反复刷新导致卡顿。"""
+    try:
+        now = time.time()
+        last = float(getattr(app, "_last_usb_ui_refresh_ts", 0.0) or 0.0)
+        if (now - last) < float(max(0.05, min_interval)):
+            return
+        app._last_usb_ui_refresh_ts = now
+        Clock.schedule_once(app._safe_refresh_ui, max(0.0, float(delay or 0.0)))
+    except Exception:
+        try:
+            Clock.schedule_once(app._safe_refresh_ui, max(0.0, float(delay or 0.0)))
+        except Exception:
+            pass
+
+
 def _probe_online_ids_by_read(mgr, servo_ids):
     """在 scan=0 时兜底：通过读寄存器探测可通信的舵机 ID。"""
     online_ids = []
@@ -279,8 +307,9 @@ def ensure_android_usb_reconnect_watcher(app, reason=""):
                     RuntimeStatusLogger.log_info(
                         f"Android USB 串口已连接（授权后自动重试成功，baud={baud}）"
                     )
+                    _mark_usb_transient_busy(app, 2.6)
                     schedule_servo_scan_after_connect(app, "USB授权")
-                    Clock.schedule_once(app._safe_refresh_ui, 0)
+                    _schedule_safe_refresh_ui_throttled(app)
                     app._android_usb_reconnect_ev = None
                     return False
 
@@ -410,6 +439,8 @@ def schedule_servo_scan_after_connect(app, source="连接", allow_extra_retry=Tr
                     except Exception:
                         pass
 
+                _mark_usb_transient_busy(app, 2.4)
+
                 scan_ids = list(range(1, 26))
                 online_ids = []
                 preferred_ids = list(getattr(app, "_last_online_servo_ids", []) or [])
@@ -478,7 +509,7 @@ def schedule_servo_scan_after_connect(app, source="连接", allow_extra_retry=Tr
                             detail="online=0",
                         )
                         RuntimeStatusLogger.log_error(
-                            f"{source}后串口已连接，但未扫描到舵机（0/25），请检查舵机供电/接线/ID/波特率；已尝试波特率={tried_bauds}，并已放宽通信超时/重试"
+                            f"{source}后串口已连接，但未扫描到舵机（0/25）。若你能控制但读不到状态，通常是回包(RX)链路异常；请重点检查舵机总线回读线/地线/转接板RX方向与供电。已尝试波特率={tried_bauds}，并已放宽通信超时/重试"
                         )
 
                         # Android 首次连接后总线可能仍在稳定，追加一次延迟补扫（仅一次，避免循环）
@@ -501,7 +532,7 @@ def schedule_servo_scan_after_connect(app, source="连接", allow_extra_retry=Tr
                                 pass
 
                 try:
-                    Clock.schedule_once(app._safe_refresh_ui, 0)
+                    _schedule_safe_refresh_ui_throttled(app)
                 except Exception:
                     pass
             finally:
@@ -532,8 +563,9 @@ def try_auto_connect(app, candidate_ports=None, list_ports_module=None):
                     app._mark_usb_connected_after_permission(status)
                     init_motion_controller_after_connect(app)
                     RuntimeStatusLogger.log_info(f"自动连接 Android USB 串口成功（baud={baud}）")
+                    _mark_usb_transient_busy(app, 2.6)
                     schedule_servo_scan_after_connect(app, "自动连接")
-                    Clock.schedule_once(app._safe_refresh_ui, 0)
+                    _schedule_safe_refresh_ui_throttled(app)
                     return True
                 else:
                     try:
@@ -698,12 +730,13 @@ def handle_otg_event(app, event, device_id, list_ports_module=None):
                                     )
                                 except Exception:
                                     pass
+                                _mark_usb_transient_busy(app, 2.6)
                                 try:
                                     schedule_servo_scan_after_connect(app, "OTG")
                                 except Exception:
                                     pass
                                 try:
-                                    Clock.schedule_once(app._safe_refresh_ui, 0)
+                                    _schedule_safe_refresh_ui_throttled(app)
                                 except Exception:
                                     pass
                                 return
@@ -817,6 +850,7 @@ def handle_otg_event(app, event, device_id, list_ports_module=None):
                                     except Exception:
                                         pass
                                     app.servo_bus = sb
+                                    _mark_usb_transient_busy(app, 2.6)
                                     try:
                                         schedule_servo_scan_after_connect(app, "OTG")
                                     except Exception:
@@ -845,7 +879,7 @@ def handle_otg_event(app, event, device_id, list_ports_module=None):
 
                         if connected:
                             try:
-                                Clock.schedule_once(app._safe_refresh_ui, 0)
+                                _schedule_safe_refresh_ui_throttled(app)
                             except Exception:
                                 pass
                     except Exception:
@@ -881,7 +915,7 @@ def handle_otg_event(app, event, device_id, list_ports_module=None):
                     except Exception:
                         pass
                     try:
-                        Clock.schedule_once(app._safe_refresh_ui, 0)
+                        _schedule_safe_refresh_ui_throttled(app)
                     except Exception:
                         pass
             except Exception:

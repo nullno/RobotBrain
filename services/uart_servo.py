@@ -12,6 +12,7 @@ import time
 import logging
 import serial
 import struct
+import threading
 from .packet import Packet
 from .packet_buffer import PacketBuffer
 from .data_table import *
@@ -116,6 +117,8 @@ class UartServoManager:
 		'''初始化舵机管理器'''
 		self.uart = uart						# 串口
 		self.pkt_buffer = PacketBuffer()		# 数据帧缓冲区
+		# 串口事务锁：确保同一时刻仅有一个请求-应答事务，避免多线程读写串扰
+		self._io_lock = threading.RLock()
   		# 创建舵机信息字典
 		self.servo_info_dict = {}				# 舵机信息字典
 		# 诊断统计（默认关闭，可在上层按平台开启）
@@ -253,43 +256,44 @@ class UartServoManager:
 
 	def send_request(self, servo_id, cmd_type, param_bytes, wait_response=False, retry_ntime=None):
 		'''发送请求'''
-		if wait_response:
-			# 清空串口缓冲区
-			self.uart.readall()
+		with self._io_lock:
+			if wait_response:
+				# 清空串口缓冲区
+				self.uart.readall()
 
-		packet_bytes = Packet.pack(servo_id, cmd_type, param_bytes)	
+			packet_bytes = Packet.pack(servo_id, cmd_type, param_bytes)	
 
-		if not wait_response:
-			# 发送指令
-			self.uart.write(packet_bytes)
-			time.sleep(self.DELAY_BETWEEN_CMD)
-			return True, None
-		else:
-			
-			if retry_ntime is None:
-				retry_ntime = self.RETRY_NTIME
-			# 尝试多次
-			for i in range(retry_ntime):
+			if not wait_response:
+				# 发送指令
 				self.uart.write(packet_bytes)
 				time.sleep(self.DELAY_BETWEEN_CMD)
-				response_packet =  self.receive_response()
-				if response_packet is not None:
-					self._diag_record_wait_response(
-						cmd_type=cmd_type,
-						ok=True,
-						retry_used=(i + 1),
-						rsp_len=len(response_packet),
-					)
-					return True, response_packet
-			# 发送失败
-			self._diag_record_wait_response(
-				cmd_type=cmd_type,
-				ok=False,
-				retry_used=retry_ntime,
-				rsp_len=0,
-				err='response-timeout-or-invalid-packet',
-			)
-			return False, None
+				return True, None
+			else:
+				
+				if retry_ntime is None:
+					retry_ntime = self.RETRY_NTIME
+				# 尝试多次
+				for i in range(retry_ntime):
+					self.uart.write(packet_bytes)
+					time.sleep(self.DELAY_BETWEEN_CMD)
+					response_packet =  self.receive_response()
+					if response_packet is not None:
+						self._diag_record_wait_response(
+							cmd_type=cmd_type,
+							ok=True,
+							retry_used=(i + 1),
+							rsp_len=len(response_packet),
+						)
+						return True, response_packet
+				# 发送失败
+				self._diag_record_wait_response(
+					cmd_type=cmd_type,
+					ok=False,
+					retry_used=retry_ntime,
+					rsp_len=0,
+					err='response-timeout-or-invalid-packet',
+				)
+				return False, None
 
 	def find_servo(self):
 		'''搜索舵机'''

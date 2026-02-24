@@ -46,6 +46,9 @@
   - `services/vision.py`: 视觉处理（若有，通常依赖 OpenCV / numpy）。
 - `requirements.txt`: 项目依赖（第三方库列表）。
 
+**调试面板架构文档**
+- 调试面板拆分与调用关系见：`docs/debug_panel_architecture.md`
+
 **关键功能定位（遇到问题去这些地方排查）**
 - 摄像头无画面（Android）: 检查 `widgets/camera_view.py`、Android 权限（`app_root._check_android_permissions`）以及打包时是否声明摄像头权限。
 - 摄像头无画面（PC）: 检查是否安装 `opencv-python`，在 `widgets/camera_view.py` 内对 `cv2` 的导入是否抛错。
