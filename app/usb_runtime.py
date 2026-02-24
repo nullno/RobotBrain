@@ -94,36 +94,8 @@ def _probe_online_ids_fast(mgr, preferred_ids=None, full_ids=None):
 
 def _get_android_servo_baud_candidates(app):
     """获取 Android 舵机串口候选波特率（按优先级去重）。"""
-    values = []
-    try:
-        cur = int(getattr(app, "_usb_baud", 0) or 0)
-        if cur > 0:
-            values.append(cur)
-    except Exception:
-        pass
-
-    try:
-        extra = getattr(app, "_usb_baud_candidates", None)
-        if isinstance(extra, (list, tuple)):
-            for item in extra:
-                try:
-                    v = int(item)
-                    if v > 0:
-                        values.append(v)
-                except Exception:
-                    pass
-    except Exception:
-        pass
-
-    values.extend([115200, 1000000])
-    uniq = []
-    seen = set()
-    for v in values:
-        if v in seen:
-            continue
-        seen.add(v)
-        uniq.append(v)
-    return uniq
+    # 锁定为 115200，与手机串口工具实测一致，避免自动切换波特率带来的不稳定。
+    return [115200]
 
 
 def _try_open_android_servo_bus(app, prefer_device_id=None):
@@ -441,10 +413,36 @@ def schedule_servo_scan_after_connect(app, source="连接", allow_extra_retry=Tr
 
                 _mark_usb_transient_busy(app, 2.4)
 
-                scan_ids = list(range(1, 26))
+                if platform == "android":
+                    # Android 端避免全量扫描风暴：优先历史在线 ID / 最近操作 ID 的轻量探测
+                    scan_ids = []
+                    try:
+                        scan_ids.extend(int(x) for x in (getattr(app, "_last_online_servo_ids", []) or []))
+                    except Exception:
+                        pass
+                    try:
+                        latest_sid = int(getattr(app, "_latest_probe_sid", 0) or 0)
+                        if latest_sid > 0:
+                            scan_ids.append(latest_sid)
+                    except Exception:
+                        pass
+                    # 去重并保底少量 ID，避免 1..25 全扫造成卡顿
+                    uniq = []
+                    seen = set()
+                    for sid in scan_ids:
+                        if sid <= 0 or sid > 250 or sid in seen:
+                            continue
+                        seen.add(sid)
+                        uniq.append(sid)
+                    scan_ids = uniq[:25]
+                    if not scan_ids:
+                        scan_ids = list(range(1, 26))
+                else:
+                    scan_ids = list(range(1, 26))
                 online_ids = []
                 preferred_ids = list(getattr(app, "_last_online_servo_ids", []) or [])
-                for idx in range(3):
+                max_rounds = 1 if platform == "android" else 3
+                for idx in range(max_rounds):
                     try:
                         mgr.servo_scan(scan_ids)
                     except Exception:
@@ -462,7 +460,7 @@ def schedule_servo_scan_after_connect(app, source="连接", allow_extra_retry=Tr
                     if online_ids:
                         break
 
-                    time.sleep(0.25 + 0.2 * idx)
+                    time.sleep(0.2 + 0.15 * idx)
 
                 if not online_ids:
                     try:
@@ -490,7 +488,8 @@ def schedule_servo_scan_after_connect(app, source="连接", allow_extra_retry=Tr
                 else:
                     recovered_ids = []
                     if platform == "android":
-                        recovered_ids = _retry_android_servo_scan_with_baud_fallback(app, source)
+                        # 移动端避免重连重扫风暴：不再自动执行高开销波特率回退扫描
+                        recovered_ids = []
 
                     if recovered_ids:
                         app._update_usb_state(
@@ -512,22 +511,10 @@ def schedule_servo_scan_after_connect(app, source="连接", allow_extra_retry=Tr
                             f"{source}后串口已连接，但未扫描到舵机（0/25）。若你能控制但读不到状态，通常是回包(RX)链路异常；请重点检查舵机总线回读线/地线/转接板RX方向与供电。已尝试波特率={tried_bauds}，并已放宽通信超时/重试"
                         )
 
-                        # Android 首次连接后总线可能仍在稳定，追加一次延迟补扫（仅一次，避免循环）
+                        # Android 端避免循环补扫导致卡顿：仅记录状态，不自动重复补扫
                         if platform == "android" and bool(allow_extra_retry):
                             try:
-                                RuntimeStatusLogger.log_info("将于 1.2s 后执行一次补扫（Android）")
-                            except Exception:
-                                pass
-
-                            try:
-                                Clock.schedule_once(
-                                    lambda _dt: schedule_servo_scan_after_connect(
-                                        app,
-                                        source=f"{source}/补扫",
-                                        allow_extra_retry=False,
-                                    ),
-                                    1.2,
-                                )
+                                RuntimeStatusLogger.log_info("Android 已跳过自动补扫，避免连接后卡顿")
                             except Exception:
                                 pass
 

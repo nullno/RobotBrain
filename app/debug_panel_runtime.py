@@ -239,6 +239,13 @@ def refresh_servo_status(owner):
         return
 
     now = time.time()
+    try:
+        runtime_profile = str(getattr(app, "_runtime_profile", "") or "").lower()
+        if runtime_profile == "mobile":
+            owner._status_cache_ttl = float(max(1.8, getattr(owner, "_status_cache_ttl", 1.2) or 1.2))
+    except Exception:
+        pass
+
     if (
         owner._status_cards_cache is not None
         and (now - float(getattr(owner, "_status_cards_cache_time", 0.0) or 0.0))
@@ -267,18 +274,35 @@ def refresh_servo_status(owner):
 
         if not known_ids:
             try:
-                # Android 上禁止首次全量 ping(1..25)，避免长时间阻塞与卡顿
-                preferred_ids = list(getattr(app, "_last_online_servo_ids", []) or [])
-                probe_ids = sorted(writable_ids) if writable_ids else preferred_ids
-                if (not probe_ids) and app and getattr(app, "servo_bus", None):
-                    if getattr(app, "_latest_probe_sid", None):
-                        probe_ids = [int(getattr(app, "_latest_probe_sid"))]
-                for sid in probe_ids:
-                    try:
-                        if mgr.ping(int(sid)):
-                            known_ids.add(int(sid))
-                    except Exception:
-                        pass
+                runtime_profile = str(getattr(app, "_runtime_profile", "") or "").lower()
+                if runtime_profile == "mobile":
+                    last_probe = float(getattr(owner, "_status_unknown_probe_ts", 0.0) or 0.0)
+                    if (now - last_probe) >= 2.0:
+                        preferred_ids = list(getattr(app, "_last_online_servo_ids", []) or [])
+                        probe_ids = sorted(writable_ids) if writable_ids else preferred_ids
+                        if (not probe_ids) and app and getattr(app, "servo_bus", None):
+                            if getattr(app, "_latest_probe_sid", None):
+                                probe_ids = [int(getattr(app, "_latest_probe_sid"))]
+                        probe_ids = [int(x) for x in probe_ids[:3]]
+                        for sid in probe_ids:
+                            try:
+                                if mgr.ping(int(sid)):
+                                    known_ids.add(int(sid))
+                            except Exception:
+                                pass
+                        owner._status_unknown_probe_ts = now
+                else:
+                    preferred_ids = list(getattr(app, "_last_online_servo_ids", []) or [])
+                    probe_ids = sorted(writable_ids) if writable_ids else preferred_ids
+                    if (not probe_ids) and app and getattr(app, "servo_bus", None):
+                        if getattr(app, "_latest_probe_sid", None):
+                            probe_ids = [int(getattr(app, "_latest_probe_sid"))]
+                    for sid in probe_ids:
+                        try:
+                            if mgr.ping(int(sid)):
+                                known_ids.add(int(sid))
+                        except Exception:
+                            pass
             except Exception:
                 pass
 

@@ -322,17 +322,33 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
             ):
                 return False
             mgr = app.servo_bus.manager
+
+            cache = getattr(owner, "_sid_online_probe_cache", None)
+            if not isinstance(cache, dict):
+                cache = {}
+                owner._sid_online_probe_cache = cache
+            now = time.time()
+            c = cache.get(int(sid))
+            if isinstance(c, dict) and (now - float(c.get("ts", 0.0) or 0.0)) < 1.5:
+                return bool(c.get("ok", False))
+
             info = getattr(mgr, "servo_info_dict", {}).get(int(sid))
             if info is not None and bool(getattr(info, "is_online", False)):
+                cache[int(sid)] = {"ok": True, "ts": now}
                 return True
-            return bool(mgr.ping(int(sid)))
+            ok = bool(mgr.ping(int(sid)))
+            cache[int(sid)] = {"ok": bool(ok), "ts": now}
+            return ok
         except Exception:
             return False
 
-    def _require_sid_online(sid):
+    def _require_sid_online(sid, strict=True):
         ok = _is_sid_online(sid)
         if not ok:
-            owner._show_info_popup(f"ID {sid} 未连接")
+            if strict:
+                owner._show_info_popup(f"ID {sid} 未连接")
+            else:
+                owner._show_info_popup(f"ID {sid} 未确认在线，已尝试下发")
         return ok
 
     def _move_to_angle(angle_deg, show_tip=True):
@@ -345,8 +361,7 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
         ):
             owner._show_info_popup("未连接舵机或为 MOCK 模式")
             return
-        if not _require_sid_online(sid):
-            return
+        _require_sid_online(sid, strict=False)
 
         def _do():
             try:
@@ -635,8 +650,7 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
             ):
                 owner._show_info_popup("ServoBus 未连接")
                 return
-            if not _require_sid_online(sid):
-                return
+            _require_sid_online(sid, strict=False)
             mgr = app.servo_bus.manager
             cur = mgr.read_data_by_name(sid, "TORQUE_ENABLE")
             new = 0x01 if not cur else 0x00
@@ -666,8 +680,7 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
         ):
             owner._show_info_popup("ServoBus 未连接")
             return
-        if not _require_sid_online(sid):
-            return
+        _require_sid_online(sid, strict=False)
 
         stop_flag = {"running": True}
         owner._spin_controllers[sid] = stop_flag
@@ -707,8 +720,7 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
         ):
             owner._show_info_popup("ServoBus 未连接")
             return
-        if not _require_sid_online(sid):
-            return
+        _require_sid_online(sid, strict=False)
 
         content = BoxLayout(orientation="vertical", spacing=8, padding=8)
         ti = TextInput(text=str(sid), multiline=False, input_filter="int")
@@ -761,8 +773,7 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
         ):
             owner._show_info_popup("ServoBus 未连接")
             return
-        if not _require_sid_online(sid):
-            return
+        _require_sid_online(sid, strict=False)
         content = BoxLayout(orientation="vertical", spacing=8, padding=8)
         btn_servo = tech_button_cls(text="舵机模式")
         btn_dc = tech_button_cls(text="直流电机模式")
@@ -823,8 +834,7 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
         if not (hasattr(app, "servo_bus") and app.servo_bus and not getattr(app.servo_bus, "is_mock", True)):
             owner._show_info_popup("舵机未连接")
             return
-        if not _require_sid_online(sid):
-            return
+        _require_sid_online(sid, strict=False)
 
         ctrl = {'running': True}
         owner._spin_controllers[sid] = ctrl
