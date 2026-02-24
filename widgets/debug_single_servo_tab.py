@@ -4,6 +4,7 @@ import time
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.metrics import dp
+from kivy.utils import platform
 from kivy.uix.anchorlayout import AnchorLayout
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
@@ -311,6 +312,29 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
             pass
         return False
 
+    def _is_sid_online(sid):
+        app = App.get_running_app()
+        try:
+            if not (
+                hasattr(app, "servo_bus")
+                and app.servo_bus
+                and not getattr(app.servo_bus, "is_mock", True)
+            ):
+                return False
+            mgr = app.servo_bus.manager
+            info = getattr(mgr, "servo_info_dict", {}).get(int(sid))
+            if info is not None and bool(getattr(info, "is_online", False)):
+                return True
+            return bool(mgr.ping(int(sid)))
+        except Exception:
+            return False
+
+    def _require_sid_online(sid):
+        ok = _is_sid_online(sid)
+        if not ok:
+            owner._show_info_popup(f"ID {sid} 未连接")
+        return ok
+
     def _move_to_angle(angle_deg, show_tip=True):
         app = App.get_running_app()
         sid = _get_sid()
@@ -320,6 +344,8 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
             or getattr(app.servo_bus, "is_mock", True)
         ):
             owner._show_info_popup("未连接舵机或为 MOCK 模式")
+            return
+        if not _require_sid_online(sid):
             return
 
         def _do():
@@ -381,6 +407,10 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
     def _read_status(_):
         app = App.get_running_app()
         sid = _get_sid()
+        try:
+            app._latest_probe_sid = int(sid)
+        except Exception:
+            pass
         if (
             not hasattr(app, "servo_bus")
             or not app.servo_bus
@@ -388,6 +418,16 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
         ):
             owner._show_info_popup("未连接舵机或为 MOCK 模式")
             return
+        if not _require_sid_online(sid):
+            return
+
+        try:
+            app._suspend_servo_sync_until = max(
+                float(getattr(app, "_suspend_servo_sync_until", 0.0) or 0.0),
+                time.time() + 1.4,
+            )
+        except Exception:
+            pass
 
         def _do_read():
             try:
@@ -403,11 +443,27 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
                     except Exception:
                         ping_ok = False
 
+                    # Android 下首次读取失败时，尝试自动重连一次后重读
+                    if (not ping_ok) and platform == "android" and hasattr(app, "_try_auto_connect"):
+                        try:
+                            app._try_auto_connect()
+                            time.sleep(0.28)
+                            if (
+                                hasattr(app, "servo_bus")
+                                and app.servo_bus
+                                and not getattr(app.servo_bus, "is_mock", True)
+                            ):
+                                mgr = app.servo_bus.manager
+                                pos = mgr.read_data_by_name(sid, "CURRENT_POSITION")
+                                temp = mgr.read_data_by_name(sid, "CURRENT_TEMPERATURE")
+                                volt = mgr.read_data_by_name(sid, "CURRENT_VOLTAGE")
+                                ping_ok = bool(mgr.ping(sid))
+                        except Exception:
+                            pass
+
                     if ping_ok:
                         owner._mark_servo_writable(sid)
                         msg = f"ID {sid} 在线，但读回不可用（当前链路仅写入稳定）"
-                    elif sid in set(getattr(owner, "_writable_servo_ids", set()) or set()):
-                        msg = f"ID {sid} 可控制，但读取状态不可用（请以动作为准）"
                     else:
                         msg = f"ID {sid} 读取失败：未收到返回数据"
                 else:
@@ -427,12 +483,18 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
     def _readback_self_test(_):
         app = App.get_running_app()
         sid = _get_sid()
+        try:
+            app._latest_probe_sid = int(sid)
+        except Exception:
+            pass
         if (
             not hasattr(app, "servo_bus")
             or not app.servo_bus
             or getattr(app.servo_bus, "is_mock", True)
         ):
             owner._show_info_popup("未连接舵机或为 MOCK 模式")
+            return
+        if not _require_sid_online(sid):
             return
 
         try:
@@ -441,6 +503,11 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
             owner._status_poll_suspended_until = max(
                 float(getattr(owner, "_status_poll_suspended_until", 0.0) or 0.0),
                 now_ts + 2.2,
+            )
+            # 自检期间暂停主循环同步写，避免读写并发导致读回失败
+            app._suspend_servo_sync_until = max(
+                float(getattr(app, "_suspend_servo_sync_until", 0.0) or 0.0),
+                now_ts + 2.8,
             )
         except Exception:
             pass
@@ -453,6 +520,21 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
 
             try:
                 mgr = app.servo_bus.manager
+
+                # Android 下自检前先做一次连通性预热，失败则自动重连一次
+                try:
+                    if platform == "android" and not bool(mgr.ping(sid)) and hasattr(app, "_try_auto_connect"):
+                        app._try_auto_connect()
+                        time.sleep(0.35)
+                        if (
+                            hasattr(app, "servo_bus")
+                            and app.servo_bus
+                            and not getattr(app.servo_bus, "is_mock", True)
+                        ):
+                            mgr = app.servo_bus.manager
+                except Exception:
+                    pass
+
                 for _idx in range(samples):
                     try:
                         pos = mgr.read_data_by_name(sid, "CURRENT_POSITION")
@@ -508,6 +590,7 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
             finally:
                 try:
                     owner._status_poll_suspended_until = 0.0
+                    app._suspend_servo_sync_until = 0.0
                     Clock.schedule_once(lambda dt: owner.refresh_servo_status(), 0)
                 except Exception:
                     pass
@@ -543,6 +626,8 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
             ):
                 owner._show_info_popup("ServoBus 未连接")
                 return
+            if not _require_sid_online(sid):
+                return
             mgr = app.servo_bus.manager
             cur = mgr.read_data_by_name(sid, "TORQUE_ENABLE")
             new = 0x01 if not cur else 0x00
@@ -571,6 +656,8 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
             and not getattr(app.servo_bus, "is_mock", True)
         ):
             owner._show_info_popup("ServoBus 未连接")
+            return
+        if not _require_sid_online(sid):
             return
 
         stop_flag = {"running": True}
@@ -610,6 +697,8 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
             and not getattr(app.servo_bus, "is_mock", True)
         ):
             owner._show_info_popup("ServoBus 未连接")
+            return
+        if not _require_sid_online(sid):
             return
 
         content = BoxLayout(orientation="vertical", spacing=8, padding=8)
@@ -662,6 +751,8 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
             and not getattr(app.servo_bus, "is_mock", True)
         ):
             owner._show_info_popup("ServoBus 未连接")
+            return
+        if not _require_sid_online(sid):
             return
         content = BoxLayout(orientation="vertical", spacing=8, padding=8)
         btn_servo = tech_button_cls(text="舵机模式")
@@ -722,6 +813,8 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
         app = App.get_running_app()
         if not (hasattr(app, "servo_bus") and app.servo_bus and not getattr(app.servo_bus, "is_mock", True)):
             owner._show_info_popup("舵机未连接")
+            return
+        if not _require_sid_online(sid):
             return
 
         ctrl = {'running': True}

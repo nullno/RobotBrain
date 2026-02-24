@@ -324,12 +324,15 @@ def start_permission_and_otg_watchers(app):
     Clock.schedule_once(lambda dt: app._start_permission_watcher(), 0.6)
 
     try:
-        usb_otg.start_monitor()
-        RuntimeStatusLogger.log_info("串口/OTG 监测已启动")
-        try:
-            usb_otg.register_device_callback(app._on_otg_event)
-        except Exception:
-            pass
+        if platform == "android":
+            RuntimeStatusLogger.log_info("Android 使用 USB attach/reconnect 机制，已跳过 OTG 轮询监测")
+        else:
+            usb_otg.start_monitor()
+            RuntimeStatusLogger.log_info("串口/OTG 监测已启动")
+            try:
+                usb_otg.register_device_callback(app._on_otg_event)
+            except Exception:
+                pass
     except Exception as e:
         try:
             RuntimeStatusLogger.log_error(f"OTG 监测启动失败: {e}")

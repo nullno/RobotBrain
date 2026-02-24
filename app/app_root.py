@@ -200,6 +200,11 @@ class RobotDashboardApp(App):
 
             # 硬件同步
             if self.servo_bus and not getattr(self.servo_bus, "is_mock", True):
+                # 调试读取/自检期间可临时暂停主循环同步写，避免读写争用导致读回 0%
+                suspend_sync_until = float(getattr(self, "_suspend_servo_sync_until", 0.0) or 0.0)
+                if now < suspend_sync_until:
+                    return
+
                 # USB 刚连接/重连与扫描阶段，暂缓主循环同步，避免串口争用导致主线程卡顿
                 usb_busy_until = float(getattr(self, "_usb_busy_until", 0.0) or 0.0)
                 if now < usb_busy_until or bool(getattr(self, "_servo_scan_in_progress", False)):

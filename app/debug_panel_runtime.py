@@ -151,6 +151,7 @@ def render_status_cards(owner, cards):
     if grid is None:
         return
     try:
+        on_card_click = getattr(owner, "_on_status_card_click", None)
         card_map = getattr(owner, "_status_card_widgets", None)
         if not isinstance(card_map, dict):
             card_map = {}
@@ -172,7 +173,7 @@ def render_status_cards(owner, cards):
             wanted_order.append(sid)
             widget = card_map.get(sid)
             if widget is None:
-                widget = ServoStatusCard(sid, data=data, online=online)
+                widget = ServoStatusCard(sid, data=data, online=online, on_click=on_card_click)
                 card_map[sid] = widget
                 try:
                     grid.add_widget(widget)
@@ -180,6 +181,7 @@ def render_status_cards(owner, cards):
                     pass
             else:
                 try:
+                    widget.on_click = on_card_click
                     widget.update_data(data)
                     widget.set_online(bool(online))
                 except Exception:
@@ -212,11 +214,28 @@ def refresh_servo_status(owner):
     if status_grid is None:
         return
 
+    # 先渲染占位卡，避免首次刷新期间（尤其手机端串口探测慢）出现空白页
+    try:
+        has_widgets = bool(getattr(status_grid, "children", None))
+        has_cache = bool(getattr(owner, "_status_cards_cache", None))
+        if (not has_widgets) and (not has_cache):
+            placeholder_cards = [(sid, None, False) for sid in range(1, 26)]
+            Clock.schedule_once(lambda dt, cards=placeholder_cards: render_status_cards(owner, cards), 0)
+    except Exception:
+        pass
+
     try:
         suspend_until = float(getattr(owner, "_status_poll_suspended_until", 0.0) or 0.0)
     except Exception:
         suspend_until = 0.0
     if time.time() < suspend_until:
+        # 轮询暂停期间若有缓存则继续显示缓存，避免看起来“没有内容”
+        try:
+            cards = list(getattr(owner, "_status_cards_cache", None) or [])
+            if cards:
+                Clock.schedule_once(lambda dt, c=cards: render_status_cards(owner, c), 0)
+        except Exception:
+            pass
         return
 
     now = time.time()
@@ -248,7 +267,12 @@ def refresh_servo_status(owner):
 
         if not known_ids:
             try:
-                probe_ids = sorted(writable_ids) if writable_ids else list(range(1, 26))
+                # Android 上禁止首次全量 ping(1..25)，避免长时间阻塞与卡顿
+                preferred_ids = list(getattr(app, "_last_online_servo_ids", []) or [])
+                probe_ids = sorted(writable_ids) if writable_ids else preferred_ids
+                if (not probe_ids) and app and getattr(app, "servo_bus", None):
+                    if getattr(app, "_latest_probe_sid", None):
+                        probe_ids = [int(getattr(app, "_latest_probe_sid"))]
                 for sid in probe_ids:
                     try:
                         if mgr.ping(int(sid)):
@@ -337,7 +361,8 @@ def refresh_servo_status(owner):
                             "next_ts": now + wait_sec,
                         }
             elif sid in writable_ids:
-                online = True
+                # 仅用于后续探测优先级，不作为在线判据，避免“未连接却显示已连接”
+                online = False
                 if data is None:
                     data = dict(pos="?", temp="?", volt="?", torque=None)
 

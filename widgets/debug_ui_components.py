@@ -121,7 +121,7 @@ class DangerButton(Button):
 class ServoStatusCard(FloatLayout):
     radius = 8
 
-    def __init__(self, sid, data=None, online=True, **kwargs):
+    def __init__(self, sid, data=None, online=True, on_click=None, **kwargs):
         super().__init__(
             size_hint=(None, None),
             size=(dp(95), dp(90)),
@@ -129,6 +129,7 @@ class ServoStatusCard(FloatLayout):
         )
 
         self.sid = sid
+        self.on_click = on_click
 
         with self.canvas.before:
             if online:
@@ -246,3 +247,14 @@ class ServoStatusCard(FloatLayout):
             self.set_online(data is not None)
         except Exception:
             pass
+
+    def on_touch_down(self, touch):
+        try:
+            if self.collide_point(*touch.pos):
+                cb = getattr(self, "on_click", None)
+                if callable(cb):
+                    cb(int(self.sid))
+                return True
+        except Exception:
+            pass
+        return super().on_touch_down(touch)

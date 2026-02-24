@@ -47,6 +47,7 @@ class DebugPanel(Widget):
         self._status_backoff_base_sec = 0.8
         self._status_backoff_max_sec = 5.0
         self._lazy_tabs = {}
+        self._pending_single_servo_sid = None
 
     def _mark_servo_writable(self, sid):
         try:
@@ -164,6 +165,45 @@ class DebugPanel(Widget):
         if tab_item is None:
             tp.add_widget(t_status)
 
+    def _on_status_card_click(self, sid):
+        self._jump_to_single_servo_tab(sid)
+
+    def _jump_to_single_servo_tab(self, sid):
+        try:
+            sid = max(1, min(250, int(sid)))
+        except Exception:
+            return
+
+        tp = getattr(self, "_debug_tp", None)
+        if tp is None:
+            return
+
+        self._pending_single_servo_sid = sid
+
+        item = self._lazy_tabs.get("关节调试", {})
+        target_tab = item.get("tab")
+        if target_tab is None:
+            return
+
+        try:
+            tp.switch_to(target_tab)
+        except Exception:
+            pass
+
+        self._ensure_lazy_tab_built(tp, target_tab)
+
+        def _apply_sid(_dt=0):
+            try:
+                lbl = getattr(self, "_single_id_label", None)
+                pending = int(getattr(self, "_pending_single_servo_sid", sid) or sid)
+                if lbl is not None:
+                    lbl.text = str(max(1, min(250, pending)))
+                self._pending_single_servo_sid = None
+            except Exception:
+                pass
+
+        Clock.schedule_once(_apply_sid, 0)
+
     def open_debug(self):
         if self._debug_popup is not None:
             try:
@@ -222,7 +262,7 @@ class DebugPanel(Widget):
         self._lazy_tabs = {}
         t_actions = self._register_lazy_tab(tp, "快捷动作", self._build_actions_tab)
         self._register_lazy_tab(tp, "连接状态", self._build_status_tab)
-        self._register_lazy_tab(tp, "关节调试", self._build_single_servo_tab)
+        t_single = self._register_lazy_tab(tp, "关节调试", self._build_single_servo_tab)
         self._register_lazy_tab(tp, "AI模型", self._build_ai_model_tab)
         self._register_lazy_tab(tp, "高级设置", self._build_other_settings_tab)
 
@@ -232,6 +272,8 @@ class DebugPanel(Widget):
             pass
 
         self._ensure_lazy_tab_built(tp, t_actions)
+        # 关节调试预构建：避免首次跳转卡在“加载中”，并减少 tab 交互异常风险
+        self._ensure_lazy_tab_built(tp, t_single)
 
         tp.bind(current_tab=lambda inst, val: self._update_tab_highlight(inst, val))
         Clock.schedule_once(
