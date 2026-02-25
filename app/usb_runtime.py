@@ -365,6 +365,8 @@ def handle_android_usb_attach_intent(app, source="resume"):
             RuntimeStatusLogger.log_info(
                 f"收到 USB attach intent({source}): {dev_name} {vid}:{pid}"
             )
+            app._usb_connected = True
+            app._servo_scan_completed = False
             ensure_android_usb_reconnect_watcher(app, "attach intent")
         except Exception:
             pass
@@ -393,20 +395,24 @@ def schedule_servo_scan_after_connect(app, source="连接", allow_extra_retry=Tr
         if getattr(app, "_servo_scan_in_progress", False):
             return
         app._servo_scan_in_progress = True
+        app._servo_scan_completed = False
 
         def _worker():
             try:
                 sb = getattr(app, "servo_bus", None)
                 if not sb or getattr(sb, "is_mock", True):
+                    app._servo_scan_in_progress = False
+                    app._servo_scan_completed = False
                     return
 
                 mgr = getattr(sb, "manager", None)
                 if not mgr:
+                    app._servo_scan_in_progress = False
+                    app._servo_scan_completed = False
                     return
 
                 if platform == "android":
                     try:
-                        # 手机侧 USB 串口刚建立时总线可能尚未稳定，先短暂等待再扫
                         time.sleep(0.18)
                     except Exception:
                         pass
@@ -414,7 +420,6 @@ def schedule_servo_scan_after_connect(app, source="连接", allow_extra_retry=Tr
                 _mark_usb_transient_busy(app, 2.4)
 
                 if platform == "android":
-                    # Android 端避免全量扫描风暴：优先历史在线 ID / 最近操作 ID 的轻量探测
                     scan_ids = []
                     try:
                         scan_ids.extend(int(x) for x in (getattr(app, "_last_online_servo_ids", []) or []))
@@ -426,7 +431,6 @@ def schedule_servo_scan_after_connect(app, source="连接", allow_extra_retry=Tr
                             scan_ids.append(latest_sid)
                     except Exception:
                         pass
-                    # 去重并保底少量 ID，避免 1..25 全扫造成卡顿
                     uniq = []
                     seen = set()
                     for sid in scan_ids:
@@ -477,6 +481,8 @@ def schedule_servo_scan_after_connect(app, source="连接", allow_extra_retry=Tr
                         app._last_online_servo_ids = list(online_ids)
                     except Exception:
                         pass
+                    app._servo_scan_completed = True
+                    app._servo_scan_in_progress = False
                     app._update_usb_state(
                         connect="up",
                         scan=f"ok({len(online_ids)})",

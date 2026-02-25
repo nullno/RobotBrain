@@ -241,10 +241,9 @@ def init_runtime_loops(app):
     update_interval = 0.12 if runtime_profile == "mobile" else 0.1
     Clock.schedule_interval(app._update_loop, update_interval)
 
-    # 连续硬件同步（_update_loop 内 move_sync）在手机端会显著增加 USB 负载，默认关闭
-    app._enable_live_servo_sync = bool(
-        getattr(app, "_enable_live_servo_sync", runtime_profile != "mobile")
-    )
+    # 连续硬件同步（_update_loop 内 move_sync）会增加 USB 负载，默认关闭以避免持续 TX
+    # 仅在明确开启时才启用 live sync（避免桌面/开发环境频繁发送）
+    app._enable_live_servo_sync = bool(getattr(app, "_enable_live_servo_sync", False))
 
     if runtime_profile == "mobile":
         app._gyro_ui_period = float(getattr(app, "_gyro_ui_period", 0.22) or 0.22)

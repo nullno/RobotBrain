@@ -2,6 +2,7 @@ import threading
 import time
 from kivy.utils import platform
 import logging
+from widgets.runtime_status import RuntimeStatusLogger
 
 _last_status = "init"
 _perm_req_last = {}
@@ -154,51 +155,57 @@ def open_first_usb_serial(baud=115200, open_timeout_ms=1000, prefer_device_id=No
                 self._port = port
                 self._conn = connection
                 self._lock = threading.Lock()
-                # Android USB Host 栈抖动较大：
-                # 单次 read 超时不宜过长，否则上层 receive_timeout 窗口内可读轮次过少，
-                # 容易出现“写入正常、读取应答超时”。
+                # Android USB Host 栈抖动较大：单次 read 超时不宜过长
                 self._read_timeout_ms = 20
 
             def write(self, data):
                 try:
                     if not data:
                         return 0
-                    # usb-serial-for-android 的 write(signature) 接受 byte[]，Pyjnius 会做类型转换
                     with self._lock:
-                        return self._port.write(data, 1000)
+                        ret = self._port.write(data, 1000)
+                    try:
+                        try:
+                            b = bytes(data)
+                        except Exception:
+                            b = bytes([int(x) & 0xFF for x in list(data)])
+                        if b:
+                            try:
+                                hex_str = ' '.join(f"{x:02X}" for x in b)
+                                RuntimeStatusLogger.log_info(f"USB TX HEX: {hex_str}")
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                    return ret
                 except Exception:
                     return 0
 
             def readall(self):
                 try:
-                    # 读取当前可用的数据（短超时以保证非阻塞返回）
                     with self._lock:
                         data = self._port.read(4096, int(self._read_timeout_ms))
                     if data is None:
                         return b''
                     try:
-                        return bytes(data)
+                        b = bytes(data)
                     except Exception:
-                        # 若 data 是 java array-like，尝试逐项构造
                         try:
-                            return bytes([int(x) & 0xFF for x in list(data)])
+                            b = bytes([int(x) & 0xFF for x in list(data)])
                         except Exception:
-                            return b''
+                            b = b''
+                    try:
+                        if b:
+                            try:
+                                hex_str = ' '.join(f"{x:02X}" for x in b)
+                                RuntimeStatusLogger.log_info(f"USB RX HEX: {hex_str}")
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                    return b
                 except Exception:
                     return b''
-
-            def close(self):
-                try:
-                    try:
-                        self._port.close()
-                    except Exception:
-                        pass
-                    try:
-                        self._conn.close()
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
 
         for driver in drivers:
             try:

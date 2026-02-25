@@ -272,8 +272,11 @@ class DebugPanel(Widget):
             pass
 
         self._ensure_lazy_tab_built(tp, t_actions)
-        # 关节调试预构建：避免首次跳转卡在“加载中”，并减少 tab 交互异常风险
-        self._ensure_lazy_tab_built(tp, t_single)
+        # 关节调试预构建改为延迟构建：避免打开弹窗时主线程被重构 UI 阻塞
+        try:
+            self._ensure_lazy_tab_built_deferred(tp, t_single, delay=0.08)
+        except Exception:
+            self._ensure_lazy_tab_built(tp, t_single)
 
         tp.bind(current_tab=lambda inst, val: self._update_tab_highlight(inst, val))
         Clock.schedule_once(

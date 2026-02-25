@@ -16,6 +16,7 @@ import threading
 from .packet import Packet
 from .packet_buffer import PacketBuffer
 from .data_table import *
+from widgets.runtime_status import RuntimeStatusLogger
 
 class UartServoInfo:
 	'''串口舵机的信息'''
@@ -243,6 +244,15 @@ class UartServoManager:
 			if self.pkt_buffer.has_valid_packet():
 				# 获取数据帧
 				packet_bytes = self.pkt_buffer.get_packet()
+				try:
+					if packet_bytes:
+						try:
+							hex_str = ' '.join(f"{x:02X}" for x in packet_bytes)
+							RuntimeStatusLogger.log_info(f"USB RX HEX: {hex_str}")
+						except Exception:
+							pass
+				except Exception:
+					pass
 				# 提取数据帧参数
 				result = Packet.unpack(packet_bytes)
 				servo_id, data_size, servo_status, param_bytes = result
@@ -282,6 +292,15 @@ class UartServoManager:
 			if not wait_response:
 				# 发送指令
 				self.uart.write(packet_bytes)
+				try:
+					if packet_bytes:
+						try:
+							hex_str = ' '.join(f"{x:02X}" for x in packet_bytes)
+							RuntimeStatusLogger.log_info(f"USB TX HEX: {hex_str}")
+						except Exception:
+							pass
+				except Exception:
+					pass
 				time.sleep(self.DELAY_BETWEEN_CMD)
 				return True, None
 			else:
