@@ -58,45 +58,58 @@ def init_android_permissions(app):
 def init_servo_bus(app):
     app.servo_bus = None
     if platform == "android":
-        try:
-            from services.android_serial import (
-                open_first_usb_serial,
-                get_last_usb_serial_status,
-            )
-            usb_wrapper = open_first_usb_serial(baud=115200)
-            if usb_wrapper:
-                app.servo_bus = ServoBus(port=usb_wrapper)
-                app._mark_usb_connected_after_permission(
-                    get_last_usb_serial_status()
+        # 在后台线程尝试打开 Android USB 串口，避免阻塞主线程/UI
+        def _android_init_worker():
+            try:
+                from services.android_serial import (
+                    open_first_usb_serial,
+                    get_last_usb_serial_status,
                 )
-                RuntimeStatusLogger.log_info("启动时 USB 串口已连接，开始扫描舵机")
-                app._schedule_servo_scan_after_connect("启动")
-            else:
-                _s = str(get_last_usb_serial_status())
-                if _s.startswith("wait:"):
-                    app._last_usb_permission_status = _s
-                    app._update_usb_state(
-                        detect="device",
-                        auth="wait",
-                        connect="down",
-                        detail=_s,
-                    )
-                    RuntimeStatusLogger.log_info(
-                        f"启动时检测到 USB 设备，正在等待授权: {_s}"
-                    )
-                    app._ensure_android_usb_reconnect_watcher("启动等待授权")
+                usb_wrapper = open_first_usb_serial(baud=115200)
+                status = str(get_last_usb_serial_status())
+                if usb_wrapper:
+                    def _on_success(dt):
+                        try:
+                            app.servo_bus = ServoBus(port=usb_wrapper)
+                            app._mark_usb_connected_after_permission(status)
+                            RuntimeStatusLogger.log_info("启动时 USB 串口已连接，开始扫描舵机")
+                            app._schedule_servo_scan_after_connect("启动")
+                        except Exception:
+                            pass
+                    Clock.schedule_once(_on_success, 0)
                 else:
-                    app._update_usb_state(
-                        detect="nodevice",
-                        auth="idle",
-                        connect="down",
-                        detail=_s,
-                    )
-                    RuntimeStatusLogger.log_info(
-                        f"启动时 Android USB Serial 未连接: {_s}"
-                    )
-        except Exception as e:
-            print(f"Android USB Serial init failed: {e}")
+                    def _on_wait(dt):
+                        try:
+                            _s = str(status)
+                            if _s.startswith("wait:"):
+                                app._last_usb_permission_status = _s
+                                app._update_usb_state(
+                                    detect="device",
+                                    auth="wait",
+                                    connect="down",
+                                    detail=_s,
+                                )
+                                RuntimeStatusLogger.log_info(
+                                    f"启动时检测到 USB 设备，正在等待授权: {_s}"
+                                )
+                                app._ensure_android_usb_reconnect_watcher("启动等待授权")
+                            else:
+                                app._update_usb_state(
+                                    detect="nodevice",
+                                    auth="idle",
+                                    connect="down",
+                                    detail=_s,
+                                )
+                                RuntimeStatusLogger.log_info(
+                                    f"启动时 Android USB Serial 未连接: {_s}"
+                                )
+                        except Exception:
+                            pass
+                    Clock.schedule_once(_on_wait, 0)
+            except Exception as e:
+                print(f"Android USB Serial init failed: {e}")
+
+        threading.Thread(target=_android_init_worker, daemon=True).start()
 
     if not app.servo_bus:
         try:

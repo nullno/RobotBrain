@@ -17,6 +17,10 @@ from .packet import Packet
 from .packet_buffer import PacketBuffer
 from .data_table import *
 from widgets.runtime_status import RuntimeStatusLogger
+from kivy.utils import platform
+
+# 在 Android 上默认关闭逐包 HEX 日志，避免大量 UI 文本渲染导致卡顿
+_ENABLE_USB_HEX_LOG_ANDROID = False
 
 class UartServoInfo:
 	'''串口舵机的信息'''
@@ -247,8 +251,12 @@ class UartServoManager:
 				try:
 					if packet_bytes:
 						try:
-							hex_str = ' '.join(f"{x:02X}" for x in packet_bytes)
-							RuntimeStatusLogger.log_info(f"USB RX HEX: {hex_str}")
+							try:
+								if platform != 'android' or _ENABLE_USB_HEX_LOG_ANDROID:
+									hex_str = ' '.join(f"{x:02X}" for x in packet_bytes)
+									RuntimeStatusLogger.log_info(f"USB RX HEX: {hex_str}")
+							except Exception:
+								pass
 						except Exception:
 							pass
 				except Exception:
@@ -295,8 +303,12 @@ class UartServoManager:
 				try:
 					if packet_bytes:
 						try:
-							hex_str = ' '.join(f"{x:02X}" for x in packet_bytes)
-							RuntimeStatusLogger.log_info(f"USB TX HEX: {hex_str}")
+							try:
+								if platform != 'android' or _ENABLE_USB_HEX_LOG_ANDROID:
+									hex_str = ' '.join(f"{x:02X}" for x in packet_bytes)
+									RuntimeStatusLogger.log_info(f"USB TX HEX: {hex_str}")
+							except Exception:
+								pass
 						except Exception:
 							pass
 				except Exception:

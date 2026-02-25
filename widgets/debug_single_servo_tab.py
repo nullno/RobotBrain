@@ -490,7 +490,7 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
                     else:
                         msg = f"ID {sid} 读取失败：未收到返回数据"
                 else:
-                    msg = f"ID {sid} -> pos:{pos} temp:{temp}C volt:{_format_voltage(volt)}V"
+                    msg = f"ID {sid} -> pos:{pos} temp:{temp}°C volt:{_format_voltage(volt)}V"
                     try:
                         deg = max(0.0, min(360.0, (float(pos) / 4095.0) * 360.0))
                         Clock.schedule_once(lambda dt, d=deg: _set_knob_and_text(d), 0)

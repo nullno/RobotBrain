@@ -4,6 +4,9 @@ from kivy.utils import platform
 import logging
 from widgets.runtime_status import RuntimeStatusLogger
 
+# 在 Android 上默认关闭逐包 HEX 日志，避免大量 UI 文本渲染导致卡顿
+_ENABLE_USB_HEX_LOG_ANDROID = False
+
 _last_status = "init"
 _perm_req_last = {}
 _perm_req_interval_sec = 2.5
@@ -171,8 +174,9 @@ def open_first_usb_serial(baud=115200, open_timeout_ms=1000, prefer_device_id=No
                             b = bytes([int(x) & 0xFF for x in list(data)])
                         if b:
                             try:
-                                hex_str = ' '.join(f"{x:02X}" for x in b)
-                                RuntimeStatusLogger.log_info(f"USB TX HEX: {hex_str}")
+                                if platform != 'android' or _ENABLE_USB_HEX_LOG_ANDROID:
+                                    hex_str = ' '.join(f"{x:02X}" for x in b)
+                                    RuntimeStatusLogger.log_info(f"USB TX HEX: {hex_str}")
                             except Exception:
                                 pass
                     except Exception:
@@ -196,11 +200,12 @@ def open_first_usb_serial(baud=115200, open_timeout_ms=1000, prefer_device_id=No
                             b = b''
                     try:
                         if b:
-                            try:
-                                hex_str = ' '.join(f"{x:02X}" for x in b)
-                                RuntimeStatusLogger.log_info(f"USB RX HEX: {hex_str}")
-                            except Exception:
-                                pass
+                                try:
+                                    if platform != 'android' or _ENABLE_USB_HEX_LOG_ANDROID:
+                                        hex_str = ' '.join(f"{x:02X}" for x in b)
+                                        RuntimeStatusLogger.log_info(f"USB RX HEX: {hex_str}")
+                                except Exception:
+                                    pass
                     except Exception:
                         pass
                     return b
