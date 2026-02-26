@@ -48,15 +48,8 @@ android.accept_sdk_license = True
 # (注意：USB_PERMISSION 是代码中的 Intent Action，不是 Manifest 权限，已移除)
 
 android.permissions = INTERNET,ACCESS_NETWORK_STATE,CAMERA,RECORD_AUDIO,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE
-android.res_xml = android/xml/device_filter.xml
-# USB 插入可唤醒应用
-android.manifest.intent_filters = android/usb/intent_filter.xml
-# 避免应用已在运行时因 USB 事件重复创建 Activity 实例
+# 使用 ESP32 网络桥接替代本地 Android USB 串口方案，已移除 device_filter/intent_filter 和 USB AAR
 android.manifest.launch_mode = singleTask
-
-# USB Serial 依赖（使用 p4a 的 add_gradle_repositories 注入 JitPack）
-android.add_gradle_repositories = maven { url 'https://jitpack.io' }
-android.gradle_dependencies = com.github.mik3y:usb-serial-for-android:3.5.1
 
 
 # Android版本配置

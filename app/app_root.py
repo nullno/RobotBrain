@@ -13,8 +13,7 @@ from widgets.gyro_panel import GyroPanel
 from widgets.debug_panel import DebugPanel
 from widgets.servo_status import ServoStatus
 from widgets.runtime_status import RuntimeStatusPanel, RuntimeStatusLogger
-from services import usb_otg
-from app import usb_runtime
+from app import esp32_runtime as usb_runtime
 from app import device_runtime
 from app import bootstrap_runtime
 from app import ai_runtime

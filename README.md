@@ -1,7 +1,7 @@
 # Robot Dashboard — 开发者指南
 
 **概述**
-- 本仓库是一个基于 `Kivy` 的跨平台（PC / Android）机器人控制面板：摄像头、陀螺仪、舵机（通过 USB/OTG）与表情/语音交互。
+- 本仓库是一个基于 `Kivy` 的跨平台（PC / Android）机器人控制面板：摄像头、陀螺仪、舵机（由局域网内的 ESP32 负责驱动）与表情/语音交互。
 
 **快速开始（开发环境）**
 1. 克隆仓库并进入项目根目录。
@@ -40,11 +40,28 @@
   - `widgets/startup_tip.py`: 启动权限/连接提示弹窗，`app_root` 在权限缺失时会弹出。
   - `widgets/runtime_status.py`: 运行日志面板（`RuntimeStatusLogger`），界面日志转发实现位置。
 - `services/`: 设备/硬件层封装与控制逻辑。
-  - `services/servo_bus.py`, `uart_servo.py`: 舵机总线/串口驱动（使用 `pyserial`）。
+   - 网络/ESP32 架构：主机通过局域网（Wi‑Fi）将关键帧发送给 ESP32，由 ESP32 负责插值并通过 UART->CH340 输出至舵机驱动板。
+      - 主机端模块：`services/esp32_client.py`（UDP 客户端/调试）、`app/esp32_runtime.py`（运行时 shim，替代旧的 USB/OTG runtime）。
+      - 固件：`firmware/esp32/main.py`（MicroPython 示例，支持 discover/provision/ping/关键帧）。
   - `services/motion_controller.py`: 运动控制器，与 `BalanceController` 集成实现动作序列与平衡调整。
   - `services/imu.py`: IMU/陀螺读取封装（桌面可模拟）。
   - `services/vision.py`: 视觉处理（若有，通常依赖 OpenCV / numpy）。
 - `requirements.txt`: 项目依赖（第三方库列表）。
+
+**固件（ESP32）**
+- 固件示例位于 `firmware/esp32`，包含 MicroPython 示例 `main.py` 与 `README.md`，用于接收主机 UDP 关键帧并通过 UART 输出舵机同步写帧。
+- 常见刷写步骤（示例，先将设备进入刷写模式）：
+
+```bash
+# 使用 mpremote 将固件复制到设备并重启（推荐）：
+mpremote connect serial:/dev/ttyUSB0 fs put firmware/esp32/* :/flash/
+mpremote connect serial:/dev/ttyUSB0 exec "import machine; machine.reset()"
+
+# 或使用 esptool 烧录 MicroPython 固件镜像（若需要重装固件）
+# esptool.py --port COM3 write_flash -z 0x1000 esp32-micropython.bin
+```
+
+请根据你的操作系统调整串口设备名称（Windows 例 `COM3`，Linux 例 `/dev/ttyUSB0`）。固件 README 中有更多说明。
 
 **调试面板架构文档**
 - 调试面板拆分与调用关系见：`docs/debug_panel_architecture.md`
@@ -53,7 +70,7 @@
 - 摄像头无画面（Android）: 检查 `widgets/camera_view.py`、Android 权限（`app_root._check_android_permissions`）以及打包时是否声明摄像头权限。
 - 摄像头无画面（PC）: 检查是否安装 `opencv-python`，在 `widgets/camera_view.py` 内对 `cv2` 的导入是否抛错。
 - 陀螺仪无数据: 查 `app._setup_gyroscope` 与 `services/imu.py`；Android 使用 `plyer.gyroscope`，桌面为模拟数据。
-- 串口/舵机通信异常: 查 `services/servo_bus.py`、日志文件 `logs/robot_dashboard.log`、以及是否正确选择串口（Windows COMx / Linux /dev/ttyUSBx）。
+- 网络/舵机通信异常: 查 `services/esp32_client.py`、`app/esp32_runtime.py`、固件 `firmware/esp32/main.py`、以及网络连通性（局域网内 UDP/ICMP 可达）。同时检查 ESP32 与 CH340 的 UART 物理连线与电压兼容性。
 - 权限相关问题: `app_root._start_permission_watcher` 和 `widgets/startup_tip.py` 控制提示与重试逻辑。
 
 **运行时日志与调试**

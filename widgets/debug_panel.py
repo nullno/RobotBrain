@@ -20,7 +20,7 @@ from widgets.debug_ui_components import (
     SquareTechButton,
     DangerButton,
 )
-from widgets.usb_serial_debug_tab import build_usb_serial_tab_content
+# 串口调试已移除：功能由 ESP32 网络方案替代
 from app import debug_panel_runtime
 
 
@@ -264,8 +264,25 @@ class DebugPanel(Widget):
         t_actions = self._register_lazy_tab(tp, "快捷动作", self._build_actions_tab)
         self._register_lazy_tab(tp, "连接状态", self._build_status_tab)
         t_single = self._register_lazy_tab(tp, "关节调试", self._build_single_servo_tab)
-        # 串口调试（Android/USB）
-        self._register_lazy_tab(tp, "串口调试", build_usb_serial_tab_content)
+        # 网络配置（ESP32 发现与配对）
+        from widgets.esp32_config_panel import ESP32ConfigPanel
+        from kivy.uix.scrollview import ScrollView
+
+        def _build_esp_tab(_tp, tab_item=None):
+            try:
+                panel = ESP32ConfigPanel()
+                outer_sv = ScrollView(size_hint=(1, 1))
+                # Panel already manages its internal container/height, add directly
+                panel.size_hint_y = None
+                outer_sv.add_widget(panel)
+                tab_item.add_widget(outer_sv)
+            except Exception:
+                try:
+                    tab_item.add_widget(ESP32ConfigPanel())
+                except Exception:
+                    pass
+
+        self._register_lazy_tab(tp, "网络配置", _build_esp_tab)
         self._register_lazy_tab(tp, "AI模型", self._build_ai_model_tab)
         self._register_lazy_tab(tp, "高级设置", self._build_other_settings_tab)
 

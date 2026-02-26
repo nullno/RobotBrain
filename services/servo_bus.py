@@ -1,118 +1,112 @@
-import serial
+"""
+ServoBus 网络桥接（ESP32 UDP 客户端）
+
+此模块替代原先的基于串口的 `ServoBus` 实现，向 ESP32 固件发送关键帧指令。
+保持与原接口兼容的常用方法：`move`, `move_sync`, `set_torque`, `get_status`, `close`。
+
+连接逻辑：
+- 优先使用传入的 `port` 参数作为 ESP32 主机地址（如果看起来像 IP 地址或域名）；
+- 若未提供，从环境变量 `ESP32_HOST` 读取；若仍未提供，进入 mock 模式（`is_mock=True`）。
+
+通信：通过 UDP 将 JSON 包发送到 ESP32 (默认端口 5005)。
+JSON 格式示例： {"targets": {"1": 2048, "2":1024}, "duration": 500}
+"""
+
 import os
-from .uart_servo import UartServoManager
-from .data_table import SERVO_ID_BRODCAST, TORQUE_ENABLE, TORQUE_DISABLE
+import socket
+import json
+import time
+
 
 class ServoBus:
-    def __init__(self, port="COM8", baudrate=115200):
-        self.is_mock = False
-        try:
-            # 若传入的是一个已打开的 uart-like 对象（Android 情况），则直接使用它
-            is_uart_wrapper = (
-                not isinstance(port, (str, bytes, os.PathLike))
-                and hasattr(port, 'write')
-                and hasattr(port, 'readall')
-            )
+    def __init__(self, port=None, baudrate=115200):
+        """port: 可为 ESP32 主机地址字符串（如 '192.168.4.1'），否则尝试读取环境变量 ESP32_HOST。"""
+        self.is_mock = True
+        self._host = None
+        self._port = 5005
+        self.manager = self  # 兼容旧代码习惯使用 servo_bus.manager
 
-            if is_uart_wrapper:
-                self.uart = port
-                self.manager = UartServoManager(
-                    self.uart,
-                    servo_id_list=list(range(1, 26)),
-                    auto_scan=False,
-                )
-                # Android USB wrapper 延迟抖动更大，放宽收包超时与重试次数，减少误判 0/25
-                try:
-                    self.manager.RECEIVE_TIMEOUT = max(float(getattr(self.manager, 'RECEIVE_TIMEOUT', 0.02)), 0.24)
-                    self.manager.RETRY_NTIME = max(int(getattr(self.manager, 'RETRY_NTIME', 3)), 8)
-                    self.manager.DELAY_BETWEEN_CMD = max(float(getattr(self.manager, 'DELAY_BETWEEN_CMD', 0.001)), 0.002)
-                    if hasattr(self.manager, 'enable_diagnostics'):
-                        self.manager.enable_diagnostics(True, tag='android-usb-servo', log_interval_sec=6.0)
-                except Exception:
-                    pass
-                print(f"✅ JOHO SDK Link Start! (android usb wrapper)")
-            else:
-                # 参考实例配置：timeout=0 保证 Kivy 界面不卡死
-                self.uart = serial.Serial(
-                    port=port, baudrate=baudrate,
-                    parity=serial.PARITY_NONE, stopbits=1,
-                    bytesize=8, timeout=0
-                )
-                # 默认管理 1-25 号舵机
-                self.manager = UartServoManager(
-                    self.uart,
-                    servo_id_list=list(range(1, 26)),
-                    auto_scan=False,
-                )
-                # 实体串口同样适度放宽，提升 USB 转串口芯片在高负载下的应答稳定性
-                try:
-                    self.manager.RECEIVE_TIMEOUT = max(float(getattr(self.manager, 'RECEIVE_TIMEOUT', 0.02)), 0.05)
-                    self.manager.RETRY_NTIME = max(int(getattr(self.manager, 'RETRY_NTIME', 3)), 5)
-                except Exception:
-                    pass
-                print(f"✅ JOHO SDK Link Start! Port: {port}")
-        except Exception as e:
-            print(f"⚠  Hardware not found: {e}. Switching to MOCK mode.")
+        try:
+            host = None
+            if isinstance(port, str) and ('.' in port or ':' in port):
+                host = port
+            if not host:
+                host = os.environ.get('ESP32_HOST')
+            if not host:
+                # 无可用主机，进入 mock 模式
+                self.is_mock = True
+                return
+
+            self._host = str(host)
+            self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.is_mock = False
+        except Exception:
             self.is_mock = True
+
+    def _send_udp(self, payload: dict):
+        if self.is_mock:
+            return False
+        try:
+            data = json.dumps(payload).encode('utf-8')
+            self._sock.sendto(data, (self._host, self._port))
+            return True
+        except Exception:
+            return False
 
     def close(self):
-        """优雅关闭串口并切换到 MOCK 模式。"""
         try:
-            if not self.is_mock and hasattr(self, 'uart') and self.uart:
+            if not self.is_mock and hasattr(self, '_sock'):
                 try:
-                    self.uart.close()
+                    self._sock.close()
                 except Exception:
                     pass
-        except Exception:
-            pass
-        try:
+        finally:
             self.is_mock = True
-        except Exception:
-            pass
 
     def move(self, sid, position, time_ms=300):
-        """单舵机控制 (对应 set_position.py)"""
-        if self.is_mock: return
-        # SDK 内部会处理 0-4095 范围映射
-        self.manager.set_position_time(sid, int(position), time_ms)
+        if self.is_mock:
+            return
+        try:
+            payload = {'targets': {str(int(sid)): int(position)}, 'duration': int(time_ms)}
+            self._send_udp(payload)
+        except Exception:
+            pass
 
     def move_sync(self, targets: dict, time_ms=300):
-        """同步执行 (对应 sync_set_position.py)"""
-        if self.is_mock or not targets: return
-        # 使用 SDK 提供的 sync_set_position 接口以保证原子同步写入
-        servo_id_list = []
-        position_list = []
-        runtime_ms_list = []
-        for sid, pos in targets.items():
-            servo_id_list.append(int(sid))
-            position_list.append(int(pos))
-            runtime_ms_list.append(int(time_ms))
+        if self.is_mock or not targets:
+            return
         try:
-            self.manager.sync_set_position(servo_id_list, position_list, runtime_ms_list)
+            # normalize keys to strings
+            t = {str(int(k)): int(v) for k, v in targets.items()}
+            payload = {'targets': t, 'duration': int(time_ms)}
+            self._send_udp(payload)
         except Exception:
-            # 兼容：如果 SDK 不支持 sync_set_position（向后兼容），回退到逐个写入并广播 action
-            for sid, pos in targets.items():
-                try:
-                    self.manager.set_position_time(int(sid), int(pos), time_ms)
-                except Exception:
-                    pass
-            try:
-                # 有些实现用 action 触发同步执行
-                if hasattr(self.manager, 'async_action'):
-                    self.manager.async_action()
-            except Exception:
-                pass
+            pass
+
+    # 兼容旧 API
+    def sync_set_position(self, servo_id_list, position_list, runtime_ms_list):
+        try:
+            pairs = {str(int(servo_id_list[i])): int(position_list[i]) for i in range(min(len(servo_id_list), len(position_list)))}
+            dur = int(runtime_ms_list[0]) if runtime_ms_list else 300
+            self.move_sync(pairs, time_ms=dur)
+        except Exception:
+            pass
+
+    def set_position_time(self, servo_id, position, runtime_ms=None, time_ms=None):
+        if runtime_ms is None and time_ms is not None:
+            runtime_ms = time_ms
+        if runtime_ms is None:
+            runtime_ms = 300
+        self.move(int(servo_id), int(position), int(runtime_ms))
 
     def set_torque(self, enable=True):
-        """全局扭矩开关 (对应 控制扭矩开关案例.py)"""
-        if self.is_mock: return
-        self.manager.torque_enable_all(enable)
+        # ESP32 固件若需支持扭矩控制，可扩展协议；当前为无操作
+        try:
+            payload = {'torque': bool(enable)}
+            self._send_udp(payload)
+        except Exception:
+            pass
 
     def get_status(self, sid):
-        """读取实时数据 (对应 read_data.py)"""
-        if self.is_mock: return None
-        return {
-            "pos": self.manager.read_data_by_name(sid, "CURRENT_POSITION"),
-            "temp": self.manager.read_data_by_name(sid, "CURRENT_TEMPERATURE"),
-            "volt": self.manager.read_data_by_name(sid, "CURRENT_VOLTAGE")
-        }
+        # 无状态读取机制，返回 None
+        return None

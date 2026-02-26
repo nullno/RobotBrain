@@ -4,130 +4,74 @@ import threading
 import os
 import json
 
-from kivy.clock import Clock
-from kivy.utils import platform
+# 注意：ServoBus/串口初始化逻辑已迁移到运行时初始化函数（例如 app.esp32_runtime 或 app_root 中），
+# 早期文件顶部的直接执行代码已删除以避免导入时副作用或语法错误。
 
-from widgets.runtime_status import RuntimeStatusLogger
-from services.servo_bus import ServoBus
+from kivy.utils import platform
+from kivy.clock import Clock
+
+# 导入运行时适配模块与服务，以便保留原有接口给 app_root 调用
+from app import esp32_runtime as esp32_runtime
+from app import device_runtime
 from services.balance_ctrl import BalanceController
-from services.motion_controller import MotionController
 from services.imu import IMUReader
-from services.neutral import load_neutral
-from services import usb_otg
+from services.motion_controller import MotionController
+from widgets.runtime_status import RuntimeStatusLogger
 from services.ai_core import AICore
+from services.servo_bus import ServoBus
+from services.neutral import load_neutral
 
 
 def init_android_permissions(app):
-    if platform != "android":
-        return
+    """兼容接口：检查并触发 Android 权限提示/监视器（非 Android 环境为 no-op）。"""
     try:
-        from android.permissions import request_permissions, Permission, check_permission
-
-        Clock.schedule_once(lambda dt: app.update_android_flags(), 0)
-
-        required_perms = [
-            Permission.CAMERA,
-            Permission.RECORD_AUDIO,
-            Permission.WRITE_EXTERNAL_STORAGE,
-            Permission.READ_EXTERNAL_STORAGE,
-        ]
-
-        missing_perms = []
-        for perm in required_perms:
+        missing = device_runtime.check_android_permissions()
+        if missing:
             try:
-                if not check_permission(perm):
-                    missing_perms.append(perm)
+                device_runtime.start_permission_watcher(app)
             except Exception:
-                missing_perms.append(perm)
-
-        if missing_perms:
-            def _perm_callback(permissions, results):
-                if all(results):
-                    print("✅ 所有权限申请成功")
-                else:
-                    missing = [p for p, r in zip(permissions, results) if not r]
-                    print(f"⚠ 未授予权限: {missing}，部分功能可能受限")
-
-            request_permissions(missing_perms, _perm_callback)
-        else:
-            print("✅ 所有权限已获得")
-    except Exception as e:
-        print(f"⚠ Android platform init failed: {e}")
+                pass
+        return missing
+    except Exception:
+        return []
 
 
 def init_servo_bus(app):
-    app.servo_bus = None
-    if platform == "android":
-        # 在后台线程尝试打开 Android USB 串口，避免阻塞主线程/UI
-        def _android_init_worker():
-            try:
-                from services.android_serial import (
-                    open_first_usb_serial,
-                    get_last_usb_serial_status,
-                )
-                usb_wrapper = open_first_usb_serial(baud=115200)
-                status = str(get_last_usb_serial_status())
-                if usb_wrapper:
-                    def _on_success(dt):
-                        try:
-                            app.servo_bus = ServoBus(port=usb_wrapper)
-                            app._mark_usb_connected_after_permission(status)
-                            RuntimeStatusLogger.log_info("启动时 USB 串口已连接，开始扫描舵机")
-                            app._schedule_servo_scan_after_connect("启动")
-                        except Exception:
-                            pass
-                    Clock.schedule_once(_on_success, 0)
-                else:
-                    def _on_wait(dt):
-                        try:
-                            _s = str(status)
-                            if _s.startswith("wait:"):
-                                app._last_usb_permission_status = _s
-                                app._update_usb_state(
-                                    detect="device",
-                                    auth="wait",
-                                    connect="down",
-                                    detail=_s,
-                                )
-                                RuntimeStatusLogger.log_info(
-                                    f"启动时检测到 USB 设备，正在等待授权: {_s}"
-                                )
-                                app._ensure_android_usb_reconnect_watcher("启动等待授权")
-                            else:
-                                app._update_usb_state(
-                                    detect="nodevice",
-                                    auth="idle",
-                                    connect="down",
-                                    detail=_s,
-                                )
-                                RuntimeStatusLogger.log_info(
-                                    f"启动时 Android USB Serial 未连接: {_s}"
-                                )
-                        except Exception:
-                            pass
-                    Clock.schedule_once(_on_wait, 0)
-            except Exception as e:
-                print(f"Android USB Serial init failed: {e}")
+    """兼容接口：初始化 `app.servo_bus`。
 
-        threading.Thread(target=_android_init_worker, daemon=True).start()
-
-    if not app.servo_bus:
-        try:
-            dev_port = "/dev/ttyUSB0" if platform == "android" else "COM8"
-            app._dev_port = dev_port
-            app.servo_bus = ServoBus(port=dev_port)
-            if app.servo_bus and not getattr(app.servo_bus, "is_mock", True):
-                RuntimeStatusLogger.log_info(f"启动时串口已连接: {dev_port}，开始扫描舵机")
-                app._schedule_servo_scan_after_connect("启动")
-        except Exception as e:
-            print(f"❌ 串口初始化失败: {e}")
-            app.servo_bus = None
-
+    优先使用 `esp32_runtime.try_auto_connect`，其内部会尝试基于环境或传入值连接 ESP32；
+    若未连接则创建本地 `ServoBus`（若无主机则进入 mock 模式）。
+    """
     try:
-        if not app.servo_bus or getattr(app.servo_bus, "is_mock", True):
-            app._try_auto_connect()
+        try:
+            ok = esp32_runtime.try_auto_connect(app)
+            if ok and getattr(app, 'servo_bus', None):
+                return True
+        except Exception:
+            pass
+
+        try:
+            sb = ServoBus(port=os.environ.get('ESP32_HOST') or None)
+            try:
+                app.servo_bus = sb
+            except Exception:
+                pass
+            if not getattr(sb, 'is_mock', True):
+                try:
+                    RuntimeStatusLogger.log_info(f"ServoBus connected to {getattr(sb, '_host', None)}")
+                except Exception:
+                    pass
+            else:
+                try:
+                    RuntimeStatusLogger.log_info("ServoBus in mock mode (no ESP32 host)")
+                except Exception:
+                    pass
+            return True
+        except Exception:
+            return False
     except Exception:
-        pass
+        return False
+
 
 
 def init_logging(app):
@@ -341,17 +285,6 @@ def start_permission_and_otg_watchers(app):
     Clock.schedule_once(lambda dt: app._start_permission_watcher(), 0.6)
 
     try:
-        if platform == "android":
-            RuntimeStatusLogger.log_info("Android 使用 USB attach/reconnect 机制，已跳过 OTG 轮询监测")
-        else:
-            usb_otg.start_monitor()
-            RuntimeStatusLogger.log_info("串口/OTG 监测已启动")
-            try:
-                usb_otg.register_device_callback(app._on_otg_event)
-            except Exception:
-                pass
-    except Exception as e:
-        try:
-            RuntimeStatusLogger.log_error(f"OTG 监测启动失败: {e}")
-        except Exception:
-            print(f"OTG 监测启动失败: {e}")
+        RuntimeStatusLogger.log_info("已启用 ESP32 网络模式：不再使用本地 OTG/串口监测")
+    except Exception:
+        pass

@@ -1,0 +1,6 @@
+{
+  "device_name": "esp32-servo-bridge",
+  "wifi": null,
+  "host": null,
+  "telemetry_interval_ms": 500
+}
