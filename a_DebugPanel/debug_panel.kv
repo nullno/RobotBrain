@@ -1,0 +1,105 @@
+<DebugPanelRoot>:
+    orientation: 'horizontal'
+    padding: 12
+    spacing: 12
+    BoxLayout:
+        orientation: 'vertical'
+        size_hint_x: 0.36
+        spacing: 8
+        padding: 8
+
+        Label:
+            text: '舵机调试面板'
+            size_hint_y: None
+            height: '40dp'
+            color: 0.85, 0.95, 1, 1
+            bold: True
+            font_size: '18sp'
+            font_name: 'assets/fonts/simhei.ttf'
+
+        Spinner:
+            id: port_spinner
+            text: ''
+            values: []
+            size_hint_y: None
+            height: '36dp'
+            on_text: root.port_spinner = self
+
+        Button:
+            id: connect_btn
+            text: '连接'
+            size_hint_y: None
+            height: '36dp'
+            background_normal: ''
+            background_color: 0.12, 0.5, 0.9, 1
+            color: 1,1,1,1
+            on_release: root.on_connect()
+            on_parent: root.connect_btn = self
+
+        BoxLayout:
+            size_hint_y: None
+            height: '36dp'
+            spacing: 8
+            TextInput:
+                id: servo_id_input
+                text: '1'
+                input_filter: 'int'
+                multiline: False
+                font_name: 'assets/fonts/simhei.ttf'
+                on_parent: root.servo_id_input = self
+            Button:
+                text: '设置ID'
+                on_release: root.on_set_id()
+
+        BoxLayout:
+            size_hint_y: None
+            height: '36dp'
+            spacing: 8
+            Button:
+                text: '位置归零'
+                on_release: root.on_zero()
+                background_normal: ''
+                background_color: 0.18, 0.6, 0.95, 0.9
+                color: 1,1,1,1
+            Button:
+                text: '设置中位'
+                on_release: root.on_set_mid()
+                background_normal: ''
+                background_color: 0.18, 0.6, 0.95, 0.9
+                color: 1,1,1,1
+
+        Button:
+            text: '读取状态'
+            size_hint_y: None
+            height: '36dp'
+            on_release: root.on_read_status()
+            background_normal: ''
+            background_color: 0.06,0.45,0.85,1
+            color: 1,1,1,1
+
+        Label:
+            id: status_label
+            text: '未连接'
+            size_hint_y: None
+            height: '28dp'
+            on_parent: root.status_label = self
+            font_name: 'assets/fonts/simhei.ttf'
+
+    BoxLayout:
+        orientation: 'vertical'
+        spacing: 8
+        padding: 8
+
+        Knob:
+            id: knob_widget
+            size_hint: None, None
+            size: '220dp','220dp'
+            pos_hint: {'center_x':0.5}
+            on_parent: root.knob_widget = self
+
+        Label:
+            text: '拖动旋钮以发送角度控制（拟物风格）'
+            size_hint_y: None
+            height: '24dp'
+            font_name: 'assets/fonts/simhei.ttf'
+            color: 0.85,0.95,1,1
