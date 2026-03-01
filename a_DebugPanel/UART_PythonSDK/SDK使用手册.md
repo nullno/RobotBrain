@@ -36,7 +36,7 @@ S端对S端(信号线)
 ### 2.TypeC数据线接控制设备 COM口匹配
 #### com口修改位置(电脑如何修改COM口可参考上位机使用说明)
 ```
-SERVO_PORT_NAME =  'COM6' 	# WINDOWS 串口号
+SERVO_PORT_NAME =  'COM8' 	# WINDOWS 串口号
 ```
 
 ***

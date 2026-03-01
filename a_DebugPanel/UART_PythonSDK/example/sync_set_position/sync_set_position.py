@@ -17,7 +17,7 @@ from uart_servo import UartServoManager
 from data_table import *
 # 参数配置
 #SERVO_PORT_NAME =  '/dev/ttyUSB0' 	# LINUX串口号
-SERVO_PORT_NAME =  'COM6' 	# WIN 舵机串口号
+SERVO_PORT_NAME =  'COM8' 	# WIN 舵机串口号
 SERVO_BAUDRATE = 115200 	# 舵机的波特率
 #配置舵机ID
 SERVO_ID_1 = 1 				# 舵机ID 1

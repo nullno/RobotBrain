@@ -13,14 +13,7 @@ import os
 
 def _pick_emoji_font():
     candidates = [
-        'assets/fonts/NotoColorEmoji.ttf',
-        'assets/fonts/NotoEmoji-Regular.ttf',
         'assets/fonts/simhei.ttf',
-        r'C:\Windows\Fonts\seguiemj.ttf',
-        '/system/fonts/NotoColorEmoji.ttf',
-        '/system/fonts/NotoColorEmoji-Regular.ttf',
-        '/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf',
-        '/System/Library/Fonts/Apple Color Emoji.ttc',
     ]
     for p in candidates:
         try:
@@ -40,7 +33,7 @@ class UniversalTip(BoxLayout):
         title="",
         icon="💡",
         icon_path="assets/icon_tip.png",
-        ok_text="知道了",
+        ok_text="ok",
         cancel_text=None,
         on_ok=None,
         on_cancel=None,

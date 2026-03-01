@@ -10,7 +10,8 @@ import os
 
 
 def _pick_chinese_font():
-    path = os.path.join('assets', 'fonts', 'simhei.ttf')
+    base = os.path.dirname(__file__)
+    path = os.path.join(base, 'assets', 'fonts', 'simhei.ttf')
     if os.path.exists(path):
         return path
     return None
@@ -19,6 +20,7 @@ def _pick_chinese_font():
 class Knob(FloatLayout):
     angle = NumericProperty(0.0)
     display_angle = NumericProperty(0.0)
+    max_angle = NumericProperty(360.0)
 
     def __init__(self, **kwargs):
         kwargs.setdefault('size_hint', (None, None))
@@ -121,22 +123,24 @@ class Knob(FloatLayout):
         self._l_track.circle = (cx, cy, ring_r)
 
         progress_pts = []
-        val = max(0.0, min(360.0, float(self.display_angle)))
+        val = max(0.0, min(float(self.max_angle), float(self.display_angle)))
+        # map current range to full circle for drawing
+        mapped_val = val / float(self.max_angle or 1.0) * 360.0
         if val <= 0.0:
             a = radians(self._angle_to_canvas(0.0))
             progress_pts = [cx + cos(a) * ring_r, cy + sin(a) * ring_r]
         else:
             step = 1.0
             cur = 0.0
-            while cur < val:
+            while cur < mapped_val:
                 a = radians(self._angle_to_canvas(cur))
                 progress_pts.extend([cx + cos(a) * ring_r, cy + sin(a) * ring_r])
                 cur += step
-            a = radians(self._angle_to_canvas(val))
+            a = radians(self._angle_to_canvas(mapped_val))
             progress_pts.extend([cx + cos(a) * ring_r, cy + sin(a) * ring_r])
         self._l_progress.points = progress_pts
 
-        canvas_deg = self._angle_to_canvas(self.display_angle)
+        canvas_deg = self._angle_to_canvas(mapped_val)
 
         pointer_r = ring_r
         pa = radians(canvas_deg)
@@ -158,9 +162,10 @@ class Knob(FloatLayout):
             angle = float(angle)
         except Exception:
             angle = 0.0
-        self.angle = max(0.0, min(360.0, angle))
+        cap = float(self.max_angle) if float(self.max_angle) > 0 else 360.0
+        self.angle = max(0.0, min(cap, angle))
 
-    def _update_from_touch(self, touch):
+    def _update_from_touch(self, touch, dragging=False):
         cx, cy = self.center
         dx = float(touch.x - cx)
         dy = float(touch.y - cy)
@@ -168,10 +173,11 @@ class Knob(FloatLayout):
             return
 
         dist_sq = dx * dx + dy * dy
-        max_r = self._radius + dp(18)
-        min_r = max(dp(16), self._radius * 0.35)
-        if dist_sq < (min_r * min_r) or dist_sq > (max_r * max_r):
-            return
+        max_r = self._radius + dp(60)
+        min_r = max(dp(8), self._radius * 0.2)
+        if not dragging:
+            if dist_sq < (min_r * min_r) or dist_sq > (max_r * max_r):
+                return
 
         raw = (90.0 - (atan2(dy, dx) * 180.0 / 3.1415926)) % 360.0
 
@@ -191,16 +197,20 @@ class Knob(FloatLayout):
     def on_touch_down(self, touch):
         if not self.collide_point(*touch.pos):
             return super().on_touch_down(touch)
+        touch.grab(self)
         self._drag_last_raw = None
-        self._update_from_touch(touch)
+        self._update_from_touch(touch, dragging=False)
         return True
 
     def on_touch_move(self, touch):
-        if not self.collide_point(*touch.pos):
+        if touch.grab_current is not self:
             return super().on_touch_move(touch)
-        self._update_from_touch(touch)
+        self._update_from_touch(touch, dragging=True)
         return True
 
     def on_touch_up(self, touch):
-        self._drag_last_raw = None
+        if touch.grab_current is self:
+            touch.ungrab(self)
+            self._drag_last_raw = None
+            return True
         return super().on_touch_up(touch)

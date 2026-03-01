@@ -1,105 +1,558 @@
+#:import dp kivy.metrics.dp
+
+<DebugPanel>:
+    # 只是占位，实际按钮在 root.kv 中以 ImageButton 形式显示
+
+<DebugActionButton@Button>:
+    size_hint: (None, None)
+    size: dp(44), dp(44)
+    background_normal: ''
+    background_down: ''
+
+<BaseButton@Button>:
+    background_normal: ''
+    background_down: ''
+    background_color: 0, 0, 0, 0
+    color: 1, 1, 1, 1
+    canvas.before:
+        Color:
+            rgba: 0.12, 0.18, 0.24, 1
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [10]
+        Color:
+            rgba: 0.0, 0.9, 1.0, 0.65
+        Line:
+            rounded_rectangle: (self.x, self.y, self.width, self.height, 10)
+            width: 1.1
+
+<TabbedPanelItem>:
+    canvas.before:
+        Color:
+            rgba: 1, 1, 1, 0
+        Rectangle:
+            pos: self.pos
+            size: self.size
+
 <DebugPanelRoot>:
-    orientation: 'horizontal'
-    padding: 12
-    spacing: 12
-    BoxLayout:
-        orientation: 'vertical'
-        size_hint_x: 0.36
-        spacing: 8
-        padding: 8
+    orientation: 'vertical'
+    padding: dp(12)
+    spacing: dp(12)
+    canvas.before:
+        Color:
+            rgba: 0.04, 0.07, 0.11, 1
+        Rectangle:
+            pos: self.pos
+            size: self.size
 
-        Label:
-            text: '舵机调试面板'
-            size_hint_y: None
-            height: '40dp'
-            color: 0.85, 0.95, 1, 1
-            bold: True
-            font_size: '18sp'
-            font_name: 'assets/fonts/simhei.ttf'
+    GridLayout:
+        cols: 2
+        rows: 2
+        spacing: dp(12)
+        size_hint: 1, 1
 
-        Spinner:
-            id: port_spinner
-            text: ''
-            values: []
-            size_hint_y: None
-            height: '36dp'
-            on_text: root.port_spinner = self
-
-        Button:
-            id: connect_btn
-            text: '连接'
-            size_hint_y: None
-            height: '36dp'
-            background_normal: ''
-            background_color: 0.12, 0.5, 0.9, 1
-            color: 1,1,1,1
-            on_release: root.on_connect()
-            on_parent: root.connect_btn = self
-
+        # 左上：连接与状态
         BoxLayout:
-            size_hint_y: None
-            height: '36dp'
-            spacing: 8
-            TextInput:
-                id: servo_id_input
-                text: '1'
-                input_filter: 'int'
-                multiline: False
-                font_name: 'assets/fonts/simhei.ttf'
-                on_parent: root.servo_id_input = self
-            Button:
-                text: '设置ID'
-                on_release: root.on_set_id()
+            orientation: 'vertical'
+            padding: [dp(12),dp(5),dp(12),dp(12)]
+            spacing: dp(10)
+            canvas.before:
+                Color:
+                    rgba: root.panel_border
+                RoundedRectangle:
+                    pos: self.pos
+                    size: self.size
+                    radius: [12]
+                Color:
+                    rgba: root.panel_bg
+                RoundedRectangle:
+                    pos: self.x + dp(1.5), self.y + dp(1.5)
+                    size: self.width - dp(3), self.height - dp(3)
+                    radius: [11]
 
+            BoxLayout:
+                size_hint_y: None
+                height: dp(34)
+                padding: [0, 0, 0, 0]
+                Label:
+                    text: '连接状态'
+                    color: 0.9, 0.96, 1, 1
+                    bold: True
+                    font_size: '18sp'
+                    halign: 'left'
+                    valign: 'middle'
+                    text_size: self.size
+                    font_name: root.font_path if root.font_path else ''
+
+            ScrollView:
+                bar_width: dp(0)
+                do_scroll_x: False
+                GridLayout:
+                    cols: 1
+                    size_hint_y: None
+                    height: self.minimum_height
+                    spacing: dp(10)
+
+                    BoxLayout:
+                        size_hint_y: None
+                        height: dp(26)
+                        padding: [0, 0, 0, 0]
+                        Label:
+                            text: '串口连接：'
+                            color: 0.82, 0.9, 1, 1
+                            font_size: '15sp'
+                            halign: 'left'
+                            valign: 'middle'
+                            text_size: self.size
+                            font_name: root.font_path if root.font_path else ''
+
+                    GridLayout:
+                        cols: 1
+                        spacing: dp(8)
+                        size_hint_y: None
+                        height: self.minimum_height
+                        BoxLayout:
+                            size_hint_y: None
+                            height: dp(40)
+                            spacing: dp(10)
+                            Label:
+                                text: '串口'
+                                size_hint_x: None
+                                width: dp(48)
+                                color: 0.78, 0.88, 1, 1
+                                halign: 'left'
+                                valign: 'middle'
+                                text_size: self.size
+                                font_name: root.font_path if root.font_path else ''
+                            Spinner:
+                                id: port_spinner
+                                text: ''
+                                values: []
+                                background_normal: ''
+                                background_color: 0.1, 0.32, 0.45, 0.9
+                                color: 0.92, 0.97, 1, 1
+                                halign: 'center'
+                                font_name: root.font_path if root.font_path else ''
+                                on_parent: root.port_spinner = self
+                            BaseButton:
+                                id: connect_btn
+                                text: '连接'
+                                size_hint_x: None
+                                width: dp(96)
+                                font_name: root.font_path if root.font_path else ''
+                                on_release: root.on_connect()
+                                on_parent: root.connect_btn = self
+
+                        BoxLayout:
+                            size_hint_y: None
+                            height: dp(28)
+                            spacing: dp(10)
+                            padding: [0, 0, 0, 0]
+                            Label:
+                                text: '波特率'
+                                size_hint_x: None
+                                width: dp(54)
+                                color: 0.78, 0.88, 1, 1
+                                halign: 'left'
+                                valign: 'middle'
+                                text_size: self.size
+                                font_name: root.font_path if root.font_path else ''
+                            Label:
+                                text: root.baud_rate_display
+                                width: dp(100)
+                                color: 0.95, 1, 1, 1
+                                halign: 'left'
+                                valign: 'middle'
+                                text_size: self.size
+                                font_name: root.font_path if root.font_path else ''
+                            Label:
+                                text: '状态'
+                                size_hint_x: None
+                                width: dp(54)
+                                color: 0.78, 0.9, 1, 1
+                                halign: 'left'
+                                valign: 'middle'
+                                text_size: self.size
+                                font_name: root.font_path if root.font_path else ''
+                            Label:
+                                id: status_label
+                                text: root.connection_text
+                                color: 0.95, 1, 1, 1
+                                font_size: '14sp'
+                                halign: 'left'
+                                valign: 'middle'
+                                text_size: self.size
+                                size_hint_x: None
+                                width: dp(150)
+                                font_name: root.font_path if root.font_path else ''
+                                on_parent: root.status_label = self
+
+                    BoxLayout:
+                        size_hint_y: None
+                        height: dp(26)
+                        padding: [0, 0, 0, 0]
+                        Label:
+                            text: '舵机状态 (%s)' % root.servo_scan_count
+                            color: 0.82, 0.9, 1, 1
+                            font_size: '15sp'
+                            halign: 'left'
+                            valign: 'middle'
+                            text_size: self.size
+                            font_name: root.font_path if root.font_path else ''
+
+                    GridLayout:
+                        cols: 1
+                        spacing: dp(8)
+                        size_hint_y: None
+                        height: self.minimum_height
+                        BoxLayout:
+                            size_hint_y: None
+                            height: dp(40)
+                            spacing: dp(10)
+                            Label:
+                                text: '舵机'
+                                size_hint_x: None
+                                width: dp(48)
+                                color: 0.78, 0.88, 1, 1
+                                halign: 'left'
+                                valign: 'middle'
+                                text_size: self.size
+                                font_name: root.font_path if root.font_path else ''
+                            Spinner:
+                                id: servo_selector
+                                text: '请选择'
+                                values: []
+                                background_normal: ''
+                                background_color: 0.1, 0.32, 0.45, 0.9
+                                color: 0.92, 0.97, 1, 1
+                                halign: 'center'
+                                font_name: root.font_path if root.font_path else ''
+                                on_text: root.on_servo_selected(self.text)
+                                on_parent: root.servo_selector = self
+                            BaseButton:
+                                id: refresh_status_btn
+                                text: '刷新状态'
+                                size_hint_x: None
+                                width: dp(96)
+                                font_name: root.font_path if root.font_path else ''
+                                disabled: not root.uart_mgr
+                                on_release: root.on_read_status()
+
+                        GridLayout:
+                            cols: 4
+                            spacing: dp(6)
+                            row_default_height: dp(26)
+                            size_hint_y: None
+                            height: self.minimum_height
+                            Label:
+                                text: '当前角度'
+                                color: 0.78, 0.9, 1, 1
+                                halign: 'left'
+                                valign: 'middle'
+                                text_size: self.size
+                                font_name: root.font_path if root.font_path else ''
+                            Label:
+                                text: root.servo_angle_display
+                                color: 0.95, 1, 1, 1
+                                halign: 'left'
+                                valign: 'middle'
+                                text_size: self.size
+                                font_name: root.font_path if root.font_path else ''
+                            Label:
+                                text: '当前速度'
+                                color: 0.78, 0.9, 1, 1
+                                halign: 'left'
+                                valign: 'middle'
+                                text_size: self.size
+                                font_name: root.font_path if root.font_path else ''
+                            Label:
+                                text: root.servo_speed_display
+                                color: 0.95, 1, 1, 1
+                                halign: 'left'
+                                valign: 'middle'
+                                text_size: self.size
+                                font_name: root.font_path if root.font_path else ''
+                            Label:
+                                text: '温度'
+                                color: 0.78, 0.9, 1, 1
+                                halign: 'left'
+                                valign: 'middle'
+                                text_size: self.size
+                                font_name: root.font_path if root.font_path else ''
+                            Label:
+                                text: root.servo_temp_display
+                                color: 0.95, 1, 1, 1
+                                halign: 'left'
+                                valign: 'middle'
+                                text_size: self.size
+                                font_name: root.font_path if root.font_path else ''
+                            Label:
+                                text: '电压'
+                                color: 0.78, 0.9, 1, 1
+                                halign: 'left'
+                                valign: 'middle'
+                                text_size: self.size
+                                font_name: root.font_path if root.font_path else ''
+                            Label:
+                                text: root.servo_voltage_display
+                                color: 0.95, 1, 1, 1
+                                halign: 'left'
+                                valign: 'middle'
+                                text_size: self.size
+                                font_name: root.font_path if root.font_path else ''
+
+        # 右上：设置操作
         BoxLayout:
-            size_hint_y: None
-            height: '36dp'
-            spacing: 8
-            Button:
-                text: '位置归零'
-                on_release: root.on_zero()
-                background_normal: ''
-                background_color: 0.18, 0.6, 0.95, 0.9
-                color: 1,1,1,1
-            Button:
-                text: '设置中位'
-                on_release: root.on_set_mid()
-                background_normal: ''
-                background_color: 0.18, 0.6, 0.95, 0.9
-                color: 1,1,1,1
+            orientation: 'vertical'
+            padding: [dp(12),dp(5),dp(12),dp(12)]
+            spacing: dp(10)
+            canvas.before:
+                Color:
+                    rgba: root.panel_border
+                RoundedRectangle:
+                    pos: self.pos
+                    size: self.size
+                    radius: [12]
+                Color:
+                    rgba: root.panel_bg
+                RoundedRectangle:
+                    pos: self.x + dp(1.5), self.y + dp(1.5)
+                    size: self.width - dp(3), self.height - dp(3)
+                    radius: [11]
 
-        Button:
-            text: '读取状态'
-            size_hint_y: None
-            height: '36dp'
-            on_release: root.on_read_status()
-            background_normal: ''
-            background_color: 0.06,0.45,0.85,1
-            color: 1,1,1,1
+            BoxLayout:
+                size_hint_y: None
+                height: dp(34)
+                padding: [0, 0, 0, 0]
+                Label:
+                    text: '设置操作'
+                    color: 0.9, 0.96, 1, 1
+                    bold: True
+                    font_size: '18sp'
+                    halign: 'left'
+                    valign: 'middle'
+                    text_size: self.size
+                    font_name: root.font_path if root.font_path else ''
 
-        Label:
-            id: status_label
-            text: '未连接'
-            size_hint_y: None
-            height: '28dp'
-            on_parent: root.status_label = self
-            font_name: 'assets/fonts/simhei.ttf'
+            ScrollView:
+                bar_width: dp(6)
+                do_scroll_x: False
+                GridLayout:
+                    cols: 1
+                    size_hint_y: None
+                    height: self.minimum_height
+                    spacing: dp(10)
 
-    BoxLayout:
-        orientation: 'vertical'
-        spacing: 8
-        padding: 8
+                    BoxLayout:
+                        size_hint_y: None
+                        height: dp(38)
+                        spacing: dp(8)
+                        Label:
+                            text: '新ID'
+                            size_hint_x: 0.25
+                            color: 0.78, 0.88, 1, 1
+                            halign: 'left'
+                            valign: 'middle'
+                            text_size: self.size
+                            font_name: root.font_path if root.font_path else ''
+                        TextInput:
+                            id: new_id_input
+                            text: ''
+                            input_filter: 'int'
+                            multiline: False
+                            halign: 'center'
+                            padding: [dp(8), (self.height - self.line_height) / 2]
+                            background_normal: ''
+                            background_color: 0.14, 0.18, 0.22, 1
+                            foreground_color: 0.9, 0.96, 1, 1
+                            cursor_color: 0.35, 0.78, 1, 1
+                            font_name: root.font_path if root.font_path else ''
+                            on_parent: root.new_id_input = self
+                        BaseButton:
+                            text: '写入ID'
+                            size_hint_x: 0.32
+                            height: dp(36)
+                            font_name: root.font_path if root.font_path else ''
+                            on_release: root.on_set_id()
 
-        Knob:
-            id: knob_widget
-            size_hint: None, None
-            size: '220dp','220dp'
-            pos_hint: {'center_x':0.5}
-            on_parent: root.knob_widget = self
+                    BoxLayout:
+                        size_hint_y: None
+                        height: dp(38)
+                        spacing: dp(8)
+                        Label:
+                            text: '角度范围'
+                            size_hint_x: 0.3
+                            halign: 'left'
+                            valign: 'middle'
+                            text_size: self.size
+                            color: 0.78, 0.88, 1, 1
+                            font_name: root.font_path if root.font_path else ''
+                        Spinner:
+                            id: servo_range
+                            text: '360'
+                            values: ['270','360']
+                            background_normal: ''
+                            background_color: 0.1, 0.32, 0.45, 0.9
+                            color: 0.92, 0.97, 1, 1
+                            font_name: root.font_path if root.font_path else ''
+                            on_text: root.on_range_changed(self.text)
+                            on_parent: root.servo_range_spinner = self
 
-        Label:
-            text: '拖动旋钮以发送角度控制（拟物风格）'
-            size_hint_y: None
-            height: '24dp'
-            font_name: 'assets/fonts/simhei.ttf'
-            color: 0.85,0.95,1,1
+                    BoxLayout:
+                        size_hint_y: None
+                        height: dp(40)
+                        spacing: dp(8)
+                        Label:
+                            text: '角度设置'
+                            size_hint_x: 0.3
+                            halign: 'left'
+                            valign: 'middle'
+                            text_size: self.size
+                            color: 0.78, 0.88, 1, 1
+                            font_name: root.font_path if root.font_path else ''
+                        TextInput:
+                            id: angle_input
+                            text: ''
+                            hint_text: '0 - 360'
+                            multiline: False
+                            halign: 'center'
+                            padding: [dp(8), (self.height - self.line_height) / 2]
+                            background_normal: ''
+                            background_color: 0.14, 0.18, 0.22, 1
+                            foreground_color: 0.9, 0.96, 1, 1
+                            cursor_color: 0.35, 0.78, 1, 1
+                            font_name: root.font_path if root.font_path else ''
+                            on_parent: root.angle_input = self
+                        BaseButton:
+                            text: '应用'
+                            size_hint_x: 0.32
+                            font_name: root.font_path if root.font_path else ''
+                            on_release: root.on_apply_angle()
+
+                    BoxLayout:
+                        size_hint_y: None
+                        height: dp(40)
+                        spacing: dp(8)
+                        BaseButton:
+                            id: torque_btn
+                            text: '扭矩: --'
+                            font_name: root.font_path if root.font_path else ''
+                            on_parent: root.torque_btn = self; root._update_toggle_labels()
+                            on_release: root.on_toggle_torque()
+                        BaseButton:
+                            id: mode_btn
+                            text: '模式: --'
+                            font_name: root.font_path if root.font_path else ''
+                            on_parent: root.mode_btn = self; root._update_toggle_labels()
+                            on_release: root.on_toggle_mode()
+
+                    BoxLayout:
+                        size_hint_y: None
+                        height: dp(40)
+                        spacing: dp(8)
+                        BaseButton:
+                            text: '位置归零'
+                            font_name: root.font_path if root.font_path else ''
+                            on_release: root.on_zero()
+                        BaseButton:
+                            text: '设置中位'
+                            font_name: root.font_path if root.font_path else ''
+                            on_release: root.on_set_mid()
+
+        # 左下：日志
+        BoxLayout:
+            orientation: 'vertical'
+            padding: [dp(12),dp(5),dp(12),dp(12)]
+            spacing: dp(8)
+            canvas.before:
+                Color:
+                    rgba: root.panel_border
+                RoundedRectangle:
+                    pos: self.pos
+                    size: self.size
+                    radius: [12]
+                Color:
+                    rgba: root.panel_bg
+                RoundedRectangle:
+                    pos: self.x + dp(1.5), self.y + dp(1.5)
+                    size: self.width - dp(3), self.height - dp(3)
+                    radius: [11]
+
+            BoxLayout:
+                size_hint_y: None
+                height: dp(34)
+                padding: [0, 0, 0, 0]
+                Label:
+                    text: '日志信息'
+                    color: 0.9, 0.96, 1, 1
+                    bold: True
+                    font_size: '18sp'
+                    halign: 'left'
+                    valign: 'middle'
+                    text_size: self.size
+                    font_name: root.font_path if root.font_path else ''
+
+            BoxLayout:
+                id: log_container
+                padding: [dp(-66), dp(6), dp(6), dp(6)]
+                on_parent: root.log_container = self
+                canvas.before:
+                    Color:
+                        rgba: 0, 0, 0, 0.08
+                    RoundedRectangle:
+                        pos: self.pos
+                        size: self.size
+                        radius: [8]
+
+        # 右下：旋钮
+        BoxLayout:
+            orientation: 'vertical'
+            padding: [dp(12),dp(5),dp(12),dp(12)]
+            spacing: dp(10)
+            canvas.before:
+                Color:
+                    rgba: root.panel_border
+                RoundedRectangle:
+                    pos: self.pos
+                    size: self.size
+                    radius: [12]
+                Color:
+                    rgba: root.panel_bg
+                RoundedRectangle:
+                    pos: self.x + dp(1.5), self.y + dp(1.5)
+                    size: self.width - dp(3), self.height - dp(3)
+                    radius: [11]
+
+            BoxLayout:
+                size_hint_y: None
+                height: dp(34)
+                padding: [0, 0, 0, 0]
+                Label:
+                    text: '角度控制'
+                    color: 0.9, 0.96, 1, 1
+                    bold: True
+                    font_size: '18sp'
+                    halign: 'left'
+                    valign: 'middle'
+                    text_size: self.size
+                    font_name: root.font_path if root.font_path else ''
+
+            AnchorLayout:
+                anchor_x: 'center'
+                anchor_y: 'center'
+                padding: dp(10)
+                Knob:
+                    id: knob_widget
+                    size_hint: 1, 1
+                    on_parent: root.knob_widget = self
+
+            Label:
+                text: '拖动旋钮或输入角度，实时通过 USB 发送到舵机'
+                size_hint_y: None
+                height: dp(26)
+                halign: 'left'
+                valign: 'middle'
+                text_size: self.size
+                font_name: root.font_path if root.font_path else ''
+                color: 0.78, 0.9, 1, 1
