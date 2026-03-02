@@ -179,6 +179,28 @@ class RobotDashboardApp(App):
         ui_runtime.safe_refresh_ui(self, dt=dt)
 
     def _get_gyro_data(self):
+        # 优先使用已建立的 IMUReader/telemetry 数据，再回退到本机传感器
+        try:
+            imu = getattr(self, "imu_reader", None)
+            if imu:
+                return imu.get_orientation()
+        except Exception:
+            pass
+
+        try:
+            mc = getattr(self, "motion_controller", None)
+            if mc and getattr(mc, "imu", None):
+                return mc.imu.get_orientation()
+        except Exception:
+            pass
+
+        try:
+            sb = getattr(self, "servo_bus", None)
+            if sb and not getattr(sb, "is_mock", True) and hasattr(sb, "get_latest_imu"):
+                return sb.get_latest_imu()
+        except Exception:
+            pass
+
         return device_runtime.get_gyro_data(self, gyroscope)
 
     # ================== 主循环 ==================
@@ -470,13 +492,19 @@ class RobotDashboardApp(App):
     def on_stop(self):
         """应用退出时清理 OTG 回调与 USB 重试任务，避免重复注册与残留任务。"""
         try:
-            usb_otg.unregister_device_callback(self._on_otg_event)
+            from services import usb_otg  # 惰性导入，避免网络模式下缺少模块报错
         except Exception:
-            pass
-        try:
-            usb_otg.stop_monitor()
-        except Exception:
-            pass
+            usb_otg = None
+
+        if usb_otg:
+            try:
+                usb_otg.unregister_device_callback(self._on_otg_event)
+            except Exception:
+                pass
+            try:
+                usb_otg.stop_monitor()
+            except Exception:
+                pass
         try:
             ev = getattr(self, "_android_usb_reconnect_ev", None)
             if ev:
