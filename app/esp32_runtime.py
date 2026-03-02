@@ -13,7 +13,7 @@ from pathlib import Path
 from services.servo_bus import ServoBus
 from services.imu import IMUReader
 from services.motion_controller import MotionController
-from services import esp32_discovery, esp32_client
+from services import esp32_discovery, esp32_client, comm_config
 from widgets.runtime_status import RuntimeStatusLogger
 
 
@@ -51,6 +51,33 @@ def _save_host(app, host, port=None):
         pass
 
 
+def _connect_to_host(app, host, port=None):
+    """Attempt to wire ServoBus/clients to a discovered host."""
+    try:
+        host_for_bus = f"{host}:{int(port)}" if port else host
+        sb = ServoBus(port=host_for_bus)
+        if sb and not getattr(sb, "is_mock", True):
+            try:
+                app.servo_bus = sb
+                app._esp32_host = host
+                app._esp32_port = int(port or getattr(sb, "_port", 5005))
+            except Exception:
+                pass
+            try:
+                esp32_client.set_host(host, port=port)
+            except Exception:
+                pass
+            try:
+                RuntimeStatusLogger.log_info(f"Connected to ESP32 servo bridge: {host}")
+            except Exception:
+                pass
+            _save_host(app, host, port or 5005)
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def ensure_android_usb_reconnect_watcher(app, reason=""):
     # no-op for ESP32 network mode
     return
@@ -65,8 +92,8 @@ def handle_android_usb_attach_intent(app, source="resume"):
     return
 
 
-def try_auto_connect(app, candidate_ports=None, list_ports_module=None, allow_discovery=True):
-    """建立与 ESP32 的 UDP 连接：优先 candidate/env/记忆 -> 发现广播。"""
+def try_auto_connect(app, candidate_ports=None, list_ports_module=None, allow_discovery=True, allow_ble_provision=True):
+    """建立与 ESP32 的 UDP 连接：优先 candidate/env/记忆 -> 发现广播/蓝牙配网。"""
     host = None
     port = None
 
@@ -89,29 +116,17 @@ def try_auto_connect(app, candidate_ports=None, list_ports_module=None, allow_di
         except Exception:
             host = None
 
-    try:
-        if host:
-            host_for_bus = f"{host}:{int(port)}" if port else host
-            sb = ServoBus(port=host_for_bus)
-            if sb and not getattr(sb, 'is_mock', True):
-                try:
-                    app.servo_bus = sb
-                    app._esp32_host = host
-                    app._esp32_port = int(port or getattr(sb, "_port", 5005))
-                except Exception:
-                    pass
-                try:
-                    esp32_client.set_host(host, port=port)
-                except Exception:
-                    pass
-                try:
-                    RuntimeStatusLogger.log_info(f"Connected to ESP32 servo bridge: {host}")
-                except Exception:
-                    pass
-                _save_host(app, host, port or 5005)
+    if host and _connect_to_host(app, host, port):
+        return True
+
+    # 尝试蓝牙配网 + 再发现
+    if allow_discovery and allow_ble_provision:
+        try:
+            host2, port2 = comm_config.auto_provision_and_discover(app, preferred_port=port or 5005)
+            if host2 and _connect_to_host(app, host2, port2):
                 return True
-    except Exception:
-        pass
+        except Exception:
+            pass
     try:
         RuntimeStatusLogger.log_error("未找到 ESP32，ServoBus 将以 MOCK 模式运行")
     except Exception:

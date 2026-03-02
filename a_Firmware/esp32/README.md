@@ -9,6 +9,7 @@ ESP32 固件（MicroPython）
 默认位置
 - 固件主脚本：`firmware/esp32/main.py`
 - 默认配置文件：`firmware/esp32/esp32_config.json`
+- BLE 配网：广告名 `ESP32-PROV`，Service UUID `0000ffaa-0000-1000-8000-00805f9b34fb`，Char UUID `0000ffab-0000-1000-8000-00805f9b34fb`，写入格式支持 `ssid\npassword` 或 JSON `{ "ssid": "...", "password": "..." }`
 
 启动与配网流程
 1. 启动时固件会读取 `esp32_config.json`。

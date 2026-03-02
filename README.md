@@ -1,52 +1,71 @@
-# Robot Dashboard — 开发者指南
+你是一名经验丰富的嵌入式与 Python/Kivy 工程师。请生成完整的工业级代码（可直接运行，注释清晰，可扩展性强），要求包括 PC/手机端的 GUI、ESP32 通信逻辑、IMU 数据采集、舵机控制等所有模块。要求遵循高质量工业规范：
 
-**概述**
-- 本仓库是一个基于 `Kivy` 的跨平台（PC / Android）机器人控制面板：摄像头、陀螺仪、舵机（由局域网内的 ESP32 负责驱动）与表情/语音交互。
+系统架构：
+```
+PC / 手机端 (同一局域网 WiFi)
+        │
+        │ HTTP / WebSocket / UDP
+        ▼
+      ESP32
+        │
+   ┌────┼───────────┐
+   │    │           │
+ WiFi  Bluetooth   I2C
+         │           │
+       配网        IMU传感器
+                      │
+                   姿态数据
+        │
+        │ UART
+        ▼
+CH340 舵机驱动板
+        │
+     25路舵机
+```
+要求：
+1. **PC/手机端 GUI**：
+   - 管理设置面板 实现蓝牙给esp32发送wifi配网数据
+   - 管理设置面板 实时显示 25 路舵机状态和 IMU 姿态数据
+   - 管理设置面板 加入快捷遥控器操作控制机器人运动
+   - 支持通过 WebSocket/UDP 向 ESP32 发送控制指令
+   - 具备基本安全检查（例如指令边界检查）
+   - 可扩展多平台（Windows/Linux/Android/iOS）
 
-**快速开始（开发环境）**
-1. 克隆仓库并进入项目根目录。
-2. 建议创建虚拟环境：
-   - Windows: `python -m venv .venv` 然后 `.\.venv\Scripts\activate`
-   - macOS / Linux: `python3 -m venv .venv` 然后 `source .venv/bin/activate`
-3. 安装依赖：
-   - `pip install -r requirements.txt`
-4. 运行程序（桌面调试）：
-   - `python main.py`
+2. **ESP32**：
+   - 支持 WiFi、Bluetooth、I2C 通信
+   - 通过 HTTP/WebSocket/UDP 接收 PC/手机端控制指令
+   - 采集 IMU 数据（例如 MPU6050 或 BNO055）
+   - 将 IMU 数据和舵机状态通过 UART 发给 CH340舵机板
+   - 支持基础异常处理和重连机制
 
-**AI 新架构（已重建）**
-- 统一采用 OpenAI 兼容协议，默认模型配置为 DeepSeek。
-- 支持在 PC / Android 共用同一套 AI 代码路径。
-- 支持多模型切换（`deepseek` / `openai` / `qwen` / `glm`），配置文件在 `data/ai_models.json`。
-- AI 输出统一为 JSON 决策：语音（speech）+ 情绪（emotion）+ 动作（action）。
-- 动作会自动映射到 `MotionController`（如 `walk/stop/nod/shake_head/wave/sit/stand/twist`）。
+3. **IMU 传感器**：
+   - 使用 I2C 总线读取
+   - 提供角度/姿态数据（Pitch/Yaw/Roll）
+   - 支持滤波（如互补滤波或卡尔曼滤波）
+   
+4. **CH340 舵机驱动板**：
+   - 支持 25 路舵机控制
+   - 接收 UART 指令并执行，反馈舵机状态
+   - 提供安全边界检查（舵机角度范围限制）
+   
+5. **代码质量要求**：
+   - 模块化、可扩展
+   - 每个模块提供清晰注释和接口说明
+   - 遵循 PEP8/Python 工业规范
+   - 使用 asyncio 或多线程保证实时性
+   - 提供基础调试和日志功能
+   - 生成requirements.txt
 
-**AI Key 与模型切换（重要）**
-- 不要把 Key 写入代码或提交到仓库。
-- 默认读取环境变量：`ROBOTBRAIN_LLM_API_KEY`。
-- 可选设置模型档位：`ROBOTBRAIN_LLM_PROFILE`（默认 `deepseek`）。
+7. **项目目录**：
+   - 合理优化目录结构
+   - 生成requirements.txt
 
-示例（Windows PowerShell）：
-- `setx ROBOTBRAIN_LLM_API_KEY "你的Key"`
-- `setx ROBOTBRAIN_LLM_PROFILE "deepseek"`
+6. **固件烧录**：
+   - 在a_Firmware固件目录生成可用的烧录程序
+   - 生成说明文档
 
-应用内可通过 `RobotDashboardApp.set_ai_model(profile_name, api_key=None)` 动态切换模型。
 
-**主要文件与说明**
-- `main.py`: 应用入口。
-- `app/app_root.py`: 应用主类 `RobotDashboardApp`，负责初始化界面、日志、硬件（串口/陀螺 / 摄像头）并启动定时循环。
-- `kv/`: 存放 Kivy 布局文件（`.kv`）。
-- `widgets/`: UI 组件，如摄像头视图、表情、仪表盘、启动提示等。
-  - `widgets/camera_view.py`: 摄像头封装，桌面使用 OpenCV（`cv2`），Android 使用系统摄像头接口。
-  - `widgets/startup_tip.py`: 启动权限/连接提示弹窗，`app_root` 在权限缺失时会弹出。
-  - `widgets/runtime_status.py`: 运行日志面板（`RuntimeStatusLogger`），界面日志转发实现位置。
-- `services/`: 设备/硬件层封装与控制逻辑。
-   - 网络/ESP32 架构：主机通过局域网（Wi‑Fi）将关键帧发送给 ESP32，由 ESP32 负责插值并通过 UART->CH340 输出至舵机驱动板。
-      - 主机端模块：`services/esp32_client.py`（UDP 客户端/调试）、`app/esp32_runtime.py`（运行时 shim，替代旧的 USB/OTG runtime）。
-      - 固件：`firmware/esp32/main.py`（MicroPython 示例，支持 discover/provision/ping/关键帧）。
-  - `services/motion_controller.py`: 运动控制器，与 `BalanceController` 集成实现动作序列与平衡调整。
-  - `services/imu.py`: IMU/陀螺读取封装（桌面可模拟）。
-  - `services/vision.py`: 视觉处理（若有，通常依赖 OpenCV / numpy）。
-- `requirements.txt`: 项目依赖（第三方库列表）。
+请生成代码并保持每个模块独立，且能互通，附带注释和使用示例,旧代码用不到的可以删除，精简代码结构
 
 **固件（ESP32）**
 - 固件示例位于 `firmware/esp32`，包含 MicroPython 示例 `main.py` 与 `README.md`，用于接收主机 UDP 关键帧并通过 UART 输出舵机同步写帧。

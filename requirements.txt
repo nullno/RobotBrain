@@ -7,3 +7,8 @@ SpeechRecognition>=3.10.0
 PyAudio>=0.2.14; platform_system != "Android"
 edge-tts>=6.1.12; platform_system != "Android"
 pygame>=2.5.2; platform_system != "Android"
+websockets>=10.4
+aiohttp>=3.9.0
+bleak>=0.22.2
+smbus2>=0.4.3
+esptool>=4.7.0

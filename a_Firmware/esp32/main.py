@@ -1,19 +1,20 @@
 """
-ESP32 MicroPython 固件示例
-功能：
-- UDP 接收关键帧（目标位置和 duration），格式详见 README
-- 对关键帧做线性插值（默认 20ms 步长）
-- 使用 JOHO 串口总线舵机协议（与主仓库兼容）通过 UART 发送 `sync_set_position` 指令
-
-备注：将 UART TX/RX 引脚与 CH340/舵机驱动板连通（TTL 3.3V）。
+RobotBrain ESP32 MicroPython 固件
+- Wi-Fi + BLE 配网（BLE 名称 ESP32-PROV，UUID 与主控一致）
+- UDP(5005) / HTTP(8080) / WebSocket(8765) 控制通道
+- I2C IMU 采样（MPU6050/BNO055，可扩展），简单互补滤波占位
+- UART 桥接 CH340 舵机板（25 路，同步写）
 """
 
+import uasyncio as asyncio
 import ujson as json
 import socket
 import struct
 import time
-from machine import UART, Pin, I2C, reset
+from machine import UART, Pin, I2C
 import machine
+from servo_sdk_adapter import ServoSDKBridge
+
 try:
     import network
     import ubinascii
@@ -23,397 +24,380 @@ except Exception:
     ubinascii = None
     os = None
 
-# 配置
+try:
+    import bluetooth
+except Exception:
+    bluetooth = None
+
+try:
+    import uwebsockets.server as ws_server
+except Exception:
+    ws_server = None
+
+CONFIG_PATH = "esp32_config.json"
+DEVICE_NAME = "robotbrain-esp32"
+BLE_NAME = "ESP32-PROV"
 UDP_PORT = 5005
+HTTP_PORT = 8080
+WS_PORT = 8765
 UART_ID = 1
 UART_BAUD = 115200
-UART_TX_PIN = 17  # 根据硬件调整
-UART_RX_PIN = 16  # 可选
-STEP_MS = 20      # 插值步长（ms）
-BROADCAST_ID = 0xFE
-CMD_SYNC_WRITE = 0x83
-HEADER = b'\xff\xff'
+UART_TX_PIN = 17
+UART_RX_PIN = 16
+I2C_SCL_PIN = 22
+I2C_SDA_PIN = 21
+IMU_ADDR = 0x68
+SERVO_MIN = 0
+SERVO_MAX = 1000
+TELEMETRY_MS = 400
 
-# 初始化 UART
 uart = UART(UART_ID, baudrate=UART_BAUD, tx=UART_TX_PIN, rx=UART_RX_PIN, timeout=0)
+i2c = I2C(0, scl=Pin(I2C_SCL_PIN), sda=Pin(I2C_SDA_PIN))
+servo = ServoSDKBridge(uart, servo_count=25)
 
-# 配置持久化文件
-CONFIG_PATH = 'esp32_config.json'
+state = {
+    "imu": {"pitch": 0.0, "roll": 0.0, "yaw": 0.0, "accel": (0, 0, 0), "gyro": (0, 0, 0)},
+    "servos": {},
+}
+
+
+# ---------------------------------------------------------------------------
+def _adv_payload(name: str) -> bytes:
+    try:
+        nb = name.encode()
+        return struct.pack("BB", len(nb) + 1, 0x09) + nb
+    except Exception:
+        return b"\x02\x01\x06"
 
 
 def load_config():
     try:
-        if os is None:
-            return {}
-        if CONFIG_PATH in os.listdir('/'):
-            with open(CONFIG_PATH, 'r') as f:
+        if os and CONFIG_PATH in os.listdir("/"):
+            with open(CONFIG_PATH, "r") as f:
                 return json.load(f)
     except Exception:
         pass
     return {}
 
 
-def save_config(cfg):
+def save_config(cfg) -> bool:
     try:
-        if os is None:
-            return False
-        with open(CONFIG_PATH, 'w') as f:
-            f.write(json.dumps(cfg))
-        return True
+        if os:
+            with open(CONFIG_PATH, "w") as f:
+                f.write(json.dumps(cfg))
+            return True
     except Exception:
-        return False
+        pass
+    return False
 
 
-# IMU 支持（尝试初始化 MPU6050）
-imu_available = False
-imu_i2c = None
-IMU_ADDR = 0x68
+def clamp(val, lo, hi):
+    if val < lo:
+        return lo
+    if val > hi:
+        return hi
+    return val
 
 
-def init_imu(scl_pin=22, sda_pin=21):
-    global imu_available, imu_i2c
-    try:
-        imu_i2c = I2C(0, scl=Pin(scl_pin), sda=Pin(sda_pin))
-        # wake up
-        imu_i2c.writeto_mem(IMU_ADDR, 0x6B, b'\x00')
-        imu_available = True
-    except Exception:
-        imu_available = False
-
-
-# 运行控制
-stop_requested = False
-
-
-def request_stop():
-    global stop_requested
-    stop_requested = True
-
-
-def clear_stop():
-    global stop_requested
-    stop_requested = False
-
-
-def read_imu():
-    # 返回简单字典: accel{x,y,z}, gyro{x,y,z}
-    try:
-        if not imu_available:
-            return None
-        data = imu_i2c.readfrom_mem(IMU_ADDR, 0x3B, 14)
-        def to_int16(bh, bl):
-            v = (bh << 8) | bl
-            if v & 0x8000:
-                v = -((v ^ 0xFFFF) + 1)
-            return v
-        ax = to_int16(data[0], data[1])
-        ay = to_int16(data[2], data[3])
-        az = to_int16(data[4], data[5])
-        gx = to_int16(data[8], data[9])
-        gy = to_int16(data[10], data[11])
-        gz = to_int16(data[12], data[13])
-        return {'accel': {'x': ax, 'y': ay, 'z': az}, 'gyro': {'x': gx, 'y': gy, 'z': gz}}
-    except Exception:
-        return None
-
-
-
-def calc_checksum_request(servo_id, data_size, cmd_type, param_bytes):
-    buf = struct.pack('<BBB', servo_id, data_size, cmd_type) + param_bytes
+def checksum(servo_id, data_size, cmd_type, param_bytes):
+    buf = struct.pack("<BBB", servo_id, data_size, cmd_type) + param_bytes
     s = 0
     for b in buf:
-        if isinstance(b, int):
-            s += b
-        else:
-            s += ord(b)
+        s += b if isinstance(b, int) else ord(b)
     return (0xFF - (s & 0xFF)) & 0xFF
 
 
-def pack_request(servo_id, cmd_type, param_bytes=b''):
+def pack_frame(servo_id, cmd_type, param_bytes=b""):
     data_size = len(param_bytes) + 2
-    checksum = calc_checksum_request(servo_id, data_size, cmd_type, param_bytes)
-    frame = HEADER + struct.pack('<BBB', servo_id, data_size, cmd_type) + param_bytes + struct.pack('<B', checksum)
-    return frame
+    cs = checksum(servo_id, data_size, cmd_type, param_bytes)
+    return b"\xff\xff" + struct.pack("<BBB", servo_id, data_size, cmd_type) + param_bytes + struct.pack("<B", cs)
 
 
-# 构建 sync_write 参数体，格式与主仓库一致：0x2A 0x04 + [sid, pos(H), runtime_ms(H)]*
 def build_sync_param(pairs):
-    # pairs: list of (sid:int, pos:int, runtime_ms:int)
     out = bytearray()
-    out.extend(b'\x2A\x04')
+    out.extend(b"\x2A\x04")
     for sid, pos, runtime in pairs:
-        # >BHH
-        out.extend(struct.pack('>BHH', int(sid) & 0xFF, int(pos) & 0xFFFF, int(runtime) & 0xFFFF))
+        out.extend(struct.pack(">BHH", int(sid) & 0xFF, int(pos) & 0xFFFF, int(runtime) & 0xFFFF))
     return bytes(out)
 
 
-# 将一个关键帧（targets dict 与 duration ms）执行插值并发送
-def execute_keyframe(targets, duration_ms):
-    # targets: {sid: position}
-    # duration_ms: integer
-    if not targets:
+def send_servo_targets(targets, duration_ms):
+    safe_targets = {}
+    for sid, val in targets.items():
+        try:
+            sid_i = int(sid)
+            pos_i = clamp(int(val), SERVO_MIN, SERVO_MAX)
+            safe_targets[sid_i] = pos_i
+            state["servos"][sid_i] = pos_i
+        except Exception:
+            pass
+    if not safe_targets:
         return
-    # 读取当前 positions: 在本示例中我们没有读取回传，假设起点为目标（即时跳转）
-    # 为简单起见，起点全部设为当前目标（导致直接执行），实际部署可添加 read-back 支持
-    steps = max(1, int(duration_ms) // STEP_MS)
-    step_ms = max(1, int(duration_ms) // steps)
+    servo.set_positions(safe_targets, duration_ms)
 
-    # Convert targets to int positions
-    t_targets = {int(k): int(v) for k, v in targets.items()}
 
-    # For simplicity assume current positions equal to targets (no smoothing) if steps == 1
-    # If steps > 1, we linearly interpolate from current (assumed same) -> target (effectively single write)
-    # To implement real interpolation, firmware should track last_sent positions. We'll maintain a small cache.
-    global last_positions
+def read_mpu6050():
     try:
-        lp = last_positions
-    except NameError:
-        lp = {}
+        i2c.writeto_mem(IMU_ADDR, 0x6B, b"\x00")
+        data = i2c.readfrom_mem(IMU_ADDR, 0x3B, 14)
 
-    # Ensure all SIDs present in last_positions
-    for sid in t_targets:
-        if sid not in lp:
-            lp[sid] = t_targets[sid]
+        def to_i16(h, l):
+            v = (h << 8) | l
+            return v - 65536 if v & 0x8000 else v
 
-    # Interpolate per step
-    for step in range(1, steps + 1):
-        pairs = []
-        for sid, tgt in t_targets.items():
-            start = int(lp.get(sid, tgt))
-            if steps <= 1:
-                cur = tgt
-            else:
-                cur = int(round(start + (tgt - start) * (step / float(steps))))
-            pairs.append((sid, cur, step_ms))
-            # update last_positions to last step later
-        # 构造 sync_write 帧并发送
-        param = build_sync_param(pairs)
-        frame = pack_request(BROADCAST_ID, CMD_SYNC_WRITE, param)
-        try:
-            uart.write(frame)
-        except Exception:
-            pass
-        # 等待下一步
-        # 可被 stop_requested 打断
-        for _ in range(max(1, int(step_ms // 20))):
-            if stop_requested:
-                return
-            time.sleep_ms(20)
-
-    # 更新缓存为目标
-    for sid, tgt in t_targets.items():
-        lp[sid] = int(tgt)
-    globals()['last_positions'] = lp
-
-
-# UDP 接收循环（阻塞）
-def udp_server():
-    ai = socket.getaddrinfo('0.0.0.0', UDP_PORT)[0]
-    s = socket.socket(ai[0], socket.SOCK_DGRAM)
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-        s.setblocking(False)
+        ax = to_i16(data[0], data[1])
+        ay = to_i16(data[2], data[3])
+        az = to_i16(data[4], data[5])
+        gx = to_i16(data[8], data[9])
+        gy = to_i16(data[10], data[11])
+        gz = to_i16(data[12], data[13])
+        state["imu"].update({"accel": (ax, ay, az), "gyro": (gx, gy, gz)})
     except Exception:
-        # settimeout fallback
+        return None
+    return state["imu"]
+
+
+# ---------------------------------------------------------------------------
+async def wifi_connect():
+    if network is None:
+        return
+    cfg = load_config()
+    sta = network.WLAN(network.STA_IF)
+    if not sta.active():
+        sta.active(True)
+    wifi_cfg = cfg.get("wifi") or {}
+    if wifi_cfg.get("ssid"):
+        sta.connect(wifi_cfg.get("ssid"), wifi_cfg.get("password"))
+        for _ in range(40):
+            if sta.isconnected():
+                break
+            await asyncio.sleep_ms(250)
+    if not sta.isconnected():
+        ap = network.WLAN(network.AP_IF)
+        ap.active(True)
+        ap.config(essid=cfg.get("device_name", DEVICE_NAME))
+
+
+async def http_server():
+    async def handle(reader, writer):
         try:
-            s.settimeout(0.2)
+            req_line = await reader.readline()
+            if not req_line:
+                await writer.wait_closed()
+                return
+            content_length = 0
+            while True:
+                line = await reader.readline()
+                if line == b"\r\n" or not line:
+                    break
+                if line.lower().startswith(b"content-length"):
+                    try:
+                        content_length = int(line.decode().split(":")[1].strip())
+                    except Exception:
+                        content_length = 0
+            body = b""
+            if content_length:
+                body = await reader.readexactly(content_length)
+            try:
+                payload = json.loads(body.decode()) if body else {}
+            except Exception:
+                payload = {}
+            path = req_line.decode().split(" ")[1]
+            if path == "/provision":
+                ssid = payload.get("ssid")
+                password = payload.get("password")
+                cfg = load_config()
+                cfg["wifi"] = {"ssid": ssid, "password": password}
+                ok = save_config(cfg)
+                resp = {"ok": bool(ok)}
+            elif path == "/status":
+                resp = telemetry_payload()
+            else:
+                resp = {"ok": True}
+            raw = json.dumps(resp)
+            writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " + str(len(raw)).encode() + b"\r\n\r\n" + raw.encode())
+            await writer.drain()
         except Exception:
             pass
-    s.bind(('0.0.0.0', UDP_PORT))
-    print('UDP listen on', UDP_PORT)
+        try:
+            await writer.wait_closed()
+        except Exception:
+            pass
 
-    cfg = load_config()
-    last_telemetry = time.ticks_ms()
-    telemetry_interval = cfg.get('telemetry_interval_ms', 500)
-    last_reconnect = time.ticks_ms()
-    reconnect_interval = 5000
+    srv = await asyncio.start_server(handle, "0.0.0.0", HTTP_PORT)
+    while True:
+        await asyncio.sleep_ms(1000)
 
-    # 启动时尝试连接已保存 Wi-Fi
-    if network is not None:
+
+def telemetry_payload():
+    wifi_ip = None
+    wifi_ok = False
+    if network:
         try:
             sta = network.WLAN(network.STA_IF)
-            if not sta.active():
-                sta.active(True)
-            wcfg = cfg.get('wifi')
-            if wcfg and isinstance(wcfg, dict):
-                ssid = wcfg.get('ssid')
-                pwd = wcfg.get('password')
-                if ssid:
-                    try:
-                        sta.connect(ssid, pwd)
-                        deadline = time.ticks_add(time.ticks_ms(), 10000)
-                        while not sta.isconnected() and time.ticks_diff(deadline, time.ticks_ms()) > 0:
-                            time.sleep_ms(200)
-                    except Exception:
-                        pass
-            # 若仍未连接，则启动 AP 以便配网
-            if not sta.isconnected():
-                try:
-                    ap = network.WLAN(network.AP_IF)
-                    if not ap.active():
-                        ap.active(True)
-                        ap.config(essid=cfg.get('device_name', 'esp32-servo-bridge'))
-                except Exception:
-                    pass
+            wifi_ok = sta.isconnected()
+            wifi_ip = sta.ifconfig()[0]
         except Exception:
             pass
+    return {
+        "type": "telemetry",
+        "imu": state.get("imu"),
+        "servos": state.get("servos"),
+        "wifi": wifi_ip,
+        "wifi_ok": wifi_ok,
+        "uptime_ms": time.ticks_ms(),
+    }
 
+
+async def udp_server():
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("0.0.0.0", UDP_PORT))
+    sock.setblocking(False)
     while True:
-        # 非阻塞接收
         try:
-            data, addr = s.recvfrom(4096)
+            data, addr = sock.recvfrom(2048)
         except Exception:
             data = None
-            addr = None
-
         if data:
             try:
-                msg = data.decode('utf-8')
-                obj = json.loads(msg)
+                msg = json.loads(data.decode())
+                await handle_command(msg, addr, sock)
             except Exception:
-                obj = None
-            if obj:
-                # 支持多种消息类型：discover, provision, ping, pair, keyframe
-                mtype = obj.get('type') or obj.get('cmd') or 'keyframe'
-                if mtype in ('discover', 'probe'):
-                    resp = {'type': 'discover_resp', 'device': 'esp32', 'port': UDP_PORT}
-                    if network is not None:
-                        try:
-                            sta = network.WLAN(network.STA_IF)
-                            resp['ip'] = sta.ifconfig()[0] if sta.active() else '0.0.0.0'
-                            if ubinascii is not None:
-                                try:
-                                    resp['mac'] = ubinascii.hexlify(sta.config('mac')).decode()
-                                except Exception:
-                                    pass
-                        except Exception:
-                            pass
-                    try:
-                        s.sendto(json.dumps(resp).encode('utf-8'), addr)
-                    except Exception:
-                        pass
-                elif mtype == 'ping':
-                    try:
-                        s.sendto(json.dumps({'type': 'pong'}).encode('utf-8'), addr)
-                    except Exception:
-                        pass
-                elif mtype in ('provision', 'provisioning'):
-                    ssid = obj.get('ssid')
-                    password = obj.get('password')
-                    result = {'type': 'provision_resp', 'ok': False}
-                    if network is None:
-                        result['error'] = 'network_module_missing'
-                    else:
-                        try:
-                            sta = network.WLAN(network.STA_IF)
-                            if not sta.active():
-                                sta.active(True)
-                            sta.connect(ssid, password)
-                            deadline = time.ticks_add(time.ticks_ms(), 12000)
-                            while not sta.isconnected() and time.ticks_diff(deadline, time.ticks_ms()) > 0:
-                                time.sleep_ms(200)
-                            if sta.isconnected():
-                                result['ok'] = True
-                                result['ip'] = sta.ifconfig()[0]
-                                # persist
-                                cfg = load_config()
-                                cfg['wifi'] = {'ssid': ssid, 'password': password}
-                                save_config(cfg)
-                            else:
-                                result['error'] = 'connect_timeout'
-                        except Exception as e:
-                            result['error'] = 'exception'
-                            try:
-                                result['detail'] = str(e)
-                            except Exception:
-                                pass
-                    try:
-                        s.sendto(json.dumps(result).encode('utf-8'), addr)
-                    except Exception:
-                        pass
-                elif mtype in ('pair', 'set_host'):
-                    # 保存主控信息
-                    host = obj.get('host') or addr[0]
-                    port = int(obj.get('port', UDP_PORT))
-                    cfg = load_config()
-                    cfg['host'] = {'ip': host, 'port': port}
-                    ok = save_config(cfg)
-                    try:
-                        s.sendto(json.dumps({'type': 'pair_resp', 'ok': bool(ok)}).encode('utf-8'), addr)
-                    except Exception:
-                        pass
-                elif mtype == 'status':
-                    # 返回设备状态
-                    resp = {'type': 'status_resp', 'device': cfg.get('device_name', 'esp32')}
-                    try:
-                        if network is not None:
-                            sta = network.WLAN(network.STA_IF)
-                            resp['wifi_connected'] = bool(sta.isconnected()) if hasattr(sta, 'isconnected') else bool(sta.active())
-                            resp['ip'] = sta.ifconfig()[0] if sta.active() else '0.0.0.0'
-                    except Exception:
-                        pass
-                    resp['last_positions'] = globals().get('last_positions', {})
-                    resp['imu'] = read_imu()
-                    resp['uptime_ms'] = time.ticks_ms()
-                    try:
-                        s.sendto(json.dumps(resp).encode('utf-8'), addr)
-                    except Exception:
-                        pass
-                elif mtype == 'stop':
-                    # 紧急停止
-                    request_stop()
-                    try:
-                        s.sendto(json.dumps({'type': 'stop_resp', 'ok': True}).encode('utf-8'), addr)
-                    except Exception:
-                        pass
-                elif mtype == 'reboot':
-                    try:
-                        s.sendto(json.dumps({'type': 'reboot_resp', 'ok': True}).encode('utf-8'), addr)
-                    except Exception:
-                        pass
-                    time.sleep_ms(100)
-                    machine.reset()
-                elif mtype == 'factory_reset':
-                    # 删除配置并重启
-                    ok = False
-                    try:
-                        if os is not None:
-                            try:
-                                os.remove(CONFIG_PATH)
-                                ok = True
-                            except Exception:
-                                ok = False
-                    except Exception:
-                        ok = False
-                    try:
-                        s.sendto(json.dumps({'type': 'factory_reset_resp', 'ok': ok}).encode('utf-8'), addr)
-                    except Exception:
-                        pass
-                    time.sleep_ms(200)
-                    machine.reset()
-                else:
-                    # 视作关键帧消息
-                    targets = obj.get('targets') or obj.get('targets_positions') or {}
-                    duration = int(obj.get('duration', obj.get('dur', 300) or 300))
-                    execute_keyframe(targets, duration)
+                pass
+        await asyncio.sleep_ms(10)
 
-        # 周期性发送 telemetry 到已配对主机
+
+async def handle_command(msg, addr, sock=None):
+    mtype = msg.get("type") or msg.get("cmd") or "servo_targets"
+    if mtype == "discover":
+        resp = {"type": "discover_resp", "port": UDP_PORT, "device": DEVICE_NAME}
+        if network:
+            try:
+                sta = network.WLAN(network.STA_IF)
+                resp["ip"] = sta.ifconfig()[0]
+                if ubinascii:
+                    resp["mac"] = ubinascii.hexlify(sta.config("mac")).decode()
+            except Exception:
+                pass
+        if sock:
+            sock.sendto(json.dumps(resp).encode(), addr)
+    elif mtype in ("servo_targets", "keyframe"):
+        targets = msg.get("targets") or {}
+        duration = int(msg.get("duration", 300))
+        send_servo_targets(targets, duration)
+    elif mtype == "torque":
+        enable = bool(msg.get("enable", True))
+        servo.torque(enable=enable)
+    elif mtype == "motion":
+        # 占位：根据需要映射动作到关键帧
+        pass
+    elif mtype == "status":
+        if sock:
+            sock.sendto(json.dumps(telemetry_payload()).encode(), addr)
+
+
+async def telemetry_task():
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    while True:
+        cfg = load_config()
+        host = cfg.get("host") or cfg.get("pair")
+        if host:
+            try:
+                sock.sendto(json.dumps(telemetry_payload()).encode(), (host.get("ip"), int(host.get("port", UDP_PORT))))
+            except Exception:
+                pass
+        await asyncio.sleep_ms(TELEMETRY_MS)
+
+
+async def imu_task():
+    while True:
+        read_mpu6050()
+        await asyncio.sleep_ms(50)
+
+
+async def ws_task():
+    if ws_server is None:
+        return
+
+    async def handler(reader, writer):
+        ws = await ws_server.serve(reader, writer)
+        while True:
+            try:
+                msg = await ws.recv()
+                if msg is None:
+                    break
+                try:
+                    obj = json.loads(msg)
+                    await handle_command(obj, None)
+                except Exception:
+                    pass
+            except Exception:
+                break
+        await ws.close()
+
+    await asyncio.start_server(handler, "0.0.0.0", WS_PORT)
+    while True:
+        await asyncio.sleep_ms(1000)
+
+
+def ble_setup():
+    if bluetooth is None:
+        return None
+    ble = bluetooth.BLE()
+    ble.active(True)
+    SERVICE_UUID = bluetooth.UUID("0000ffaa-0000-1000-8000-00805f9b34fb")
+    CHAR_UUID = bluetooth.UUID("0000ffab-0000-1000-8000-00805f9b34fb")
+    WIFI_CHAR = (CHAR_UUID, bluetooth.FLAG_WRITE)
+    service = (SERVICE_UUID, (WIFI_CHAR,))
+    handles = ble.gatts_register_services((service,))
+    wifi_handle = handles[0][1][0]
+
+    def on_write(attr_handle, _data):
+        if attr_handle != wifi_handle:
+            return
         try:
-            now = time.ticks_ms()
-            if time.ticks_diff(now, last_telemetry) >= telemetry_interval:
-                last_telemetry = now
+            txt = ble.gatts_read(wifi_handle).decode().strip()
+            ssid = ""
+            pwd = ""
+            if "\n" in txt:
+                parts = txt.split("\n", 1)
+                ssid, pwd = parts[0], parts[1] if len(parts) > 1 else ""
+            else:
+                try:
+                    payload = json.loads(txt)
+                    ssid = payload.get("ssid") or ""
+                    pwd = payload.get("password") or ""
+                except Exception:
+                    pass
+            if ssid:
                 cfg = load_config()
-                host = cfg.get('host')
-                if host:
-                    imu = read_imu()
-                    payload = {'type': 'telemetry', 'uptime_ms': now, 'imu': imu}
-                    try:
-                        s.sendto(json.dumps(payload).encode('utf-8'), (host.get('ip'), int(host.get('port', UDP_PORT))))
-                    except Exception:
-                        pass
+                cfg["wifi"] = {"ssid": ssid, "password": pwd}
+                save_config(cfg)
         except Exception:
             pass
 
+    ble.gatts_set_buffer(wifi_handle, 128, True)
+    ble.irq(lambda e, d: on_write(d[1], None) if e == 1 else None)
+    adv_name = BLE_NAME or DEVICE_NAME
+    ble.gap_advertise(100000, adv_data=_adv_payload(adv_name))
+    return ble
 
-if __name__ == '__main__':
-    udp_server()
+
+async def main():
+    await wifi_connect()
+    asyncio.create_task(udp_server())
+    asyncio.create_task(telemetry_task())
+    asyncio.create_task(imu_task())
+    asyncio.create_task(ws_task())
+    asyncio.create_task(http_server())
+    ble_setup()
+    while True:
+        await asyncio.sleep_ms(1000)
+
+
+try:
+    asyncio.run(main())
+finally:
+    asyncio.new_event_loop()

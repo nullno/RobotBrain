@@ -14,6 +14,7 @@ from widgets.debug_panel import DebugPanel
 from widgets.servo_status import ServoStatus
 from widgets.runtime_status import RuntimeStatusPanel, RuntimeStatusLogger
 from app import esp32_runtime as usb_runtime
+from services.control_bridge import ControlBridge
 from app import device_runtime
 from app import bootstrap_runtime
 from app import ai_runtime
@@ -121,6 +122,13 @@ class RobotDashboardApp(App):
             Clock.schedule_once(lambda dt: self.update_android_flags(), 0)
             Clock.schedule_once(lambda dt: self._handle_android_usb_attach_intent("resume"), 0.1)
 
+    def on_stop(self):
+        try:
+            if getattr(self, "control_bridge", None):
+                self.control_bridge.stop()
+        except Exception:
+            pass
+
     @run_on_ui_thread
     def update_android_flags(self):
         android_ui_runtime.update_android_flags(self)
@@ -144,6 +152,13 @@ class RobotDashboardApp(App):
         bootstrap_runtime.init_runtime_loops(self)
         bootstrap_runtime.init_runtime_status_panel(self)
         bootstrap_runtime.start_permission_and_otg_watchers(self)
+
+        try:
+            self.control_bridge = ControlBridge()
+            self.control_bridge.start()
+        except Exception as e:
+            logging.warning("ControlBridge init failed: %s", e)
+            self.control_bridge = None
 
         return self.root_widget
 
@@ -179,6 +194,13 @@ class RobotDashboardApp(App):
         ui_runtime.safe_refresh_ui(self, dt=dt)
 
     def _get_gyro_data(self):
+        try:
+            bridge = getattr(self, "control_bridge", None)
+            if bridge:
+                p, r, y = bridge.get_latest_imu()
+                return p, r, y
+        except Exception:
+            pass
         # 优先使用已建立的 IMUReader/telemetry 数据，再回退到本机传感器
         try:
             imu = getattr(self, "imu_reader", None)

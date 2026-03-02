@@ -145,7 +145,6 @@ def emergency_torque_release(owner):
         if RuntimeStatusLogger:
             RuntimeStatusLogger.log_error(f"释放扭矩失败: {e}")
 
-
 def render_status_cards(owner, cards):
     grid = getattr(owner, "_status_grid", None)
     if grid is None:
@@ -228,6 +227,21 @@ def refresh_servo_status(owner):
         suspend_until = float(getattr(owner, "_status_poll_suspended_until", 0.0) or 0.0)
     except Exception:
         suspend_until = 0.0
+
+    app = App.get_running_app()
+
+    try:
+        bridge = getattr(app, "control_bridge", None)
+        if bridge:
+            cards = list(bridge.get_servo_cards() or [])
+            if cards:
+                owner._status_cards_cache = cards
+                owner._status_cards_cache_time = time.time()
+                Clock.schedule_once(lambda dt, c=cards: render_status_cards(owner, c), 0)
+                if time.time() < suspend_until:
+                    return
+    except Exception:
+        pass
     if time.time() < suspend_until:
         # 轮询暂停期间若有缓存则继续显示缓存，避免看起来“没有内容”
         try:
