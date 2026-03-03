@@ -4,22 +4,22 @@ import logging
 import os
 import sys
 import threading
+from datetime import datetime
 
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.metrics import dp
 from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.button import Button
-from kivy.uix.label import Label
 from kivy.uix.popup import Popup
 from kivy.uix.textinput import TextInput
+from kivy.uix.label import Label
 from kivy.graphics import Color, RoundedRectangle, Line
 
-from services import esp32_discovery, comm_config
-from app import esp32_runtime
+from services import comm_config
+from app import esp32_runtime, theme
+from widgets.debug_ui_components import TechButton
 
 logger = logging.getLogger(__name__)
-
 
 # Windows 需要明确后端与事件循环策略，避免 bleak 报错
 if sys.platform == "win32":
@@ -28,7 +28,7 @@ if sys.platform == "win32":
 
 try:
     from bleak import BleakScanner, BleakClient
-except Exception:  # bleak 可能未安装，延迟导入失败时只允许 LAN 扫描
+except Exception:
     BleakScanner = None
     BleakClient = None
 
@@ -41,71 +41,144 @@ MAX_PACKET_SIZE = 96
 
 
 class Esp32SetupPopup(BoxLayout):
-    """配网弹窗：蓝牙优先检查 Wi-Fi，已联网则自动关闭，否则下发配网。"""
 
     def __init__(self, **kwargs):
         super().__init__(orientation="vertical", spacing=dp(10), padding=dp(12), **kwargs)
+
         self.popup = None
-        self.status_lbl = Label(text="等待操作", size_hint_y=None, height=dp(24), color=(0.85, 0.9, 0.98, 1))
+        self._device_address = None
+        self._sending = False
+        self._ble_running = False
+
+        # 标题
+        header = Label(
+            text="机器人配网",
+            size_hint_y=None,
+            height=dp(28),
+            color=(0.9, 0.95, 1, 1),
+            font_name=theme.FONT,
+        )
+
+        # 状态栏
+        self.status_lbl = Label(
+            text="等待操作",
+            size_hint_y=None,
+            height=dp(24),
+            color=(0.85, 0.9, 0.98, 1),
+            font_name=theme.FONT,
+        )
+
+        # SSID 输入框
+        self.ssid_inp = TextInput(
+            hint_text="Wi-Fi SSID",
+            multiline=False,
+            size_hint_y=None,
+            height=dp(44),
+            font_name=theme.FONT,
+            readonly=False,
+            background_normal="",
+            background_active="",
+            background_color=(0.08, 0.1, 0.13, 1),
+            foreground_color=(1, 1, 1, 1),
+            hint_text_color=(0.7, 0.8, 0.9, 1),
+            padding=(dp(12), dp(10)),
+            cursor_color=(1, 1, 1, 1),
+        )
+
+        # 密码输入框
+        self.pwd_inp = TextInput(
+            hint_text="Wi-Fi 密码",
+            multiline=False,
+            password=True,
+            size_hint_y=None,
+            height=dp(44),
+            font_name=theme.FONT,
+            readonly=False,
+            background_normal="",
+            background_active="",
+            background_color=(0.08, 0.1, 0.13, 1),
+            foreground_color=(1, 1, 1, 1),
+            hint_text_color=(0.7, 0.8, 0.9, 1),
+            padding=(dp(12), dp(10)),
+            cursor_color=(1, 1, 1, 1),
+        )
+
+        # 日志框
         self.log_lbl = TextInput(
             text="",
-            size_hint_y=None,
-            height=dp(160),
             readonly=True,
-            background_color=(0.09, 0.1, 0.12, 0.9),
-            foreground_color=(0.8, 0.86, 0.95, 1),
+            size_hint_y=None,
+            height=dp(140),
+            font_name=theme.FONT,
+            background_normal="",
+            background_active="",
+            background_color=(0.07, 0.08, 0.1, 1),
+            foreground_color=(1, 1, 1, 1),
+            padding=(dp(12), dp(10)),
             cursor_width=0,
         )
-        self.ssid_inp = TextInput(hint_text="Wi-Fi SSID", multiline=False)
-        self.pwd_inp = TextInput(hint_text="Wi-Fi 密码", multiline=False, password=True)
+
         self._load_comm_config()
 
+        # 表单
         form = BoxLayout(orientation="vertical", spacing=dp(6))
         form.add_widget(self.ssid_inp)
         form.add_widget(self.pwd_inp)
 
-        btn_row = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
-        self.ble_btn = Button(text="蓝牙扫描+配网")
-        self.scan_btn = Button(text="仅局域网扫描")
-        btn_row.add_widget(self.ble_btn)
-        btn_row.add_widget(self.scan_btn)
+        # 发送按钮
+        self.send_btn = TechButton(
+            text="发送 Wi-Fi 配置",
+            size_hint_y=None,
+            height=dp(42),
+            disabled=False,
+            font_name=theme.FONT,
+        )
 
-        self.close_btn = Button(text="关闭（已连接自动）", size_hint_y=None, height=dp(42), disabled=True)
-
-        header = Label(text="ESP32 联网向导", size_hint_y=None, height=dp(26), color=(0.9, 0.95, 1, 1))
-        sub = Label(text="先蓝牙检测联网状态，已联网直接关闭", size_hint_y=None, height=dp(20), color=(0.7, 0.8, 0.9, 1))
-
+        # 添加组件
         self.add_widget(header)
-        self.add_widget(sub)
         self.add_widget(form)
         self.add_widget(self.status_lbl)
+        self.add_widget(self.send_btn)
         self.add_widget(self.log_lbl)
-        self.add_widget(btn_row)
-        self.add_widget(self.close_btn)
 
+        # 弹窗背景
         with self.canvas.before:
             Color(0.12, 0.15, 0.18, 0.95)
             self._bg_rect = RoundedRectangle(radius=[12])
-        with self.canvas.after:
-            Color(0.2, 0.7, 0.95, 0.08)
-            self._glow_rect = RoundedRectangle(radius=[14])
-            Color(0.2, 0.7, 0.95, 0.6)
-            self._border_line = Line(rounded_rectangle=(0, 0, 100, 100, 12), width=2)
 
-        def _update_rect(*_):
+        def update_bg(*_):
             self._bg_rect.pos = self.pos
             self._bg_rect.size = self.size
-            self._glow_rect.pos = (self.x - 6, self.y - 6)
-            self._glow_rect.size = (self.width + 12, self.height + 12)
-            self._border_line.rounded_rectangle = (self.x, self.y, self.width, self.height, 12)
 
-        self.bind(pos=_update_rect, size=_update_rect)
+        self.bind(pos=update_bg, size=update_bg)
 
-        self.scan_btn.bind(on_release=lambda *_: self._start_lan_scan())
-        self.ble_btn.bind(on_release=lambda *_: self._start_ble_flow())
-        self.close_btn.bind(on_release=lambda *_: self._try_close())
+        # 给输入框添加科技风边框
+        self._add_border(self.ssid_inp)
+        self._add_border(self.pwd_inp)
+        self._add_border(self.log_lbl, radius=10)
 
-    # ------------------ 公共接口 ------------------
+        self.send_btn.bind(on_release=lambda *_: self._on_send_clicked())
+
+    # ---------------- UI 美化 ----------------
+
+    def _add_border(self, widget, radius=12):
+        with widget.canvas.after:
+            Color(0.2, 0.7, 0.95, 0.5)
+            widget._border = Line(rounded_rectangle=(0, 0, 100, 100, radius), width=1.4)
+
+        def update(*_):
+            widget._border.rounded_rectangle = (
+                widget.x,
+                widget.y,
+                widget.width,
+                widget.height,
+                radius,
+            )
+
+        widget.bind(pos=update, size=update)
+
+    # ---------------- 公共接口 ----------------
+
     def open_popup(self):
         if self.popup is None:
             self.popup = Popup(
@@ -115,237 +188,122 @@ class Esp32SetupPopup(BoxLayout):
                 size=(dp(640), dp(440)),
                 separator_height=0,
                 background="",
+                background_color=(0, 0, 0, 0),
                 auto_dismiss=False,
             )
-        self._update_close_state()
         self.popup.open()
-        # 默认先跑一次蓝牙流程；如未安装 bleak 则退化为 LAN 扫描
-        if BleakScanner and BleakClient:
-            self._start_ble_flow()
-        else:
-            self._append_log("未检测到 bleak，执行局域网扫描。")
-            self._start_lan_scan()
+        self._start_ble_sequence()
 
-    def _try_close(self):
-        if self._is_connected():
-            self.popup.dismiss()
-        else:
-            self._append_log("未连接，不能关闭弹窗")
+    # ---------------- BLE ----------------
 
-    # ------------------ 逻辑 ------------------
-    def _is_connected(self):
+    def _start_ble_sequence(self):
+        if not BleakScanner or not BleakClient:
+            self._append_log("未安装 bleak，无法蓝牙配网")
+            return
+        if self._ble_running:
+            return
+
+        self._ble_running = True
+        self._append_log("扫描蓝牙设备...")
+        threading.Thread(target=self._ble_thread, daemon=True).start()
+
+    def _ble_thread(self):
+        try:
+            asyncio.run(self._ble_sequence())
+        except Exception as e:
+            self._append_log(f"BLE异常: {e!r}")
+        finally:
+            self._ble_running = False
+
+    async def _ble_sequence(self):
+        devices = await BleakScanner.discover(timeout=6)
+        target = None
+        for d in devices:
+            if TARGET_NAME.lower() in (d.name or "").lower():
+                target = d
+                break
+
+        if not target:
+            self._append_log("未找到目标设备")
+            return
+
+        self._append_log("发现设备，准备连接...")
+        self._device_address = target.address
+
+    # ---------------- 配网 ----------------
+
+    def _on_send_clicked(self):
+        if self._sending:
+            return
+
+        ssid = (self.ssid_inp.text or "").strip()
+        pwd = self.pwd_inp.text or ""
+        if not ssid:
+            self._append_log("请输入 Wi-Fi SSID")
+            return
+
+        self._sending = True
+        self._set_form_enabled(False)
+        self._append_log("发送 Wi-Fi 配置中...")
+        threading.Thread(target=self._provision_and_discover, args=(ssid, pwd), daemon=True).start()
+
+    def _provision_and_discover(self, ssid: str, password: str):
+        try:
+            comm_config.save_comm_config({"ssid": ssid, "password": password}, App.get_running_app())
+        except Exception:
+            pass
+
+        host = None
+        port = None
+        try:
+            host, port = comm_config.auto_provision_and_discover(App.get_running_app(), preferred_port=5005)
+            if host:
+                self._append_log(f"已发现 ESP32: {host}:{port or 5005}")
+                try:
+                    esp32_runtime.manual_bind_host(App.get_running_app(), host, port or 5005)
+                except Exception:
+                    pass
+                self._notify_provision_success(host, port or 5005)
+                self._append_log("配网成功")
+            else:
+                self._append_log("未发现设备，请重试")
+        except Exception as e:
+            self._append_log(f"配网失败: {e}")
+        finally:
+            self._sending = False
+            Clock.schedule_once(lambda dt: self._set_form_enabled(True), 0)
+
+    def _notify_provision_success(self, host: str, port: int):
         try:
             app = App.get_running_app()
-            sb = getattr(app, "servo_bus", None)
-            return sb is not None and not getattr(sb, "is_mock", True)
+            if app and hasattr(app, "on_esp32_provisioned"):
+                Clock.schedule_once(lambda dt: app.on_esp32_provisioned(host, port), 0)
         except Exception:
-            return False
+            pass
 
-    def _update_close_state(self):
-        self.close_btn.disabled = not self._is_connected()
+    # ---------------- 辅助 ----------------
 
     def _load_comm_config(self):
         cfg = comm_config.load_comm_config(App.get_running_app()) or {}
         self.ssid_inp.text = str(cfg.get("ssid", ""))
         self.pwd_inp.text = str(cfg.get("password", ""))
 
-    def _save_comm_config(self):
-        data = {
-            "ssid": self.ssid_inp.text.strip(),
-            "password": self.pwd_inp.text,
-            "udp_port": 5005,
-        }
-        comm_config.save_comm_config(data, App.get_running_app())
+    def _set_form_enabled(self, enabled):
+        self.ssid_inp.readonly = not enabled
+        self.pwd_inp.readonly = not enabled
+        self.send_btn.disabled = not enabled
 
-    # ------------------ LAN 扫描 ------------------
-    def _start_lan_scan(self):
-        self._set_buttons_disabled(True)
-        self._append_log("开始局域网扫描...")
-        threading.Thread(target=self._lan_scan_worker, daemon=True).start()
+    def _append_log(self, msg):
+        ts = datetime.now().strftime("%H:%M:%S")
+        line = f"[{ts}] {msg}"
 
-    def _lan_scan_worker(self):
-        try:
-            devices = esp32_discovery.discover(timeout=1.5)
-            self._append_log(f"发现 {len(devices)} 台设备: {devices}")
-            if devices:
-                host = devices[0][0]
-                self._bind_host(host, 5005)
-            else:
-                self._append_log("未发现设备，请确认设备通电且同网段")
-        finally:
-            Clock.schedule_once(lambda dt: self._set_buttons_disabled(False), 0)
-
-    # ------------------ BLE 配网流程 ------------------
-    def _start_ble_flow(self):
-        if not BleakScanner or not BleakClient:
-            self._append_log("未安装 bleak，无法执行蓝牙配网")
-            return
-        self._save_comm_config()
-        self._set_buttons_disabled(True)
-        self._append_log("蓝牙扫描中...")
-        threading.Thread(target=self._ble_flow_thread, daemon=True).start()
-
-    def _ble_flow_thread(self):
-        try:
-            asyncio.run(self._ble_flow())
-        except Exception as e:
-            self._append_log(f"BLE 流程异常: {e!r}")
-        finally:
-            Clock.schedule_once(lambda dt: self._set_buttons_disabled(False), 0)
-
-    async def _ble_flow(self):
-        device = await self._discover_ble_target()
-        if not device:
-            self._append_log("未找到目标蓝牙设备")
-            return
-
-        self._append_log(f"发现设备 {device.address}，尝试连接")
-
-        async with BleakClient(device.address, timeout=20.0) as client:
-            self._append_log("蓝牙已连接，检查联网状态...")
-
-            state = await self._read_status(client)
-            if state.get("wifi_ok"):
-                ip = state.get("ip") or state.get("addr")
-                self._append_log(f"设备已联网 ip={ip or '<unknown>'}，直接绑定")
-                if ip:
-                    self._bind_host(ip, 5005)
-                    Clock.schedule_once(lambda dt: self._auto_close_if_connected(), 0.2)
-                return
-
-            self._append_log("设备未联网，开始发送 Wi-Fi 配置")
-            ok = await self._send_wifi_config(client)
-            if not ok:
-                self._append_log("配网写入失败")
-                return
-
-            await asyncio.sleep(1.0)
-            state = await self._read_status(client)
-            ip = state.get("ip") if state else None
-            wifi_ok = state.get("wifi_ok") if state else False
-            self._append_log(f"配网完成 wifi_ok={wifi_ok} ip={ip}")
-            if wifi_ok and ip:
-                self._bind_host(ip, 5005)
-                Clock.schedule_once(lambda dt: self._auto_close_if_connected(), 0.4)
-            else:
-                self._append_log("未拿到 IP，请稍后在局域网扫描重试")
-
-    async def _discover_ble_target(self):
-        try:
-            devices = await BleakScanner.discover(timeout=6)
-            for d in devices:
-                if TARGET_NAME.lower() in (d.name or "").lower():
-                    return d
-        except Exception as e:
-            self._append_log(f"扫描失败: {e!r}")
-        return None
-
-    async def _read_status(self, client):
-        try:
-            services = await self._ensure_services(client)
-            status_char = None
-            for svc in services:
-                if svc.uuid.lower() == SERVICE_UUID.lower():
-                    for c in svc.characteristics:
-                        if c.uuid.lower() == STATUS_CHAR_UUID.lower():
-                            status_char = c
-                            break
-                if status_char:
-                    break
-            if status_char:
-                raw = await client.read_gatt_char(status_char)
-                return json.loads(raw.decode() or "{}") if raw else {}
-        except Exception as e:
-            self._append_log(f"读取状态失败: {e!r}")
-        return {}
-
-    async def _send_wifi_config(self, client):
-        ssid = self.ssid_inp.text.strip()
-        pwd = self.pwd_inp.text
-        if not ssid or not pwd:
-            self._append_log("请输入 Wi-Fi SSID 与密码")
-            return False
-
-        services = await self._ensure_services(client)
-        wifi_char = None
-        status_char = None
-        for svc in services:
-            if svc.uuid.lower() == SERVICE_UUID.lower():
-                for c in svc.characteristics:
-                    if c.uuid.lower() == CHAR_UUID.lower():
-                        wifi_char = c
-                    if c.uuid.lower() == STATUS_CHAR_UUID.lower():
-                        status_char = c
-
-        if not wifi_char:
-            self._append_log("未找到配网特征值")
-            return False
-
-        data = json.dumps({"ssid": ssid, "password": pwd}).encode()
-        self._append_log(f"发送配网数据 {len(data)} 字节")
-
-        offset = 0
-        while offset < len(data):
-            chunk = data[offset : offset + MAX_PACKET_SIZE]
-            await client.write_gatt_char(wifi_char, chunk, response=False)
-            offset += MAX_PACKET_SIZE
-            await asyncio.sleep(0.05)
-
-        if status_char:
-            try:
-                await asyncio.sleep(1.0)
-                raw = await client.read_gatt_char(status_char)
-                state = json.loads(raw.decode() or "{}") if raw else {}
-                self._append_log(f"写入后状态 wifi_ok={state.get('wifi_ok')} ip={state.get('ip')}")
-            except Exception as e:
-                self._append_log(f"写后状态读取失败: {e!r}")
-        return True
-
-    async def _ensure_services(self, client):
-        if hasattr(client, "get_services"):
-            for attempt in range(3):
-                try:
-                    maybe_coro = client.get_services()
-                    if asyncio.iscoroutine(maybe_coro):
-                        await maybe_coro
-                    return list(client.services or [])
-                except Exception as e:
-                    self._append_log(f"服务发现重试 {attempt+1}/3: {e!r}")
-                    await asyncio.sleep(1.0)
-        return list(client.services or [])
-
-    # ------------------ 辅助 ------------------
-    def _bind_host(self, host, port=None):
-        ok = esp32_runtime.manual_bind_host(App.get_running_app(), host, port)
-        if ok:
-            self._append_log(f"已连接 {host}:{port or 5005}")
-            Clock.schedule_once(lambda dt: self._update_close_state(), 0)
-        else:
-            self._append_log(f"发现 {host} 但连接失败")
-
-    def _set_buttons_disabled(self, disabled):
-        self.scan_btn.disabled = disabled
-        self.ble_btn.disabled = disabled
-
-    def _auto_close_if_connected(self):
-        self._update_close_state()
-        if self.popup and self._is_connected():
-            self._append_log("检测到已连接，自动关闭弹窗")
-            try:
-                self.popup.dismiss()
-            except Exception:
-                pass
-
-    def _append_log(self, msg: str):
-        logger.info(msg)
-
-        def _upd(_dt):
+        def update(_dt):
             prev = self.log_lbl.text or ""
-            lines = (prev + "\n" + msg).strip().split("\n")
+            lines = (prev + "\n" + line).strip().split("\n")
             self.log_lbl.text = "\n".join(lines[-10:])
             self.status_lbl.text = msg
 
-        Clock.schedule_once(_upd, 0)
+        Clock.schedule_once(update, 0)
 
 
 __all__ = ["Esp32SetupPopup"]

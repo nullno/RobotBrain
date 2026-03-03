@@ -2,6 +2,10 @@ from kivy.app import App
 from kivy.lang import Builder
 from kivy.clock import Clock
 from kivy.utils import platform
+from kivy.uix.floatlayout import FloatLayout
+from kivy.uix.label import Label
+from kivy.metrics import dp
+from kivy.graphics import Color, Rectangle
 import math
 import time
 import json
@@ -15,6 +19,7 @@ from widgets.servo_status import ServoStatus
 from widgets.runtime_status import RuntimeStatusPanel, RuntimeStatusLogger
 from widgets.esp32_setup import Esp32SetupPopup
 from widgets.esp32_indicator import Esp32Indicator
+from widgets.debug_ui_components import TechButton
 from app import esp32_runtime as usb_runtime
 from services.control_bridge import ControlBridge
 from services.esp32_link import Esp32Link
@@ -184,6 +189,10 @@ class RobotDashboardApp(App):
         except Exception:
             pass
 
+        # 启动 ESP32 配网门禁：未联网前遮罩主界面
+        self._setup_esp32_gate()
+        Clock.schedule_once(lambda dt: self._poll_esp32_gate(), 0)
+
         return self.root_widget
 
     # ================== USB / 串口代理 ==================
@@ -267,6 +276,148 @@ class RobotDashboardApp(App):
                 self._esp32_setup_popup.open_popup()
             except Exception as e:
                 logging.warning("打开 ESP32 弹窗失败: %s", e)
+
+    def _is_esp32_ready(self):
+        try:
+            sb = getattr(self, "servo_bus", None)
+            if sb and not getattr(sb, "is_mock", True):
+                return True
+        except Exception:
+            pass
+        try:
+            link = getattr(self, "esp32_link", None)
+            if link:
+                state = link.get_ui_state()
+                if state.get("connected"):
+                    return True
+        except Exception:
+            pass
+        return False
+
+    def _update_gate_bg(self, overlay):
+        try:
+            if hasattr(overlay, "_bg_rect"):
+                overlay._bg_rect.pos = overlay.pos
+                overlay._bg_rect.size = overlay.size
+        except Exception:
+            pass
+
+    def _setup_esp32_gate(self):
+        if getattr(self, "_esp32_gate", None) or self._is_esp32_ready():
+            return
+        try:
+            gate = FloatLayout(size_hint=(1, 1))
+            with gate.canvas.before:
+                Color(0, 0, 0, 0.86)
+                gate._bg_rect = Rectangle(pos=gate.pos, size=gate.size)
+            gate.bind(pos=lambda *_: self._update_gate_bg(gate), size=lambda *_: self._update_gate_bg(gate))
+
+            status_lbl = Label(
+                text="等待 ESP32 连接 Wi-Fi",
+                font_size="18sp",
+                color=(0.9, 0.95, 1, 1),
+                font_name=getattr(self, "theme_font", None) or None,
+                size_hint=(None, None),
+                halign="center",
+                valign="middle",
+                width=dp(520),
+                height=dp(60),
+                pos_hint={"center_x": 0.5, "center_y": 0.6},
+            )
+            status_lbl.bind(size=status_lbl.setter("text_size"))
+
+            tip_lbl = Label(
+                text="请先完成 ESP32 配网，完成后自动进入主界面",
+                font_size="14sp",
+                color=(0.75, 0.82, 0.92, 1),
+                font_name=getattr(self, "theme_font", None) or None,
+                size_hint=(None, None),
+                width=dp(520),
+                height=dp(40),
+                pos_hint={"center_x": 0.5, "center_y": 0.5},
+                halign="center",
+                valign="middle",
+            )
+            tip_lbl.bind(size=tip_lbl.setter("text_size"))
+
+            action_btn = TechButton(
+                text="蓝牙配网",
+                size_hint=(None, None),
+                width=dp(150),
+                height=dp(44),
+                pos_hint={"center_x": 0.5, "center_y": 0.4},
+            )
+            action_btn.bind(on_release=self._open_esp32_setup)
+
+            gate.add_widget(status_lbl)
+            gate.add_widget(tip_lbl)
+            gate.add_widget(action_btn)
+
+            if hasattr(self, "root_widget") and self.root_widget:
+                self.root_widget.add_widget(gate)
+            self._esp32_gate = gate
+            self._esp32_gate_status = status_lbl
+            self._esp32_gate_tip = tip_lbl
+
+            Clock.schedule_interval(self._poll_esp32_gate, 1.0)
+        except Exception:
+            pass
+
+    def _open_esp32_setup(self, *_):
+        try:
+            if getattr(self, "_esp32_setup_popup", None):
+                self._esp32_setup_popup.open_popup()
+        except Exception:
+            pass
+
+    def _poll_esp32_gate(self, dt=0):
+        try:
+            if self._is_esp32_ready():
+                self._enter_main_ui()
+                return False
+            self._update_gate_status()
+        except Exception:
+            pass
+        return True
+
+    def _update_gate_status(self):
+        try:
+            status = "等待 ESP32 连接 Wi-Fi"
+            link = getattr(self, "esp32_link", None)
+            if link:
+                st = link.get_ui_state()
+                host = st.get("host") or ""
+                ssid = st.get("ssid") or ""
+                if host:
+                    status = f"等待 ESP32 在线 ({host})"
+                if ssid:
+                    status += f" · {ssid}"
+            if getattr(self, "_esp32_gate_status", None):
+                self._esp32_gate_status.text = status
+        except Exception:
+            pass
+
+    def _enter_main_ui(self):
+        try:
+            gate = getattr(self, "_esp32_gate", None)
+            if gate and gate.parent:
+                gate.parent.remove_widget(gate)
+            self._esp32_gate = None
+            try:
+                RuntimeStatusLogger.log_info("ESP32 已在线，进入主界面")
+            except Exception:
+                pass
+        except Exception:
+            pass
+        return False
+
+    def on_esp32_provisioned(self, host=None, port=None):
+        try:
+            if host:
+                usb_runtime.manual_bind_host(self, host, port or 5005)
+        except Exception:
+            pass
+        Clock.schedule_once(lambda dt: self._poll_esp32_gate(), 0)
 
     def _refresh_link_indicator(self, dt=0):
         try:
