@@ -138,3 +138,6 @@ mpremote connect serial:/dev/ttyUSB0 exec "import machine; machine.reset()"
 
 颈部2个【左右头部转动、上下抬头】
 ```
+
+1.可以扫描到esp32的蓝牙，但是用蓝牙发送配网wifi配置时提示Provision failed: TimeoutError()，结合固件程序a_Firmware/esp32 帮我修复；期望成功给esp32配网；
+2.完善这个单元测试程序，连接蓝牙后判断esp32设备是否已经联网，如果已经联网就提示用户，不用再发送wifi配置步骤了；有必要可以a_Firmware/esp32/main.py 程序里新增判断wifi连接逻辑

@@ -50,6 +50,7 @@ IMU_ADDR = 0x68
 SERVO_MIN = 0
 SERVO_MAX = 1000
 TELEMETRY_MS = 400
+BLE_WIFI_STATUS_UUID = "0000ffac-0000-1000-8000-00805f9b34fb"
 
 try:
     uart = UART(UART_ID, baudrate=UART_BAUD, tx=UART_TX_PIN, rx=UART_RX_PIN, timeout=0)
@@ -69,6 +70,10 @@ state = {
     "imu": {"pitch": 0.0, "roll": 0.0, "yaw": 0.0, "accel": (0, 0, 0), "gyro": (0, 0, 0)},
     "servos": {},
 }
+
+_last_wifi_state = {"wifi_ok": False, "ip": None, "ap_mode": False}
+_ble_status_ctx = {"ble": None, "status_handle": None}
+_ble_adv_ctx = {"adv_data": None, "resp_data": None, "interval_us": 100000, "name": None}
 
 
 def log(msg):
@@ -107,6 +112,22 @@ def _adv_payload(name: str, services=None):
     return bytes(adv)
 
 
+def _restart_ble_advertising(reason="resume"):
+    """Restart BLE advertising; useful after disconnect because MicroPython stops advertising on connect."""
+    ble = _ble_status_ctx.get("ble")
+    adv = _ble_adv_ctx.get("adv_data")
+    resp = _ble_adv_ctx.get("resp_data")
+    interval = _ble_adv_ctx.get("interval_us", 100000)
+    name = _ble_adv_ctx.get("name") or "?"
+    if not ble or adv is None:
+        return
+    try:
+        ble.gap_advertise(interval, adv_data=adv, resp_data=resp)
+        log("ble: 广播已重启 name={} reason={}".format(name, reason))
+    except Exception as e:
+        log("ble: 广播重启失败 {}".format(e))
+
+
 def load_config():
     try:
         if os and CONFIG_PATH in os.listdir("/"):
@@ -134,6 +155,27 @@ def clamp(val, lo, hi):
     if val > hi:
         return hi
     return val
+
+
+def update_ble_wifi_status(info=None):
+    """将最新 Wi-Fi 状态写入 BLE 特征，便于手机侧读取。"""
+    global _last_wifi_state
+    if info:
+        _last_wifi_state.update(info)
+    ble = _ble_status_ctx.get("ble")
+    handle = _ble_status_ctx.get("status_handle")
+    if not ble or handle is None:
+        return
+    try:
+        payload = {
+            "wifi_ok": bool(_last_wifi_state.get("wifi_ok")),
+            "ip": _last_wifi_state.get("ip"),
+            "ap_mode": bool(_last_wifi_state.get("ap_mode")),
+        }
+        raw = json.dumps(payload)[:200]
+        ble.gatts_write(handle, raw.encode())
+    except Exception:
+        pass
 
 
 def checksum(servo_id, data_size, cmd_type, param_bytes):
@@ -204,9 +246,16 @@ def read_mpu6050():
 async def wifi_connect():
     if network is None:
         log("wifi: 无法加载 network 模块")
-        return
+        update_ble_wifi_status({"wifi_ok": False, "ip": None, "ap_mode": False})
+        return {"wifi_ok": False, "ip": None, "ap_mode": False}
     log("wifi: 初始化 STA 模式")
     cfg = load_config()
+    try:
+        # 禁用 AP，避免影响路由器连接
+        ap = network.WLAN(network.AP_IF)
+        ap.active(False)
+    except Exception:
+        pass
     sta = network.WLAN(network.STA_IF)
     if not sta.active():
         sta.active(True)
@@ -220,13 +269,10 @@ async def wifi_connect():
                     break
                 await asyncio.sleep_ms(250)
         except Exception as e:
-            log("wifi: 连接异常，转为 AP 模式 err={}".format(e))
+            log("wifi: 连接异常 err={}".format(e))
     if not sta.isconnected():
-        log("wifi: STA 连接失败，开启 AP 模式")
-        ap = network.WLAN(network.AP_IF)
-        ap.active(True)
-        ap.config(essid=cfg.get("device_name", DEVICE_NAME))
-        log("wifi: AP 已启动 ssid={}".format(cfg.get("device_name", DEVICE_NAME)))
+        log("wifi: STA 连接失败，不开启 AP")
+        state = {"wifi_ok": False, "ip": None, "ap_mode": False}
     else:
         try:
             ip = sta.ifconfig()[0]
@@ -237,6 +283,9 @@ async def wifi_connect():
         except Exception:
             mac = "n/a"
         log("wifi: STA 已连接 ip={} mac={}".format(ip, mac))
+        state = {"wifi_ok": True, "ip": ip, "ap_mode": False}
+    update_ble_wifi_status(state)
+    return state
 
 
 async def http_server():
@@ -421,23 +470,28 @@ def ble_setup():
     cfg = load_config()
 
     SERVICE_UUID = bluetooth.UUID("0000ffaa-0000-1000-8000-00805f9b34fb")
-    CHAR_UUID = bluetooth.UUID("0000ffab-0000-1000-8000-00805f9b34fb")
-    WIFI_CHAR = (CHAR_UUID, bluetooth.FLAG_WRITE)
-    service = (SERVICE_UUID, (WIFI_CHAR,))
+    WIFI_CHAR_UUID = bluetooth.UUID("0000ffab-0000-1000-8000-00805f9b34fb")
+    STATUS_CHAR_UUID = bluetooth.UUID(BLE_WIFI_STATUS_UUID)
+    WIFI_CHAR = (WIFI_CHAR_UUID, bluetooth.FLAG_WRITE | bluetooth.FLAG_WRITE_NO_RESPONSE)
+    STATUS_CHAR = (STATUS_CHAR_UUID, bluetooth.FLAG_READ)
+    service = (SERVICE_UUID, (WIFI_CHAR, STATUS_CHAR))
     try:
         handles = ble.gatts_register_services((service,))
         if not handles:
             log("ble: 注册服务失败（返回为空）")
             return None
         svc = handles[0]
-        # MicroPython 返回的 svc 为特征句柄列表，单特征时取第 1 个元素
-        if len(svc) < 1:
+        # MicroPython 返回的 svc 为特征句柄列表，与定义顺序一致
+        if len(svc) < 2:
             log("ble: 特征句柄缺失")
             return None
-        wifi_handle = svc[0]
+        wifi_handle, status_handle = svc[0], svc[1]
     except Exception as e:
         log("ble: 注册服务异常 {}".format(e))
         return None
+
+    _ble_status_ctx["ble"] = ble
+    _ble_status_ctx["status_handle"] = status_handle
 
     def on_write(attr_handle, _data):
         if attr_handle != wifi_handle:
@@ -460,11 +514,33 @@ def ble_setup():
                 cfg = load_config()
                 cfg["wifi"] = {"ssid": ssid, "password": pwd}
                 save_config(cfg)
+                try:
+                    asyncio.create_task(wifi_connect())
+                except Exception:
+                    pass
         except Exception:
             pass
+    ble.gatts_set_buffer(wifi_handle, 256, True)
 
-    ble.gatts_set_buffer(wifi_handle, 128, True)
-    ble.irq(lambda e, d: on_write(d[1], None) if e == 1 else None)
+    IRQ_CENTRAL_CONNECT = getattr(bluetooth, "IRQ_CENTRAL_CONNECT", 1)
+    IRQ_CENTRAL_DISCONNECT = getattr(bluetooth, "IRQ_CENTRAL_DISCONNECT", 2)
+    IRQ_GATTS_WRITE = getattr(bluetooth, "IRQ_GATTS_WRITE", 3)
+
+    def ble_irq(event, data):
+        if event == IRQ_GATTS_WRITE:
+            on_write(data[1], None)
+        elif event == IRQ_CENTRAL_CONNECT:
+            try:
+                addr = data[2] if len(data) > 2 else None
+                addr_txt = ubinascii.hexlify(addr).decode() if ubinascii and addr else "n/a"
+                log("ble: central connected handle={} addr={}".format(data[0], addr_txt))
+            except Exception:
+                log("ble: central connected")
+        elif event == IRQ_CENTRAL_DISCONNECT:
+            log("ble: central disconnected handle={}".format(data[0] if data else "?"))
+            _restart_ble_advertising("central disconnect")
+
+    ble.irq(ble_irq)
     adv_name = cfg.get("ble_name") or BLE_NAME or DEVICE_NAME
     try:
         ble.config(gap_name=adv_name)
@@ -478,24 +554,23 @@ def ble_setup():
     except Exception:
         resp = None
 
-    try:
-        ble.gap_advertise(100000, adv_data=adv, resp_data=resp)
-        log("ble: 开始广播 name={}".format(adv_name))
-    except Exception as e:
-        log("ble: 广播启动失败 {}".format(e))
-        return None
+    _ble_adv_ctx.update({"adv_data": adv, "resp_data": resp, "interval_us": 100000, "name": adv_name})
+    _restart_ble_advertising("init")
+
+    update_ble_wifi_status()
     return ble
 
 
 async def main():
     log("system: 主循环启动")
-    await wifi_connect()
+    wifi_state = await wifi_connect()
     asyncio.create_task(udp_server())
     asyncio.create_task(telemetry_task())
     asyncio.create_task(imu_task())
     asyncio.create_task(ws_task())
     asyncio.create_task(http_server())
     ble_setup()
+    update_ble_wifi_status(wifi_state)
     log("system: 核心服务已启动")
     while True:
         await asyncio.sleep_ms(1000)
