@@ -14,8 +14,10 @@ from widgets.debug_panel import DebugPanel
 from widgets.servo_status import ServoStatus
 from widgets.runtime_status import RuntimeStatusPanel, RuntimeStatusLogger
 from widgets.esp32_setup import Esp32SetupPopup
+from widgets.esp32_indicator import Esp32Indicator
 from app import esp32_runtime as usb_runtime
 from services.control_bridge import ControlBridge
+from services.esp32_link import Esp32Link
 from app import device_runtime
 from app import bootstrap_runtime
 from app import ai_runtime
@@ -130,6 +132,11 @@ class RobotDashboardApp(App):
                 self.control_bridge.stop()
         except Exception:
             pass
+        try:
+            if getattr(self, "esp32_link", None):
+                self.esp32_link.stop()
+        except Exception:
+            pass
 
     @run_on_ui_thread
     def update_android_flags(self):
@@ -162,6 +169,20 @@ class RobotDashboardApp(App):
         except Exception as e:
             logging.warning("ControlBridge init failed: %s", e)
             self.control_bridge = None
+
+        # ESP32 链路状态与调试面板通信服务
+        try:
+            self.esp32_link = Esp32Link(self)
+            self.esp32_link.start()
+        except Exception as e:
+            logging.warning("ESP32 link service init failed: %s", e)
+            self.esp32_link = None
+
+        # 周期刷新右上角链路指示
+        try:
+            Clock.schedule_interval(lambda dt: self._refresh_link_indicator(), 1.0)
+        except Exception:
+            pass
 
         return self.root_widget
 
@@ -246,6 +267,17 @@ class RobotDashboardApp(App):
                 self._esp32_setup_popup.open_popup()
             except Exception as e:
                 logging.warning("打开 ESP32 弹窗失败: %s", e)
+
+    def _refresh_link_indicator(self, dt=0):
+        try:
+            indicator = None
+            if hasattr(self, "root_widget") and getattr(self.root_widget, "ids", None):
+                indicator = self.root_widget.ids.get("esp32_indicator")
+            link = getattr(self, "esp32_link", None)
+            if indicator and link:
+                indicator.update_state(link.get_ui_state())
+        except Exception:
+            pass
 
     # ================== 主循环 ==================
     def _update_loop(self, dt):

@@ -1,4 +1,4 @@
-# test_ble_win_fixed.py
+# 【测试BLE连接的工具，使用Bleak库进行扫描和连接】
 import asyncio
 import os
 import sys
@@ -42,15 +42,18 @@ async def test_connect():
             disconnected_callback=lambda c: print("设备断开连接")
         ) as client:
             print(f"✅ 连接成功!")
-            print(f"   MTU: {client.mtu}")
+            # bleak 不同后端的 MTU 属性名不一致，WinRT 没有 client.mtu
+            mtu_value = getattr(client, "mtu_size", None) or getattr(client, "mtu", None)
+            print(f"   MTU: {mtu_value if mtu_value is not None else '未知/后端未提供'}")
             print(f"   是否已连接: {client.is_connected}")
             
             # 等待服务发现
             await asyncio.sleep(1)
             
             # 打印服务
-            print(f"\n发现 {len(client.services)} 个服务:")
-            for service in client.services:
+            services = list(client.services) if client.services is not None else []
+            print(f"\n发现 {len(services)} 个服务:")
+            for service in services:
                 print(f"\n服务: {service.uuid}")
                 for char in service.characteristics:
                     print(f"  特征: {char.uuid}")

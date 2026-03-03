@@ -98,6 +98,12 @@ def _connect_to_host(app, host, port=None, *, save=True, update_control_bridge=T
             except Exception:
                 pass
             try:
+                link = getattr(app, "esp32_link", None)
+                if link:
+                    link.set_host(host, port or getattr(sb, "_port", 5005))
+            except Exception:
+                pass
+            try:
                 esp32_client.set_host(host, port=port)
             except Exception:
                 pass

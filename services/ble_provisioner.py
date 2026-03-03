@@ -16,7 +16,7 @@ except Exception:  # pragma: no cover - 可选依赖
     BleakClient = None
     BleakScanner = None
 
-DEFAULT_NAME = os.environ.get("ESP32_BLE_NAME", "ROBOT-ROBOT-ESP32-S3-BLE")
+DEFAULT_NAME = os.environ.get("ESP32_BLE_NAME", "ROBOT-ESP32-S3-BLE")
 WIFI_SERVICE_UUID = os.environ.get("ESP32_WIFI_SERVICE_UUID", "0000ffaa-0000-1000-8000-00805f9b34fb")
 WIFI_CHAR_UUID = os.environ.get("ESP32_WIFI_CHAR_UUID", "0000ffab-0000-1000-8000-00805f9b34fb")
 

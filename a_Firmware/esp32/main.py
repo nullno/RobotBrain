@@ -359,6 +359,20 @@ def telemetry_payload():
     }
 
 
+def wifi_status_snapshot():
+    """Read current Wi-Fi state for BLE status updates."""
+    wifi_ip = None
+    wifi_ok = False
+    if network:
+        try:
+            sta = network.WLAN(network.STA_IF)
+            wifi_ok = sta.isconnected()
+            wifi_ip = sta.ifconfig()[0]
+        except Exception:
+            pass
+    return {"wifi_ok": wifi_ok, "ip": wifi_ip, "ap_mode": False}
+
+
 async def udp_server():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -422,6 +436,13 @@ async def telemetry_task():
             except Exception:
                 pass
         await asyncio.sleep_ms(TELEMETRY_MS)
+
+
+async def ble_status_task():
+    """Periodic BLE status refresh to keep wifi_ok accurate."""
+    while True:
+        update_ble_wifi_status(wifi_status_snapshot())
+        await asyncio.sleep_ms(2000)
 
 
 async def imu_task():
@@ -570,6 +591,7 @@ async def main():
     asyncio.create_task(ws_task())
     asyncio.create_task(http_server())
     ble_setup()
+    asyncio.create_task(ble_status_task())
     update_ble_wifi_status(wifi_state)
     log("system: 核心服务已启动")
     while True:

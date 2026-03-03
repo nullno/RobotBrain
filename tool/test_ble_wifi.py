@@ -1,5 +1,8 @@
+# 【测试wifi配网的工具，基于Kivy实现简单的UI界面，使用Bleak进行BLE通信】
 import asyncio
 import json
+import os
+import sys
 import threading
 
 from kivy.app import App
@@ -7,6 +10,11 @@ from kivy.clock import Clock
 from kivy.lang import Builder
 from kivy.properties import StringProperty
 from kivy.uix.boxlayout import BoxLayout
+
+# 在导入 bleak 前设置后端，避免 Windows 下的兼容问题
+if sys.platform == "win32":
+    os.environ.setdefault("BLEAK_BACKEND", "winrt")
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from bleak import BleakScanner, BleakClient
 
@@ -111,6 +119,9 @@ class MainUI(BoxLayout):
                     )
 
                     self.log(f"Target device found: {d.name} {d.address}")
+
+                    # 扫描到设备后自动尝试连接，便于后续直接配网
+                    await self.auto_connect_after_scan()
                     break
 
             if not found:
@@ -118,6 +129,51 @@ class MainUI(BoxLayout):
 
         except Exception as e:
             self.log(f"Scan failed: {repr(e)}")
+
+    async def auto_connect_after_scan(self):
+        if not self.device_address:
+            return
+
+        self.log("Auto-connecting to device...")
+
+        try:
+            async with BleakClient(
+                self.device_address,
+                timeout=20.0,
+                disconnected_callback=lambda c: self.log("Device disconnected")
+            ) as client:
+                self.log("Auto-connect success.")
+
+                services = await self.ensure_services(client) or []
+                self.log(f"Discovered {len(services)} services during auto-connect.")
+
+                # 可选：读取状态特征，帮助用户了解当前设备联网状态
+                status_char = None
+                for svc in services:
+                    if svc.uuid.lower() == SERVICE_UUID.lower():
+                        for c in svc.characteristics:
+                            if c.uuid.lower() == STATUS_CHAR_UUID.lower():
+                                status_char = c
+                                break
+                    if status_char:
+                        break
+
+                if status_char:
+                    try:
+                        raw = await client.read_gatt_char(status_char)
+                        state = json.loads(raw.decode() or "{}") if raw else {}
+                        ip = state.get("ip") or "<unknown>"
+                        wifi_ok = state.get("wifi_ok")
+                        self.log(f"Status: wifi_ok={wifi_ok} ip={ip}")
+                    except Exception as e:
+                        self.log(f"Read status failed: {repr(e)}")
+
+                # 保持短暂连接，参考单元测试以提高稳定性
+                self.log("Hold connection for 120s to stabilize...")
+                await asyncio.sleep(120)
+
+        except Exception as e:
+            self.log(f"Auto-connect failed: {repr(e)}")
 
     # ========= Provision =========
     def start_provision(self):
@@ -141,25 +197,15 @@ class MainUI(BoxLayout):
         try:
             self.log("Connecting...")
 
-            async with BleakClient(self.device_address, timeout=15.0) as client:
+            async with BleakClient(self.device_address, timeout=20.0) as client:
 
                 self.log("Connected.")
 
                 # ===== 连接后等待设备准备好，再做服务发现 =====
                 await asyncio.sleep(1.0)
 
-                # ===== 服务发现重试 =====
-                services_ready = False
-                for attempt in range(3):
-                    try:
-                        await client.get_services()
-                        services_ready = True
-                        break
-                    except Exception as e:
-                        self.log(f"get_services retry {attempt+1}/3: {repr(e)}")
-                        await asyncio.sleep(1.0)
-
-                if not services_ready:
+                services = await self.ensure_services(client)
+                if services is None:
                     self.log("Service discovery failed after retries.")
                     return
 
@@ -168,7 +214,7 @@ class MainUI(BoxLayout):
                 wifi_char = None
                 status_char = None
 
-                for service in client.services:
+                for service in services:
                     if service.uuid.lower() == SERVICE_UUID.lower():
                         self.log(f"Service found: {service.uuid}")
 
@@ -241,6 +287,26 @@ class MainUI(BoxLayout):
 
         except Exception as e:
             self.log(f"Provision failed: {repr(e)}")
+
+    async def ensure_services(self, client):
+        """Ensure services are available; handle backends without get_services."""
+        if hasattr(client, "get_services"):
+            for attempt in range(3):
+                try:
+                    maybe_coro = client.get_services()
+                    if asyncio.iscoroutine(maybe_coro):
+                        await maybe_coro
+                    services = list(client.services or [])
+                    return services
+                except Exception as e:
+                    self.log(f"get_services retry {attempt+1}/3: {repr(e)}")
+                    await asyncio.sleep(1.0)
+            return None
+
+        # Fallback: just use whatever services are already cached
+        services = list(client.services or [])
+        self.log("Backend has no get_services; using cached services.")
+        return services
 
 
 class BLEApp(App):

@@ -135,6 +135,17 @@ def emergency_torque_release(owner):
         if RuntimeStatusLogger:
             RuntimeStatusLogger.log_error("未找到 ServoBus 无法释放扭矩")
         return
+
+    # 先走统一的 ESP32 链路服务，以确保网络指令路径一致
+    try:
+        link = getattr(app, "esp32_link", None)
+        if link and link.set_torque(False):
+            owner._show_info_popup("已发送：紧急释放扭矩")
+            if RuntimeStatusLogger:
+                RuntimeStatusLogger.log_action("紧急释放扭矩")
+            return
+    except Exception:
+        pass
     try:
         app.servo_bus.set_torque(False)
         owner._show_info_popup("已发送：紧急释放扭矩")
@@ -229,6 +240,20 @@ def refresh_servo_status(owner):
         suspend_until = 0.0
 
     app = App.get_running_app()
+
+    # 优先通过统一的 ESP32 链路服务获取状态，保证网络路径一致
+    try:
+        link = getattr(app, "esp32_link", None)
+        if link:
+            cards = list(link.get_servo_cards() or [])
+            if cards:
+                owner._status_cards_cache = cards
+                owner._status_cards_cache_time = time.time()
+                Clock.schedule_once(lambda dt, c=cards: render_status_cards(owner, c), 0)
+                if time.time() < suspend_until:
+                    return
+    except Exception:
+        pass
 
     try:
         bridge = getattr(app, "control_bridge", None)
