@@ -1,20 +1,23 @@
 """
-ESP32 设备发现与配对辅助库
+ESP32 设备发现与配对辅助库。
 
 功能:
-- 在局域网内通过 UDP 广播发现运行固件的 ESP32（期望固件对发现包做出响应）
-- 向指定 ESP32 发送配对/配置（SSID/password）请求
+- 在局域网内通过 UDP 广播发现运行固件的 ESP32（期望固件对发现包做出响应）；
+- 向指定 ESP32 发送配对/配置（SSID/password）请求。
 
-注意: ESP32 固件需要实现对 discovery/pairing JSON 的响应和处理。
+日志会记录每次广播与收到的回复，便于定位网络问题。
 """
 import socket
 import json
 import time
 import threading
+import logging
 
 DISCOVER_PORT = 5005
 DISCOVER_TIMEOUT = 2.0
 PROVISION_PORT = 5005
+
+logger = logging.getLogger(__name__)
 
 
 def discover(timeout=DISCOVER_TIMEOUT, broadcast_msg=None):
@@ -30,9 +33,11 @@ def discover(timeout=DISCOVER_TIMEOUT, broadcast_msg=None):
 
         # 发送几次以提高发现率
         end = time.time() + float(timeout or 2.0)
+        logger.info("开始 UDP 广播发现 ESP32，超时 %.1fs", float(timeout or 2.0))
         while time.time() < end:
             try:
                 sock.sendto(msg, ('<broadcast>', DISCOVER_PORT))
+                logger.debug("已发送广播数据包")
             except Exception:
                 pass
             # 读取回复（短时多次读取）
@@ -47,11 +52,13 @@ def discover(timeout=DISCOVER_TIMEOUT, broadcast_msg=None):
                     except Exception:
                         obj = {'raw': data.hex()}
                     results[ip] = obj
+                    logger.info("收到 ESP32 回复 ip=%s 内容=%s", ip, obj)
                 except Exception:
                     break
         sock.close()
     except Exception:
         pass
+    logger.info("发现结束，共 %d 个设备", len(results))
     return list(results.items())
 
 
@@ -64,6 +71,7 @@ def provision_device(ip, ssid, password, port=PROVISION_PORT, timeout=1.0):
         sock.settimeout(float(timeout or 1.0))
         payload = {'provision': {'ssid': ssid or '', 'password': password or ''}}
         data = json.dumps(payload).encode('utf-8')
+        logger.info("向 %s 发送配网包，端口 %s，SSID=%s", ip, port, ssid)
         sock.sendto(data, (ip, int(port)))
         # 可选等待设备回复确认
         try:
@@ -71,6 +79,7 @@ def provision_device(ip, ssid, password, port=PROVISION_PORT, timeout=1.0):
             try:
                 obj = json.loads(resp.decode('utf-8'))
                 if obj.get('provision_ack'):
+                    logger.info("收到设备 %s 确认", addr[0])
                     sock.close()
                     return True
             except Exception:
@@ -80,4 +89,5 @@ def provision_device(ip, ssid, password, port=PROVISION_PORT, timeout=1.0):
         sock.close()
         return True
     except Exception:
+        logger.warning("向 %s 配网包发送失败", ip)
         return False

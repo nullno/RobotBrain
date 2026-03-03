@@ -13,6 +13,7 @@ from widgets.gyro_panel import GyroPanel
 from widgets.debug_panel import DebugPanel
 from widgets.servo_status import ServoStatus
 from widgets.runtime_status import RuntimeStatusPanel, RuntimeStatusLogger
+from widgets.esp32_setup import Esp32SetupPopup
 from app import esp32_runtime as usb_runtime
 from services.control_bridge import ControlBridge
 from app import device_runtime
@@ -116,6 +117,7 @@ class RobotDashboardApp(App):
         if platform == 'android':
             Clock.schedule_once(lambda dt: self.update_android_flags(), 0)
             Clock.schedule_once(lambda dt: self._handle_android_usb_attach_intent("start"), 0.1)
+        Clock.schedule_once(lambda dt: self._ensure_esp32_popup(), 0.2)
 
     def on_resume(self):
         if platform == 'android':
@@ -154,8 +156,9 @@ class RobotDashboardApp(App):
         bootstrap_runtime.start_permission_and_otg_watchers(self)
 
         try:
-            self.control_bridge = ControlBridge()
-            self.control_bridge.start()
+            if getattr(self, "control_bridge", None) is None:
+                self.control_bridge = ControlBridge()
+                self.control_bridge.start()
         except Exception as e:
             logging.warning("ControlBridge init failed: %s", e)
             self.control_bridge = None
@@ -224,6 +227,25 @@ class RobotDashboardApp(App):
             pass
 
         return device_runtime.get_gyro_data(self, gyroscope)
+
+    # ================== ESP32 引导弹窗 ==================
+    def _ensure_esp32_popup(self):
+        """未联网时弹出 ESP32 配网引导。"""
+        try:
+            connected = bool(self.servo_bus and not getattr(self.servo_bus, "is_mock", True))
+        except Exception:
+            connected = False
+        if getattr(self, "_esp32_setup_popup", None) is None:
+            try:
+                self._esp32_setup_popup = Esp32SetupPopup()
+            except Exception as e:
+                logging.warning("创建 ESP32 弹窗失败: %s", e)
+                self._esp32_setup_popup = None
+        if not connected and getattr(self, "_esp32_setup_popup", None):
+            try:
+                self._esp32_setup_popup.open_popup()
+            except Exception as e:
+                logging.warning("打开 ESP32 弹窗失败: %s", e)
 
     # ================== 主循环 ==================
     def _update_loop(self, dt):

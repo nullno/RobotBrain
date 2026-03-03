@@ -105,13 +105,15 @@ def auto_provision_and_discover(app=None, preferred_port: int = 5005) -> Tuple[O
         logger.info("Wi-Fi SSID not configured; fill in comm_config.json to enable BLE provisioning")
         return None, None
 
+    logger.info("开始 BLE 配网流程，目标名称=%s，SSID=%s", ble_name, ssid)
+
     _ensure_lan_ready()
 
     ok, msg = send_wifi_credentials(ssid, password, target_name=str(ble_name))
     if ok:
-        logger.info("BLE Wi-Fi provisioning success: %s", msg)
+        logger.info("BLE 配网成功: %s", msg)
     else:
-        logger.warning("BLE Wi-Fi provisioning failed: %s", msg)
+        logger.warning("BLE 配网失败: %s", msg)
         return None, None
 
     # Give ESP32 a moment to join Wi-Fi before discovery
@@ -119,12 +121,13 @@ def auto_provision_and_discover(app=None, preferred_port: int = 5005) -> Tuple[O
 
     try:
         devices = esp32_discovery.discover(timeout=2.0)
+        logger.info("发现结果 %d 条: %s", len(devices), devices)
         if devices:
             host = devices[0][0]
-            logger.info("Discovered ESP32 at %s:%s after BLE provisioning", host, udp_port)
+            logger.info("BLE 配网后发现 ESP32: %s:%s", host, udp_port)
             return host, udp_port
     except Exception as exc:
-        logger.warning("ESP32 discovery failed after BLE provisioning: %s", exc)
+        logger.warning("BLE 配网后局域网发现失败: %s", exc)
     return None, None
 
 

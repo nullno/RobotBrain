@@ -66,6 +66,10 @@ def init_servo_bus(app):
                     RuntimeStatusLogger.log_info("ServoBus in mock mode (no ESP32 host)")
                 except Exception:
                     pass
+                try:
+                    esp32_runtime.start_background_discovery(app, interval_sec=5.0, allow_ble_provision=True)
+                except Exception:
+                    pass
             return True
         except Exception:
             return False

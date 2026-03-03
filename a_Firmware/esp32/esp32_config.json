@@ -1,5 +1,6 @@
 {
-  "device_name": "esp32-servo-bridge",
+  "device_name": "ROBOT-ESP32-S3",
+  "ble_name": "ROBOT-ROBOT-ESP32-S3-BLE",
   "wifi": null,
   "host": null,
   "telemetry_interval_ms": 500

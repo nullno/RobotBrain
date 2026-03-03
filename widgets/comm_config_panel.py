@@ -11,6 +11,7 @@ from kivy.uix.label import Label
 from kivy.uix.textinput import TextInput
 
 from services import comm_config, esp32_client, esp32_discovery
+from app import esp32_runtime
 
 
 class CommConfigPanel(BoxLayout):
@@ -106,8 +107,9 @@ class CommConfigPanel(BoxLayout):
         if devices:
             host = devices[0][0]
             port = self._port_or_default()
-            self._bind_host(host, port)
-            self._set_status(f"发现设备: {host}:{port}")
+            ok = self._bind_host(host, port)
+            status = "已连接" if ok else "发现但未连接"
+            self._set_status(f"{status}: {host}:{port}")
         else:
             self._set_status("未发现设备")
 
@@ -115,8 +117,9 @@ class CommConfigPanel(BoxLayout):
         self._set_status("蓝牙配网中...")
         host, port = comm_config.auto_provision_and_discover(App.get_running_app(), preferred_port=self._port_or_default())
         if host:
-            self._bind_host(host, port)
-            self._set_status(f"已配网并发现: {host}:{port}")
+            ok = self._bind_host(host, port)
+            status = "已配网并连接" if ok else "已配网但连接失败"
+            self._set_status(f"{status}: {host}:{port}")
         else:
             self._set_status("配网或发现失败")
 
@@ -130,17 +133,24 @@ class CommConfigPanel(BoxLayout):
 
     # -----------------------------------------------------
     def _bind_host(self, host, port=None):
+        ok = False
         try:
             esp32_client.set_host(host, port=port)
         except Exception:
             pass
         try:
             app = App.get_running_app()
-            app._esp32_host = host
-            if port:
-                app._esp32_port = int(port)
+            ok = esp32_runtime.manual_bind_host(app, host, port)
         except Exception:
-            pass
+            try:
+                app = App.get_running_app()
+                if app:
+                    app._esp32_host = host
+                    if port:
+                        app._esp32_port = int(port)
+            except Exception:
+                pass
+        return ok
 
     def _port_or_default(self) -> int:
         try:

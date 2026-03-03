@@ -21,7 +21,6 @@ from widgets.debug_ui_components import (
     SquareTechButton,
     DangerButton,
 )
-from widgets.comm_config_panel import CommConfigPanel
 # 串口调试已移除：功能由 ESP32 网络方案替代
 from app import debug_panel_runtime
 
@@ -266,21 +265,6 @@ class DebugPanel(Widget):
         t_actions = self._register_lazy_tab(tp, "快捷动作", self._build_actions_tab)
         self._register_lazy_tab(tp, "连接状态", self._build_status_tab)
         t_single = self._register_lazy_tab(tp, "关节调试", self._build_single_servo_tab)
-        # 通信配置：Wi-Fi/BLE 配网与发现
-        def _build_comm_tab(_tp, tab_item=None):
-            try:
-                panel = CommConfigPanel()
-                outer_sv = ScrollView(size_hint=(1, 1))
-                panel.size_hint_y = None
-                outer_sv.add_widget(panel)
-                tab_item.add_widget(outer_sv)
-            except Exception:
-                try:
-                    tab_item.add_widget(CommConfigPanel())
-                except Exception:
-                    pass
-
-        self._register_lazy_tab(tp, "通信配置", _build_comm_tab)
         self._register_lazy_tab(tp, "AI模型", self._build_ai_model_tab)
         self._register_lazy_tab(tp, "高级设置", self._build_other_settings_tab)
 

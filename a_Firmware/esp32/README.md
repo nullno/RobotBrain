@@ -7,9 +7,9 @@ ESP32 固件（MicroPython）
 - 支持读取 MPU6050（I2C）作为 IMU 并周期性把 telemetry 发送到已配对主机。
 
 默认位置
-- 固件主脚本：`firmware/esp32/main.py`
-- 默认配置文件：`firmware/esp32/esp32_config.json`
-- BLE 配网：广告名 `ESP32-PROV`，Service UUID `0000ffaa-0000-1000-8000-00805f9b34fb`，Char UUID `0000ffab-0000-1000-8000-00805f9b34fb`，写入格式支持 `ssid\npassword` 或 JSON `{ "ssid": "...", "password": "..." }`
+- 固件主脚本：`esp32/main.py`
+- 默认配置文件：`esp32/esp32_config.json`
+- BLE 配网：广告名 `ROBOT-ESP32-S3-BLE`，Service UUID `0000ffaa-0000-1000-8000-00805f9b34fb`，Char UUID `0000ffab-0000-1000-8000-00805f9b34fb`，写入格式支持 `ssid\npassword` 或 JSON `{ "ssid": "...", "password": "..." }`
 
 启动与配网流程
 1. 启动时固件会读取 `esp32_config.json`。
@@ -56,7 +56,7 @@ Telemetry
 
 刷写与调试
 - 将文件拷贝到设备（示例使用 `mpremote`）：
-  mpremote connect serial:/dev/ttyUSB0 fs put firmware/esp32/* :/flash/
+  mpremote connect serial:/dev/ttyUSB0 fs put esp32/* :/flash/
   mpremote connect serial:/dev/ttyUSB0 exec "import machine; machine.reset()"
 
 注意事项
