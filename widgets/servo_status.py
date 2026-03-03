@@ -19,16 +19,17 @@ class ServoStatus(BoxLayout):
 
     def refresh(self):
         app = App.get_running_app()
-        if not hasattr(app, 'servo_bus') or not app.servo_bus:
-            self.lbl.text = '舵机: 未初始化'
-            return
-        sb = app.servo_bus
-        if getattr(sb, 'is_mock', True):
-            self.lbl.text = '舵机: MOCK 模式'
-            return
         try:
-            mgr = sb.manager
-            online = [sid for sid in mgr.servo_info_dict.keys() if mgr.servo_info_dict[sid].is_online]
-            self.lbl.text = f'舵机在线: {len(online)}/{len(mgr.servo_info_dict)}'
+            from services.wifi_servo import get_controller
+            ctrl = getattr(app, 'wifi_servo', None) or get_controller()
+            if not ctrl or not ctrl.is_connected:
+                self.lbl.text = '舞机: 未连接'
+                return
+            st = ctrl.request_status(timeout=0.5)
+            if st and 'servos' in st:
+                cnt = len(st['servos'])
+                self.lbl.text = f'舞机在线: {cnt}'
+            else:
+                self.lbl.text = '舞机: 等待状态'
         except Exception:
             self.lbl.text = '舵机: 读取失败'

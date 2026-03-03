@@ -10,12 +10,11 @@ version = 0.1
 
 # 依赖包配置（按重要性排序）
 # - kivy: UI框架
-# - pyserial: 串口通信
 # - pyjnius: Python-Java接口（Android权限和功能）
 # - plyer: 跨平台设备功能API
 # - requests: HTTP库
 # - opencv, numpy: 视觉处理
-requirements = python3,kivy==2.3.0,pyjnius,plyer,requests,pyserial
+requirements = python3,kivy==2.3.0,pyjnius,plyer,requests
 
 # UI配置
 fullscreen = 1

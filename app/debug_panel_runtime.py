@@ -1,3 +1,4 @@
+﻿import logging
 import os
 import subprocess
 import sys
@@ -9,6 +10,43 @@ from kivy.clock import Clock
 
 from widgets.universal_tip import UniversalTip
 from widgets.debug_ui_components import ServoStatusCard
+from services.wifi_servo import get_controller as get_wifi_servo
+
+logger = logging.getLogger(__name__)
+
+
+def show_info_popup(owner, text, title="提示"):
+    """使用通用提示气泡弹窗展示消息。"""
+    try:
+        UniversalTip(message=str(text), title=title).open()
+    except Exception:
+        try:
+            # 兜底：直接调用 owner 的 popup 接口（若存在）
+            if hasattr(owner, "_debug_popup") and getattr(owner, "_debug_popup"):
+                owner._debug_popup.dismiss()
+            popup = UniversalTip(message=str(text), title=title)
+            popup.open()
+        except Exception:
+            pass
+
+
+def call_motion(owner, action_name):
+    """调用 ESP32 预设动作（通过 wifi_servo.send_motion）。"""
+    app = App.get_running_app()
+    ctrl = getattr(app, "wifi_servo", None) or get_wifi_servo()
+    if not ctrl or not ctrl.is_connected:
+        show_info_popup(owner, "未连接 ESP32，无法下发动作")
+        return False
+    try:
+        ok = ctrl.send_motion(action_name)
+        if ok:
+            show_info_popup(owner, f"已下发动作：{action_name}")
+        else:
+            show_info_popup(owner, f"下发动作失败：{action_name}")
+        return bool(ok)
+    except Exception as e:
+        show_info_popup(owner, f"动作发送异常: {e}")
+        return False
 
 
 def start_demo_thread(owner):
@@ -27,14 +65,11 @@ def run_demo_motion(owner):
     except Exception:
         RuntimeStatusLogger = None
 
-    if (
-        not hasattr(app, "servo_bus")
-        or not app.servo_bus
-        or getattr(app.servo_bus, "is_mock", True)
-    ):
-        show_msg("未连接舵机或为 MOCK 模式，无法运行 Demo")
+    ctrl = getattr(app, "wifi_servo", None) or get_wifi_servo()
+    if not ctrl or not ctrl.is_connected:
+        show_msg("未连接 ESP32，无法运行 Demo")
         if RuntimeStatusLogger:
-            RuntimeStatusLogger.log_error("Demo 启动失败：未连接舵机或为 MOCK 模式")
+            RuntimeStatusLogger.log_error("Demo 启动失败：未连接 ESP32")
         return
 
     try:
@@ -46,16 +81,11 @@ def run_demo_motion(owner):
             RuntimeStatusLogger.log_error(f"Demo 模块导入失败: {e}")
         return
 
-    servo_mgr = app.servo_bus.manager
-    neutral = (
-        {i: 2048 for i in servo_mgr.servo_info_dict.keys()}
-        if hasattr(servo_mgr, "servo_info_dict")
-        else {i: 2048 for i in range(1, 26)}
-    )
+    neutral = {i: 2048 for i in range(1, 26)}
     imu = IMUReader(simulate=True)
     imu.start()
     mc = MotionController(
-        servo_mgr,
+        servo_manager=None,
         balance_ctrl=app.balance_ctrl,
         imu_reader=imu,
         neutral_positions=neutral,
@@ -73,9 +103,9 @@ def run_demo_motion(owner):
     mc.wave(side="right", times=3)
     time.sleep(0.6)
 
-    show_msg("Demo: 前行小步")
+    show_msg("Demo: 向前小步")
     if RuntimeStatusLogger:
-        RuntimeStatusLogger.log_action("Demo - 前行小步")
+        RuntimeStatusLogger.log_action("Demo - 向前小步")
     mc.walk(steps=2, step_length=120, step_height=120, time_per_step_ms=350)
     time.sleep(0.6)
 
@@ -85,9 +115,9 @@ def run_demo_motion(owner):
     mc.sit()
     time.sleep(1.2)
 
-    show_msg("Demo: 站起并回中位")
+    show_msg("Demo: 起立并回中位")
     if RuntimeStatusLogger:
-        RuntimeStatusLogger.log_action("Demo - 站起并回中位")
+        RuntimeStatusLogger.log_action("Demo - 起立并回中位")
     mc.stand()
     time.sleep(0.8)
 
@@ -117,7 +147,7 @@ def run_zero_id_script(owner):
         return
     try:
         subprocess.Popen([sys.executable, script])
-        owner._show_info_popup("归零/写ID脚本已在独立进程启动")
+        owner._show_info_popup("归零/写ID脚本已在后台启动")
     except Exception as e:
         owner._show_info_popup(f"启动脚本失败: {e}")
 
@@ -130,27 +160,20 @@ def emergency_torque_release(owner):
     except Exception:
         RuntimeStatusLogger = None
 
-    if not hasattr(app, "servo_bus") or not app.servo_bus:
-        owner._show_info_popup("未找到 ServoBus")
+    ctrl = getattr(app, "wifi_servo", None) or get_wifi_servo()
+    if not ctrl or not ctrl.is_connected:
+        owner._show_info_popup("未连接 ESP32")
         if RuntimeStatusLogger:
-            RuntimeStatusLogger.log_error("未找到 ServoBus 无法释放扭矩")
+            RuntimeStatusLogger.log_error("未连接 ESP32 无法释放扭矩")
         return
 
-    # 先走统一的 ESP32 链路服务，以确保网络指令路径一致
     try:
-        link = getattr(app, "esp32_link", None)
-        if link and link.set_torque(False):
-            owner._show_info_popup("已发送：紧急释放扭矩")
+        if ctrl.set_torque(False):
+            owner._show_info_popup("已发送：扭矩释放广播")
             if RuntimeStatusLogger:
-                RuntimeStatusLogger.log_action("紧急释放扭矩")
-            return
-    except Exception:
-        pass
-    try:
-        app.servo_bus.set_torque(False)
-        owner._show_info_popup("已发送：紧急释放扭矩")
-        if RuntimeStatusLogger:
-            RuntimeStatusLogger.log_action("紧急释放扭矩")
+                RuntimeStatusLogger.log_action("扭矩释放广播已发送")
+        else:
+            owner._show_info_popup("释放扭矩失败")
     except Exception as e:
         owner._show_info_popup(f"释放扭矩失败: {e}")
         if RuntimeStatusLogger:
@@ -224,7 +247,7 @@ def refresh_servo_status(owner):
     if status_grid is None:
         return
 
-    # 先渲染占位卡，避免首次刷新期间（尤其手机端串口探测慢）出现空白页
+    # 首次刷新先填充占位卡，避免出现空白页（尤其是移动端首帧）
     try:
         has_widgets = bool(getattr(status_grid, "children", None))
         has_cache = bool(getattr(owner, "_status_cards_cache", None))
@@ -241,34 +264,31 @@ def refresh_servo_status(owner):
 
     app = App.get_running_app()
 
-    # 优先通过统一的 ESP32 链路服务获取状态，保证网络路径一致
+    # 优先通过 wifi_servo 获取状态
     try:
-        link = getattr(app, "esp32_link", None)
-        if link:
-            cards = list(link.get_servo_cards() or [])
-            if cards:
-                owner._status_cards_cache = cards
-                owner._status_cards_cache_time = time.time()
-                Clock.schedule_once(lambda dt, c=cards: render_status_cards(owner, c), 0)
-                if time.time() < suspend_until:
-                    return
-    except Exception:
-        pass
-
-    try:
-        bridge = getattr(app, "control_bridge", None)
-        if bridge:
-            cards = list(bridge.get_servo_cards() or [])
-            if cards:
-                owner._status_cards_cache = cards
-                owner._status_cards_cache_time = time.time()
-                Clock.schedule_once(lambda dt, c=cards: render_status_cards(owner, c), 0)
-                if time.time() < suspend_until:
+        ctrl = getattr(app, "wifi_servo", None) or get_wifi_servo()
+        if ctrl and ctrl.is_connected:
+            st = ctrl.request_status(timeout=0.8)
+            if st and "servos" in st:
+                cards = []
+                for sid_s, sdata in st["servos"].items():
+                    sid = int(sid_s)
+                    data = {
+                        "pos": sdata.get("position"),
+                        "temp": sdata.get("temperature"),
+                        "volt": sdata.get("voltage"),
+                        "torque": sdata.get("torque"),
+                    }
+                    cards.append((sid, data, True))
+                if cards:
+                    owner._status_cards_cache = cards
+                    owner._status_cards_cache_time = time.time()
+                    Clock.schedule_once(lambda dt, c=cards: render_status_cards(owner, c), 0)
                     return
     except Exception:
         pass
     if time.time() < suspend_until:
-        # 轮询暂停期间若有缓存则继续显示缓存，避免看起来“没有内容”
+        # 轮询暂停期间若有缓存则继续展示，避免用户看到空白
         try:
             cards = list(getattr(owner, "_status_cards_cache", None) or [])
             if cards:
@@ -298,219 +318,8 @@ def refresh_servo_status(owner):
         Clock.schedule_once(_render_cached, 0)
         return
 
-    app = App.get_running_app()
-    mgr = getattr(app, "servo_bus", None)
-    writable_ids = set(getattr(owner, "_writable_servo_ids", set()) or set())
-
-    cards = []
-    if not mgr or getattr(mgr, "is_mock", False):
-        max_id = 25
-        for sid in range(1, max_id + 1):
-            cards.append((sid, None, False))
-    else:
-        mgr = app.servo_bus.manager
-        known_ids = set(getattr(mgr, "servo_info_dict", {}).keys())
-
-        if not known_ids:
-            try:
-                runtime_profile = str(getattr(app, "_runtime_profile", "") or "").lower()
-                if runtime_profile == "mobile":
-                    last_probe = float(getattr(owner, "_status_unknown_probe_ts", 0.0) or 0.0)
-                    if (now - last_probe) >= 2.0:
-                        preferred_ids = list(getattr(app, "_last_online_servo_ids", []) or [])
-                        probe_ids = sorted(writable_ids) if writable_ids else preferred_ids
-                        if (not probe_ids) and app and getattr(app, "servo_bus", None):
-                            if getattr(app, "_latest_probe_sid", None):
-                                probe_ids = [int(getattr(app, "_latest_probe_sid"))]
-                        probe_ids = [int(x) for x in probe_ids[:3]]
-                        for sid in probe_ids:
-                            try:
-                                if mgr.ping(int(sid)):
-                                    known_ids.add(int(sid))
-                            except Exception:
-                                pass
-                        owner._status_unknown_probe_ts = now
-                else:
-                    preferred_ids = list(getattr(app, "_last_online_servo_ids", []) or [])
-                    probe_ids = sorted(writable_ids) if writable_ids else preferred_ids
-                    if (not probe_ids) and app and getattr(app, "servo_bus", None):
-                        if getattr(app, "_latest_probe_sid", None):
-                            probe_ids = [int(getattr(app, "_latest_probe_sid"))]
-                    for sid in probe_ids:
-                        try:
-                            if mgr.ping(int(sid)):
-                                known_ids.add(int(sid))
-                        except Exception:
-                            pass
-            except Exception:
-                pass
-
-        max_known = max(known_ids) if known_ids else 25
-        max_id = max(max_known, getattr(mgr, "max_id", 25))
-
-        known_sorted = sorted(int(sid) for sid in known_ids if int(sid) > 0)
-        batch_size = int(max(1, getattr(owner, "_status_read_batch_size", 6) or 6))
-        ids_to_probe = set()
-        if known_sorted:
-            rr = int(getattr(owner, "_status_rr_index", 0) or 0)
-            rr = rr % len(known_sorted)
-            end = rr + min(batch_size, len(known_sorted))
-            if end <= len(known_sorted):
-                probe_list = known_sorted[rr:end]
-            else:
-                probe_list = known_sorted[rr:] + known_sorted[: (end % len(known_sorted))]
-            ids_to_probe = set(probe_list)
-            owner._status_rr_index = end % len(known_sorted)
-
-        for sid in range(1, max_id + 1):
-            cache_data = dict(owner._status_data_cache.get(sid, {}) or {})
-            data = cache_data.get("data")
-            online = bool(cache_data.get("online", False))
-
-            if sid in known_ids:
-                if sid in ids_to_probe:
-                    backoff = dict(owner._status_read_backoff.get(sid, {}) or {})
-                    next_allowed_ts = float(backoff.get("next_ts", 0.0) or 0.0)
-                    if now < next_allowed_ts:
-                        owner._status_data_cache[sid] = {
-                            "data": data,
-                            "online": bool(online),
-                            "ts": now,
-                        }
-                        cards.append((sid, data, online))
-                        continue
-                    try:
-                        pos = mgr.read_data_by_name(sid, "CURRENT_POSITION")
-                        if pos is not None:
-                            cache = owner._status_slow_fields_cache.get(sid, {})
-                            last_ts = float(cache.get("_ts", 0.0) or 0.0)
-                            if (now - last_ts) >= float(getattr(owner, "_status_slow_fields_interval", 3.0) or 3.0):
-                                temp = mgr.read_data_by_name(sid, "CURRENT_TEMPERATURE")
-                                volt = mgr.read_data_by_name(sid, "CURRENT_VOLTAGE")
-                                torque_flag = mgr.read_data_by_name(sid, "TORQUE_ENABLE")
-                                cache = {
-                                    "temp": temp,
-                                    "volt": volt,
-                                    "torque": torque_flag,
-                                    "_ts": now,
-                                }
-                                owner._status_slow_fields_cache[sid] = cache
-                            temp = cache.get("temp")
-                            volt = cache.get("volt")
-                            torque_flag = cache.get("torque")
-                            online = bool(getattr(mgr.servo_info_dict.get(sid, None), "is_online", True))
-                            data = dict(pos=pos, temp=temp, volt=volt, torque=torque_flag)
-                            owner._status_read_backoff[sid] = {"fail_count": 0, "next_ts": 0.0}
-                        else:
-                            online = False
-                            data = None
-                            fail_count = int(backoff.get("fail_count", 0) or 0) + 1
-                            base_sec = float(getattr(owner, "_status_backoff_base_sec", 0.8) or 0.8)
-                            max_sec = float(getattr(owner, "_status_backoff_max_sec", 5.0) or 5.0)
-                            wait_sec = min(max_sec, base_sec * (2 ** max(0, fail_count - 1)))
-                            owner._status_read_backoff[sid] = {
-                                "fail_count": fail_count,
-                                "next_ts": now + wait_sec,
-                            }
-                    except Exception:
-                        data = None
-                        online = False
-                        fail_count = int(backoff.get("fail_count", 0) or 0) + 1
-                        base_sec = float(getattr(owner, "_status_backoff_base_sec", 0.8) or 0.8)
-                        max_sec = float(getattr(owner, "_status_backoff_max_sec", 5.0) or 5.0)
-                        wait_sec = min(max_sec, base_sec * (2 ** max(0, fail_count - 1)))
-                        owner._status_read_backoff[sid] = {
-                            "fail_count": fail_count,
-                            "next_ts": now + wait_sec,
-                        }
-            elif sid in writable_ids:
-                # 仅用于后续探测优先级，不作为在线判据，避免“未连接却显示已连接”
-                online = False
-                if data is None:
-                    data = dict(pos="?", temp="?", volt="?", torque=None)
-
-            owner._status_data_cache[sid] = {
-                "data": data,
-                "online": bool(online),
-                "ts": now,
-            }
-            cards.append((sid, data, online))
+    # wifi_servo 未返回数据，显示占位卡
+    cards = [(sid, None, False) for sid in range(1, 26)]
 
     owner._status_cards_cache = list(cards)
-    owner._status_cards_cache_time = now
-
-    def _render(dt=0):
-        render_status_cards(owner, cards)
-
-    Clock.schedule_once(_render, 0)
-
-
-def show_info_popup(owner, text):
-    def _show(dt):
-        try:
-            UniversalTip(
-                message=str(text),
-                icon="ℹ",
-                auto_dismiss=True,
-                auto_close_seconds=2.0,
-                show_buttons=False,
-            ).open()
-        except Exception:
-            pass
-
-    Clock.schedule_once(_show, 0)
-
-
-def call_motion(owner, action):
-    app = App.get_running_app()
-    mc = getattr(app, "motion_controller", None)
-    if not mc:
-        owner._show_info_popup("MotionController 未初始化或为 MOCK 模式")
-        return
-
-    try:
-        if (
-            hasattr(app, "servo_bus")
-            and app.servo_bus
-            and not getattr(app.servo_bus, "is_mock", True)
-        ):
-            try:
-                app.servo_bus.set_torque(True)
-            except Exception:
-                pass
-    except Exception:
-        pass
-
-    try:
-        from widgets.runtime_status import RuntimeStatusLogger
-    except Exception:
-        RuntimeStatusLogger = None
-
-    try:
-        if RuntimeStatusLogger:
-            RuntimeStatusLogger.log_action(action)
-
-        if action == "stand":
-            mc.stand()
-        elif action == "sit":
-            mc.sit()
-        elif action == "walk":
-            mc.walk(steps=2, step_length=120, step_height=120, time_per_step_ms=350)
-        elif action == "wave":
-            mc.wave(side="right", times=3)
-        elif action == "dance":
-            mc.dance() if hasattr(mc, "dance") else None
-        elif action == "jump":
-            mc.jump() if hasattr(mc, "jump") else None
-        elif action == "turn":
-            mc.turn(angle=360) if hasattr(mc, "turn") else None
-        elif action == "squat":
-            mc.squat() if hasattr(mc, "squat") else None
-        elif action == "kick":
-            mc.kick() if hasattr(mc, "kick") else None
-
-        owner._show_info_popup(f"动作 {action} 已发送")
-    except Exception as e:
-        if RuntimeStatusLogger:
-            RuntimeStatusLogger.log_error(f"动作 {action} 执行失败: {e}")
-        owner._show_info_popup(f"动作执行失败: {e}")
+    owner._status_cards_cache_time = time.time()

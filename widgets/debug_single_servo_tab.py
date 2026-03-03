@@ -301,12 +301,9 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
     def _ensure_torque():
         app = App.get_running_app()
         try:
-            if (
-                hasattr(app, "servo_bus")
-                and app.servo_bus
-                and not getattr(app.servo_bus, "is_mock", True)
-            ):
-                app.servo_bus.set_torque(True)
+            wifi_ctrl = getattr(app, "wifi_servo", None)
+            if wifi_ctrl and wifi_ctrl.is_connected:
+                wifi_ctrl.set_torque(True)
                 return True
         except Exception:
             pass
@@ -315,32 +312,12 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
     def _is_sid_online(sid):
         app = App.get_running_app()
         try:
-            if not (
-                hasattr(app, "servo_bus")
-                and app.servo_bus
-                and not getattr(app.servo_bus, "is_mock", True)
-            ):
-                return False
-            mgr = app.servo_bus.manager
-
-            cache = getattr(owner, "_sid_online_probe_cache", None)
-            if not isinstance(cache, dict):
-                cache = {}
-                owner._sid_online_probe_cache = cache
-            now = time.time()
-            c = cache.get(int(sid))
-            if isinstance(c, dict) and (now - float(c.get("ts", 0.0) or 0.0)) < 1.5:
-                return bool(c.get("ok", False))
-
-            info = getattr(mgr, "servo_info_dict", {}).get(int(sid))
-            if info is not None and bool(getattr(info, "is_online", False)):
-                cache[int(sid)] = {"ok": True, "ts": now}
+            wifi_ctrl = getattr(app, "wifi_servo", None)
+            if wifi_ctrl and wifi_ctrl.is_connected:
                 return True
-            ok = bool(mgr.ping(int(sid)))
-            cache[int(sid)] = {"ok": bool(ok), "ts": now}
-            return ok
         except Exception:
-            return False
+            pass
+        return False
 
     def _require_sid_online(sid, strict=True):
         ok = _is_sid_online(sid)
@@ -352,37 +329,31 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
     def _move_to_angle(angle_deg, show_tip=True):
         app = App.get_running_app()
         sid = _get_sid()
-        if (
-            not hasattr(app, "servo_bus")
-            or not app.servo_bus
-            or getattr(app.servo_bus, "is_mock", True)
-        ):
-            owner._show_info_popup("未连接舵机或为 MOCK 模式")
-            return
-        if not _require_sid_online(sid, strict=False):
+
+        # 优先 WiFi 舵机控制器（固件范围 0-1000）
+        wifi_ctrl = getattr(app, "wifi_servo", None)
+        if not (wifi_ctrl and wifi_ctrl.is_connected):
+            owner._show_info_popup("未连接舵机")
             return
 
-        def _do():
+        def _do_wifi():
             try:
                 _ensure_torque()
-                mgr = app.servo_bus.manager
-                pos = int(angle_deg / 360.0 * 4095)
+                pos = int(angle_deg / 360.0 * 1000)
                 try:
                     dur = int(ti_dur.text)
                     dur = max(0, dur)
                 except Exception:
                     dur = 500
-
-                mgr.set_position_time(sid, pos, time_ms=dur)
+                wifi_ctrl.set_single(sid, pos, duration_ms=dur)
                 owner._mark_servo_writable(sid)
                 if show_tip:
-                    msg = f"ID {sid} 转到 {angle_deg}° ({dur}ms)"
+                    msg = f"ID {sid} 转到 {angle_deg}° ({dur}ms) [WiFi]"
                     Clock.schedule_once(lambda dt, m=msg: owner._show_info_popup(m))
             except Exception as e:
                 msg = f"移动失败: {e}"
                 Clock.schedule_once(lambda dt, m=msg: owner._show_info_popup(m))
-
-        threading.Thread(target=_do, daemon=True).start()
+        threading.Thread(target=_do_wifi, daemon=True).start()
 
     knob_sync_state = {"busy": False}
 
@@ -434,68 +405,32 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
             app._latest_probe_sid = int(sid)
         except Exception:
             pass
-        if (
-            not hasattr(app, "servo_bus")
-            or not app.servo_bus
-            or getattr(app.servo_bus, "is_mock", True)
-        ):
-            owner._show_info_popup("未连接舵机或为 MOCK 模式")
+
+        wifi_ctrl = getattr(app, "wifi_servo", None)
+        if not (wifi_ctrl and wifi_ctrl.is_connected):
+            owner._show_info_popup("未连接舵机")
             return
         if not _require_sid_online(sid, strict=False):
             return
 
-        try:
-            app._suspend_servo_sync_until = max(
-                float(getattr(app, "_suspend_servo_sync_until", 0.0) or 0.0),
-                time.time() + 1.4,
-            )
-        except Exception:
-            pass
-
         def _do_read():
             try:
-                mgr = app.servo_bus.manager
-                pos = mgr.read_data_by_name(sid, "CURRENT_POSITION")
-                temp = mgr.read_data_by_name(sid, "CURRENT_TEMPERATURE")
-                volt = mgr.read_data_by_name(sid, "CURRENT_VOLTAGE")
-
-                if pos is None and temp is None and volt is None:
-                    ping_ok = False
-                    try:
-                        ping_ok = bool(mgr.ping(sid))
-                    except Exception:
-                        ping_ok = False
-
-                    # Android 下首次读取失败时，尝试自动重连一次后重读
-                    if (not ping_ok) and platform == "android" and hasattr(app, "_try_auto_connect"):
+                status = wifi_ctrl.request_status(timeout=1.5)
+                servos = (status or {}).get("servos", {})
+                info = servos.get(str(sid)) or servos.get(int(sid))
+                if info:
+                    pos = info.get("position")
+                    temp = info.get("temperature")
+                    volt = info.get("voltage")
+                    msg = f"ID {sid} -> pos:{pos} temp:{temp}°C volt:{_format_voltage(volt)}V"
+                    if pos is not None:
                         try:
-                            app._try_auto_connect()
-                            time.sleep(0.28)
-                            if (
-                                hasattr(app, "servo_bus")
-                                and app.servo_bus
-                                and not getattr(app.servo_bus, "is_mock", True)
-                            ):
-                                mgr = app.servo_bus.manager
-                                pos = mgr.read_data_by_name(sid, "CURRENT_POSITION")
-                                temp = mgr.read_data_by_name(sid, "CURRENT_TEMPERATURE")
-                                volt = mgr.read_data_by_name(sid, "CURRENT_VOLTAGE")
-                                ping_ok = bool(mgr.ping(sid))
+                            deg = max(0.0, min(360.0, (float(pos) / 1000.0) * 360.0))
+                            Clock.schedule_once(lambda dt, d=deg: _set_knob_and_text(d), 0)
                         except Exception:
                             pass
-
-                    if ping_ok:
-                        owner._mark_servo_writable(sid)
-                        msg = f"ID {sid} 在线，但读回不可用（当前链路仅写入稳定）"
-                    else:
-                        msg = f"ID {sid} 读取失败：未收到返回数据"
                 else:
-                    msg = f"ID {sid} -> pos:{pos} temp:{temp}°C volt:{_format_voltage(volt)}V"
-                    try:
-                        deg = max(0.0, min(360.0, (float(pos) / 4095.0) * 360.0))
-                        Clock.schedule_once(lambda dt, d=deg: _set_knob_and_text(d), 0)
-                    except Exception:
-                        pass
+                    msg = f"ID {sid} 读取失败：未收到返回数据"
                 Clock.schedule_once(lambda dt, m=msg: owner._show_info_popup(m))
             except Exception as e:
                 msg = f"读取失败: {e}"
@@ -510,27 +445,19 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
             app._latest_probe_sid = int(sid)
         except Exception:
             pass
-        if (
-            not hasattr(app, "servo_bus")
-            or not app.servo_bus
-            or getattr(app.servo_bus, "is_mock", True)
-        ):
-            owner._show_info_popup("未连接舵机或为 MOCK 模式")
+
+        wifi_ctrl = getattr(app, "wifi_servo", None)
+        if not (wifi_ctrl and wifi_ctrl.is_connected):
+            owner._show_info_popup("未连接舵机")
             return
         if not _require_sid_online(sid, strict=False):
             return
 
         try:
             now_ts = time.time()
-            # 自检窗口内暂停状态轮询，减少与面板刷新并发冲突
             owner._status_poll_suspended_until = max(
                 float(getattr(owner, "_status_poll_suspended_until", 0.0) or 0.0),
                 now_ts + 2.2,
-            )
-            # 自检期间暂停主循环同步写，避免读写并发导致读回失败
-            app._suspend_servo_sync_until = max(
-                float(getattr(app, "_suspend_servo_sync_until", 0.0) or 0.0),
-                now_ts + 2.8,
             )
         except Exception:
             pass
@@ -542,25 +469,14 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
             t0 = time.time()
 
             try:
-                mgr = app.servo_bus.manager
-
-                # Android 下自检前先做一次连通性预热，失败则自动重连一次
-                try:
-                    if platform == "android" and not bool(mgr.ping(sid)) and hasattr(app, "_try_auto_connect"):
-                        app._try_auto_connect()
-                        time.sleep(0.35)
-                        if (
-                            hasattr(app, "servo_bus")
-                            and app.servo_bus
-                            and not getattr(app.servo_bus, "is_mock", True)
-                        ):
-                            mgr = app.servo_bus.manager
-                except Exception:
-                    pass
-
                 for _idx in range(samples):
                     try:
-                        pos = mgr.read_data_by_name(sid, "CURRENT_POSITION")
+                        status = wifi_ctrl.request_status(timeout=1.0)
+                        servos = (status or {}).get("servos", {})
+                        info = servos.get(str(sid)) or servos.get(int(sid))
+                        if info is None:
+                            continue
+                        pos = info.get("position")
                         if pos is None:
                             continue
                         ok_count += 1
@@ -568,12 +484,6 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
                     except Exception:
                         pass
                     time.sleep(0.09)
-
-                ping_ok = False
-                try:
-                    ping_ok = bool(mgr.ping(sid))
-                except Exception:
-                    ping_ok = False
 
                 elapsed_ms = int((time.time() - t0) * 1000)
                 success_rate = int(round((ok_count / float(samples)) * 100.0))
@@ -583,13 +493,12 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
                     pos_max = max(pos_values)
                     msg = (
                         f"ID {sid} 读回自检: 成功 {ok_count}/{samples} ({success_rate}%)，"
-                        f"耗时 {elapsed_ms}ms，位置范围 [{pos_min}, {pos_max}]，"
-                        f"PING={'OK' if ping_ok else 'FAIL'}"
+                        f"耗时 {elapsed_ms}ms，位置范围 [{pos_min}, {pos_max}]"
                     )
                 else:
                     msg = (
                         f"ID {sid} 读回自检: 成功 0/{samples} (0%)，"
-                        f"耗时 {elapsed_ms}ms，PING={'OK' if ping_ok else 'FAIL'}"
+                        f"耗时 {elapsed_ms}ms"
                     )
 
                 try:
@@ -613,7 +522,6 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
             finally:
                 try:
                     owner._status_poll_suspended_until = 0.0
-                    app._suspend_servo_sync_until = 0.0
                     Clock.schedule_once(lambda dt: owner.refresh_servo_status(), 0)
                 except Exception:
                     pass
@@ -621,43 +529,20 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
         threading.Thread(target=_do_test, daemon=True).start()
 
     def _update_torque_label(dt=None):
-        app = App.get_running_app()
-        sid = _get_sid()
-        try:
-            if (
-                hasattr(app, "servo_bus")
-                and app.servo_bus
-                and not getattr(app.servo_bus, "is_mock", True)
-            ):
-                mgr = app.servo_bus.manager
-                val = mgr.read_data_by_name(sid, "TORQUE_ENABLE")
-                text = "扭矩: ON" if val else "扭矩: OFF"
-                btn_torque_toggle.text = text
-            else:
-                btn_torque_toggle.text = "扭矩: -"
-        except Exception:
-            btn_torque_toggle.text = "扭矩: -"
+        btn_torque_toggle.text = "扭矩: -"
 
     def _toggle_torque(_):
         app = App.get_running_app()
         sid = _get_sid()
+        wifi_ctrl = getattr(app, "wifi_servo", None)
+        if not (wifi_ctrl and wifi_ctrl.is_connected):
+            owner._show_info_popup("未连接舵机")
+            return
         try:
-            if not (
-                hasattr(app, "servo_bus")
-                and app.servo_bus
-                and not getattr(app.servo_bus, "is_mock", True)
-            ):
-                owner._show_info_popup("ServoBus 未连接")
-                return
-            if not _require_sid_online(sid, strict=False):
-                return
-            mgr = app.servo_bus.manager
-            cur = mgr.read_data_by_name(sid, "TORQUE_ENABLE")
-            new = 0x01 if not cur else 0x00
-            mgr.write_data_by_name(sid, "TORQUE_ENABLE", new)
+            # wifi_servo 的 set_torque 为全局切换
+            wifi_ctrl.set_torque(True)
             owner._mark_servo_writable(sid)
-            Clock.schedule_once(lambda dt: _update_torque_label(), 0.2)
-            owner._show_info_popup("已切换扭矩")
+            owner._show_info_popup("已启用扭矩")
         except Exception as ex:
             owner._show_info_popup(f"扭矩操作失败: {ex}")
 
@@ -673,12 +558,9 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
             return
 
         app = App.get_running_app()
-        if not (
-            hasattr(app, "servo_bus")
-            and app.servo_bus
-            and not getattr(app.servo_bus, "is_mock", True)
-        ):
-            owner._show_info_popup("ServoBus 未连接")
+        wifi_ctrl = getattr(app, "wifi_servo", None)
+        if not (wifi_ctrl and wifi_ctrl.is_connected):
+            owner._show_info_popup("未连接舵机")
             return
         if not _require_sid_online(sid, strict=False):
             return
@@ -688,20 +570,19 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
         owner._mark_servo_writable(sid)
 
         def _run_spin():
-            mgr = app.servo_bus.manager
-            a = 500
-            b = 3500
+            a = 139   # ~50° in 0-1000 range
+            b = 972   # ~350° in 0-1000 range
             try:
                 while stop_flag["running"]:
                     try:
-                        mgr.set_position_time(sid, a, time_ms=400)
+                        wifi_ctrl.set_single(sid, a, duration_ms=400)
                     except Exception:
                         pass
                     time.sleep(0.6)
                     if not stop_flag["running"]:
                         break
                     try:
-                        mgr.set_position_time(sid, b, time_ms=400)
+                        wifi_ctrl.set_single(sid, b, duration_ms=400)
                     except Exception:
                         pass
                     time.sleep(0.6)
@@ -712,98 +593,10 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
         owner._show_info_popup("开始间歇旋转")
 
     def _set_id(_):
-        sid = _get_sid()
-        app = App.get_running_app()
-        if not (
-            hasattr(app, "servo_bus")
-            and app.servo_bus
-            and not getattr(app.servo_bus, "is_mock", True)
-        ):
-            owner._show_info_popup("ServoBus 未连接")
-            return
-        if not _require_sid_online(sid, strict=False):
-            return
-
-        content = BoxLayout(orientation="vertical", spacing=8, padding=8)
-        ti = TextInput(text=str(sid), multiline=False, input_filter="int")
-        content.add_widget(ti)
-        btn_row = BoxLayout(size_hint_y=None, height=dp(44), spacing=8)
-        ok = tech_button_cls(text="写入")
-        cancel = tech_button_cls(text="取消")
-        btn_row.add_widget(ok)
-        btn_row.add_widget(cancel)
-        content.add_widget(btn_row)
-        popup = Popup(
-            title="SET ID",
-            content=content,
-            size_hint=(None, None),
-            size=(320, 160),
-        )
-
-        def _do_ok(_):
-            try:
-                new_id = int(ti.text)
-                mgr = app.servo_bus.manager
-                mgr.write_data_by_name(sid, "SERVO_ID", new_id)
-                time.sleep(0.5)
-                ok_ping = mgr.ping(new_id)
-                popup.dismiss()
-                owner._show_info_popup("写入ID " + ("成功" if ok_ping else "失败"))
-                try:
-                    mgr.servo_scan(list(range(1, 26)))
-                except Exception:
-                    pass
-                Clock.schedule_once(lambda dt: owner.refresh_servo_status(), 0.5)
-            except Exception as ex:
-                popup.dismiss()
-                owner._show_info_popup(f"写ID失败: {ex}")
-
-        def _do_cancel(_):
-            popup.dismiss()
-
-        ok.bind(on_release=_do_ok)
-        cancel.bind(on_release=_do_cancel)
-        popup.open()
+        owner._show_info_popup("WiFi 模式暂不支持修改舵机 ID")
 
     def _set_motor_mode(_):
-        sid = _get_sid()
-        app = App.get_running_app()
-        if not (
-            hasattr(app, "servo_bus")
-            and app.servo_bus
-            and not getattr(app.servo_bus, "is_mock", True)
-        ):
-            owner._show_info_popup("ServoBus 未连接")
-            return
-        if not _require_sid_online(sid, strict=False):
-            return
-        content = BoxLayout(orientation="vertical", spacing=8, padding=8)
-        btn_servo = tech_button_cls(text="舵机模式")
-        btn_dc = tech_button_cls(text="直流电机模式")
-        btn_row = BoxLayout(size_hint_y=None, height=dp(44), spacing=8)
-        btn_row.add_widget(btn_servo)
-        btn_row.add_widget(btn_dc)
-        content.add_widget(btn_row)
-        popup = Popup(
-            title="设置电机模式",
-            content=content,
-            size_hint=(None, None),
-            size=(320, 120),
-        )
-
-        def _do(mode):
-            try:
-                mgr = app.servo_bus.manager
-                mgr.write_data_by_name(sid, "MOTOR_MODE", mode)
-                popup.dismiss()
-                owner._show_info_popup("已设置电机模式")
-            except Exception as ex:
-                popup.dismiss()
-                owner._show_info_popup(f"设置模式失败: {ex}")
-
-        btn_servo.bind(on_release=lambda *_: _do(0x01))
-        btn_dc.bind(on_release=lambda *_: _do(0x00))
-        popup.open()
+        owner._show_info_popup("WiFi 模式暂不支持设置电机模式")
 
     def _do_c_go(_):
         try:
@@ -834,8 +627,9 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
             return
 
         app = App.get_running_app()
-        if not (hasattr(app, "servo_bus") and app.servo_bus and not getattr(app.servo_bus, "is_mock", True)):
-            owner._show_info_popup("舵机未连接")
+        wifi_ctrl = getattr(app, "wifi_servo", None)
+        if not (wifi_ctrl and wifi_ctrl.is_connected):
+            owner._show_info_popup("未连接舵机")
             return
         if not _require_sid_online(sid, strict=False):
             return
@@ -846,9 +640,8 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
         def _thread_bg():
             try:
                 _ensure_torque()
-                mgr = app.servo_bus.manager
-                pos_a = int(deg_a / 360.0 * 4095)
-                pos_b = int(deg_b / 360.0 * 4095)
+                pos_a = int(deg_a / 360.0 * 1000)
+                pos_b = int(deg_b / 360.0 * 1000)
 
                 while ctrl['running']:
                     try:
@@ -858,7 +651,7 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
                         dur = 500
 
                     try:
-                        mgr.set_position_time(sid, pos_a, time_ms=dur)
+                        wifi_ctrl.set_single(sid, pos_a, duration_ms=dur)
                     except Exception:
                         pass
 
@@ -871,7 +664,7 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
                         break
 
                     try:
-                        mgr.set_position_time(sid, pos_b, time_ms=dur)
+                        wifi_ctrl.set_single(sid, pos_b, duration_ms=dur)
                     except Exception:
                         pass
 

@@ -10,7 +10,7 @@ import json
 from kivy.utils import platform
 from kivy.clock import Clock
 
-# 导入运行时适配模块与服务，以便保留原有接口给 app_root 调用
+# 导入运行时适配模块与服务
 from app import esp32_runtime as esp32_runtime
 from app import device_runtime
 from services.balance_ctrl import BalanceController
@@ -18,7 +18,7 @@ from services.imu import IMUReader
 from services.motion_controller import MotionController
 from widgets.runtime_status import RuntimeStatusLogger
 from services.ai_core import AICore
-from services.servo_bus import ServoBus
+from services.wifi_servo import get_controller as get_wifi_servo, load_host, init_controller
 from services.neutral import load_neutral
 
 
@@ -37,44 +37,25 @@ def init_android_permissions(app):
 
 
 def init_servo_bus(app):
-    """兼容接口：初始化 `app.servo_bus`。
+    """初始化 wifi_servo 控制器。
 
-    优先使用 `esp32_runtime.try_auto_connect`，其内部会尝试基于环境或传入值连接 ESP32；
-    若未连接则创建本地 `ServoBus`（若无主机则进入 mock 模式）。
+    优先 esp32_runtime.try_auto_connect → 若失败则启动后台发现。
     """
     try:
-        try:
-            ok = esp32_runtime.try_auto_connect(app)
-            if ok and getattr(app, 'servo_bus', None):
-                return True
-        except Exception:
-            pass
-
-        try:
-            sb = ServoBus(port=os.environ.get('ESP32_HOST') or None)
-            try:
-                app.servo_bus = sb
-            except Exception:
-                pass
-            if not getattr(sb, 'is_mock', True):
-                try:
-                    RuntimeStatusLogger.log_info(f"ServoBus connected to {getattr(sb, '_host', None)}")
-                except Exception:
-                    pass
-            else:
-                try:
-                    RuntimeStatusLogger.log_info("ServoBus in mock mode (no ESP32 host)")
-                except Exception:
-                    pass
-                try:
-                    esp32_runtime.start_background_discovery(app, interval_sec=5.0, allow_ble_provision=True)
-                except Exception:
-                    pass
+        ok = esp32_runtime.try_auto_connect(app)
+        if ok:
             return True
-        except Exception:
-            return False
     except Exception:
-        return False
+        pass
+    # 主机未知，启动后台 UDP 发现（不自动触发 BLE 配网）
+    try:
+        esp32_runtime.start_background_discovery(
+            app, interval_sec=8.0, max_attempts=4, allow_ble_provision=False,
+        )
+    except Exception:
+        pass
+    RuntimeStatusLogger.log_info("wifi_servo 等待连接")
+    return False
 
 
 
@@ -174,15 +155,13 @@ def init_balance_and_gyro(app):
 
 def init_motion_controller(app, neutral):
     try:
-        if app.servo_bus and not getattr(app.servo_bus, "is_mock", True):
+        ctrl = getattr(app, "wifi_servo", None) or get_wifi_servo()
+        if ctrl and ctrl.is_connected:
             imu = IMUReader(simulate=False)
             imu.start()
-            try:
-                app.imu_reader = imu
-            except Exception:
-                pass
+            app.imu_reader = imu
             app.motion_controller = MotionController(
-                app.servo_bus.manager,
+                servo_manager=None,
                 balance_ctrl=app.balance_ctrl,
                 imu_reader=imu,
                 neutral_positions=neutral,
@@ -206,10 +185,11 @@ def init_runtime_loops(app):
     update_interval = 0.12 if runtime_profile == "mobile" else 0.1
     Clock.schedule_interval(app._update_loop, update_interval)
 
-    # 连续硬件同步（_update_loop 内 move_sync）默认随是否真实连接自动开启；可在高级设置中关闭
+    # 连续硬件同步默认随 wifi_servo 连接状态自动开启
     default_live_sync = False
     try:
-        default_live_sync = bool(app.servo_bus and not getattr(app.servo_bus, "is_mock", True))
+        ctrl = getattr(app, "wifi_servo", None) or get_wifi_servo()
+        default_live_sync = bool(ctrl and ctrl.is_connected)
     except Exception:
         default_live_sync = False
     app._enable_live_servo_sync = bool(getattr(app, "_enable_live_servo_sync", default_live_sync))
