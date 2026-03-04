@@ -161,7 +161,7 @@ class RuntimeStatusPanel(BoxLayout):
             'info': '▶',
             'action': '►',
             'servo': '⚙',
-            'error': '✖',
+            'error': 'x',
         }
         prefix = prefix_map.get(category, '▶')
 
@@ -171,7 +171,7 @@ class RuntimeStatusPanel(BoxLayout):
             pass
 
         # 纯文本格式（TextInput 不支持 markup）
-        formatted_log = f'{prefix} {timestamp} {message}'
+        formatted_log = f'{timestamp} {message}'
         
         with self._lock:
             self.logs.append(formatted_log)

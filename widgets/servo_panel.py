@@ -17,7 +17,7 @@ class ServoPanel(BoxLayout):
 
         row = BoxLayout(size_hint_y=None, height=40, spacing=6)
         row.add_widget(Label(text=f"S{sid}", size_hint_x=0.15))
-        slider = Slider(min=0, max=1000, value=500)
+        slider = Slider(min=0, max=4095, value=2048)
         slider.bind(value=lambda inst, val, sid=sid: self.set_servo(sid, val))
         row.add_widget(slider)
         self.ids.container.add_widget(row)

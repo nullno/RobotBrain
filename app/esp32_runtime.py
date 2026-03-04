@@ -10,8 +10,6 @@ from services.wifi_servo import (
     WiFiServoController, init_controller, get_controller,
     save_host, load_host, udp_discover,
 )
-from services.imu import IMUReader
-from services.motion_controller import MotionController
 from widgets.runtime_status import RuntimeStatusLogger
 
 logger = logging.getLogger(__name__)
@@ -125,20 +123,9 @@ def stop_background_discovery(app):
 # ────────────────── 运动控制器 ──────────────────
 
 def init_motion_controller_after_connect(app):
-    """连接成功后初始化 IMU + MotionController。"""
-    try:
-        imu = IMUReader(simulate=False)
-        imu.start()
-        app.imu_reader = imu
-        app.motion_controller = MotionController(
-            servo_manager=None,
-            balance_ctrl=getattr(app, "balance_ctrl", None),
-            imu_reader=imu,
-            neutral_positions={},
-        )
-    except Exception as e:
-        logger.warning("MotionController 初始化失败: %s", e)
-        app.motion_controller = None
+    """连接成功后初始化占位字段（本地 IMU/串口已弃用）。"""
+    app.imu_reader = None
+    app.motion_controller = None
 
 
 # ────────────────── 兼容 stubs ──────────────────

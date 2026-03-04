@@ -41,9 +41,9 @@ logger = logging.getLogger(__name__)
 # UDP 调试输出开关，默认关闭，设环境变量 WIFI_SERVO_UDP_DEBUG=1 可开启
 UDP_DEBUG = bool(int(os.environ.get("WIFI_SERVO_UDP_DEBUG", "0") or 0))
 
-# ESP32 固件伺服范围（与 a_Firmware/esp32/main.py 中 SERVO_MIN/MAX 一致）
+# ESP32 固件舵机范围（12bit，0-4095，与 a_Firmware/esp32/servo_controller.py 对齐）
 SERVO_MIN = 0
-SERVO_MAX = 1000
+SERVO_MAX = 4095
 DEFAULT_UDP_PORT = 5005
 MAX_SERVO_ID = 25
 
@@ -106,7 +106,7 @@ class WiFiServoController:
         """发送舵机目标位置。
 
         Args:
-            targets: {servo_id: position} 字典，position 范围 0-1000
+            targets: {servo_id: position} 字典，position 范围 0-4095
             duration_ms: 运动时间（毫秒）
         Returns:
             是否发送成功

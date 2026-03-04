@@ -77,59 +77,6 @@ TORQUE_ON = 0x01
 TORQUE_OFF = 0x00
 
 
-class InterpolationEngine:
-    """舵机运动插值平滑引擎。
-
-    对每个舵机维护当前位置和目标位置，通过 smoothstep 插值
-    分步输出中间值，让运动更自然顺畅。
-    """
-
-    def __init__(self):
-        self._targets = {}    # {sid: (target_pos, duration_ms, start_time, start_pos)}
-        self._current = {}    # {sid: current_pos}
-
-    def set_target(self, sid, target_pos, duration_ms, current_pos=None):
-        sid = int(sid)
-        target_pos = max(0, min(4095, int(target_pos)))
-        duration_ms = max(1, int(duration_ms))
-        now = time.ticks_ms()
-        start = current_pos if current_pos is not None else self._current.get(sid, target_pos)
-        self._targets[sid] = (target_pos, duration_ms, now, int(start))
-        self._current[sid] = int(start)
-
-    def update(self):
-        """计算当前时刻所有舵机的插值位置。"""
-        now = time.ticks_ms()
-        output = {}
-        done = []
-        for sid, (target, dur, start_t, start_pos) in self._targets.items():
-            elapsed = time.ticks_diff(now, start_t)
-            if elapsed >= dur:
-                self._current[sid] = target
-                output[sid] = target
-                done.append(sid)
-            else:
-                ratio = elapsed / dur
-                # smoothstep 缓动
-                ratio = ratio * ratio * (3.0 - 2.0 * ratio)
-                pos = int(start_pos + (target - start_pos) * ratio)
-                pos = max(0, min(4095, pos))
-                self._current[sid] = pos
-                output[sid] = pos
-        for sid in done:
-            del self._targets[sid]
-        return output
-
-    def has_pending(self):
-        return len(self._targets) > 0
-
-    def update_current(self, sid, pos):
-        self._current[int(sid)] = int(pos)
-
-    def get_current(self, sid):
-        return self._current.get(int(sid))
-
-
 class ServoController:
     """ESP32 舵机控制器（增强版）。"""
 
@@ -140,7 +87,6 @@ class ServoController:
         self._positions = {}
         self._online = set()
         self._status_cache = {}
-        self._interpolation = InterpolationEngine()
 
         if uart and UartServoManager:
             try:
@@ -188,52 +134,30 @@ class ServoController:
         log("scan: {} online".format(len(online)))
         return online
 
-    # ─────────────── 位置控制（带插值平滑）───────────────
+    # ─────────────── 位置控制（直接下发）───────────────
 
     def set_positions(self, targets, duration_ms=300):
         if not self._manager:
             return False
         dur = max(1, int(duration_ms))
         count = 0
-        direct_targets = {}
         for sid, pos in targets.items():
             try:
                 sid_i = int(sid)
                 pos_i = self._clamp(int(pos), 0, 4095)
-                cur = self._positions.get(sid_i)
-                self._interpolation.set_target(sid_i, pos_i, dur, cur)
                 self._positions[sid_i] = pos_i
-                direct_targets[sid_i] = pos_i
+                self._manager.set_servo_position(sid_i, pos_i, dur)
                 count += 1
             except Exception as e:
                 log("set_pos id={} err: {}".format(sid, e))
-
-        if count > 0:
-            # 短时间直接写入（快速响应旋钮操作）
-            if dur <= 120:
-                for sid_i, pos_i in direct_targets.items():
-                    try:
-                        self._manager.set_servo_position(sid_i, pos_i, dur)
-                        self._interpolation.update_current(sid_i, pos_i)
-                    except Exception:
-                        pass
-            # 较长时间走插值（由 interp_task 驱动）
         return count > 0
 
     def set_single(self, servo_id, position, duration_ms=300):
         return self.set_positions({int(servo_id): int(position)}, duration_ms)
 
     def interpolation_step(self):
-        """执行一步插值输出（由异步任务定时调用）。"""
-        if not self._manager or not self._interpolation.has_pending():
-            return False
-        output = self._interpolation.update()
-        for sid, pos in output.items():
-            try:
-                self._manager.set_servo_position(int(sid), int(pos), 30)
-            except Exception:
-                pass
-        return self._interpolation.has_pending()
+        """已禁用插值，直接返回。"""
+        return False
 
     # ─────────────── 位置读取 ───────────────
 
@@ -244,7 +168,6 @@ class ServoController:
             pos = self._manager.read_servo_position(int(servo_id))
             if pos is not None:
                 self._positions[int(servo_id)] = int(pos)
-                self._interpolation.update_current(int(servo_id), int(pos))
             return pos
         except Exception as e:
             log("read_pos id={} err: {}".format(servo_id, e))
@@ -404,6 +327,9 @@ class ServoController:
             pkt = pack_packet(int(servo_id), CODE_READ_DATA, params)
             self._manager.uart.write(pkt)
             resp = self._manager.read_response(timeout=80)
+            if resp and resp.get("type") == "read_data":
+                data = resp.get("data") or []
+                return data[0] if len(data) >= 1 else None
             if resp and resp.get("type") == "read_position":
                 val = resp.get("pos")
                 return val & 0xFF if val is not None else None
@@ -420,6 +346,11 @@ class ServoController:
             pkt = pack_packet(int(servo_id), CODE_READ_DATA, params)
             self._manager.uart.write(pkt)
             resp = self._manager.read_response(timeout=80)
+            if resp and resp.get("type") == "read_data":
+                data = resp.get("data") or []
+                if len(data) >= 2:
+                    return (data[0] << 8) | data[1]
+                return data[0] if data else None
             if resp and resp.get("type") == "read_position":
                 return resp.get("pos")
             return None

@@ -23,13 +23,13 @@ FloatLayout:
             id: gyro_panel
             size_hint: None, None
             size: dp(90), dp(120)
-            pos_hint: {"x": 0.01, "top": 0.99}
+            pos_hint: {"x": -0.02, "top": 1}
 
         Esp32Indicator:
             id: esp32_indicator
             size_hint: None, None
-            size: dp(120), dp(28)
-            pos_hint: {"right": 0.99, "top": 0.98}
+            size: dp(20), dp(20)
+            pos_hint: {"right": 0.99, "top": 0.985}
 
         RobotFace:
             id: face
@@ -47,7 +47,7 @@ FloatLayout:
         Button:
             size_hint: None, None
             size: dp(20), dp(20)
-            pos_hint: {"right": 0.98, "y": 0.06}
+            pos_hint: {"right": 0.98, "y": 0.04}
             background_normal: ""
             background_down: ""
             on_release: app.root_widget.ids.debug_panel.open_debug()

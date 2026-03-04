@@ -1,6 +1,8 @@
 import threading
 import time
 
+from services.wifi_servo import SERVO_MAX
+
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.metrics import dp
@@ -330,7 +332,7 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
         app = App.get_running_app()
         sid = _get_sid()
 
-        # 优先 WiFi 舵机控制器（固件范围 0-1000）
+        # 优先 WiFi 舵机控制器（固件范围 0-4095）
         wifi_ctrl = getattr(app, "wifi_servo", None)
         if not (wifi_ctrl and wifi_ctrl.is_connected):
             if show_tip:
@@ -340,7 +342,7 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
         def _do_wifi():
             try:
                 _ensure_torque()
-                pos = int(angle_deg / 360.0 * 1000)
+                pos = int(angle_deg / 360.0 * SERVO_MAX)
                 if duration_override is not None:
                     dur = max(0, int(duration_override))
                 else:
@@ -423,7 +425,7 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
                 pos = wifi_ctrl.read_servo_position(sid, timeout=1.0)
                 if pos is not None:
                     try:
-                        deg = max(0.0, min(360.0, (float(pos) / 1000.0) * 360.0))
+                        deg = max(0.0, min(360.0, (float(pos) / float(SERVO_MAX)) * 360.0))
                         Clock.schedule_once(lambda dt, d=deg: _set_knob_and_text(d), 0)
                     except Exception:
                         pass
@@ -583,8 +585,8 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
         owner._mark_servo_writable(sid)
 
         def _run_spin():
-            a = 139   # ~50° in 0-1000 range
-            b = 972   # ~350° in 0-1000 range
+            a = int(SERVO_MAX * (50.0 / 360.0))   # ≈50°
+            b = int(SERVO_MAX * (350.0 / 360.0))  # ≈350°
             try:
                 while stop_flag["running"]:
                     try:
@@ -653,8 +655,8 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
         def _thread_bg():
             try:
                 _ensure_torque()
-                pos_a = int(deg_a / 360.0 * 1000)
-                pos_b = int(deg_b / 360.0 * 1000)
+                pos_a = int(deg_a / 360.0 * SERVO_MAX)
+                pos_b = int(deg_b / 360.0 * SERVO_MAX)
 
                 while ctrl['running']:
                     try:

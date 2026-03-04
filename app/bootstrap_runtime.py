@@ -12,8 +12,6 @@ from kivy.clock import Clock
 
 # 导入运行时适配模块与服务
 from app import esp32_runtime as esp32_runtime
-from app import device_runtime
-from services.motion_controller import MotionController
 from widgets.runtime_status import RuntimeStatusLogger
 from services.ai_core import AICore
 from services.wifi_servo import get_controller as get_wifi_servo, load_host, init_controller
@@ -21,17 +19,8 @@ from services.neutral import load_neutral
 
 
 def init_android_permissions(app):
-    """兼容接口：检查并触发 Android 权限提示/监视器（非 Android 环境为 no-op）。"""
-    try:
-        missing = device_runtime.check_android_permissions()
-        if missing:
-            try:
-                device_runtime.start_permission_watcher(app)
-            except Exception:
-                pass
-        return missing
-    except Exception:
-        return []
+    """兼容接口（已弃用本地权限监控）。"""
+    return []
 
 
 def init_servo_bus(app):
@@ -143,11 +132,6 @@ def init_neutral_positions(app):
     app.balance_ctrl = None
     app.motion_controller = None
     app.imu_reader = None
-
-    try:
-        app._setup_gyroscope()
-    except Exception:
-        pass
 
     return neutral
 
@@ -263,9 +247,8 @@ def init_ai_core(app):
 
 
 def start_permission_and_otg_watchers(app):
-    Clock.schedule_once(lambda dt: app._start_permission_watcher(), 0.6)
-
+    # 已弃用本地 OTG/串口监测
     try:
-        RuntimeStatusLogger.log_info("已启用 ESP32 网络模式：不再使用本地 OTG/串口监测")
+        RuntimeStatusLogger.log_info("已弃用本地 OTG/串口监测")
     except Exception:
         pass

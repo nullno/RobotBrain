@@ -91,6 +91,29 @@ def unpack_packet(packet):
             "pos": pos
         }
 
+    # ---------- 通用读寄存器回包（长度 >= 3 + 数据 + 校验） ----------
+    # 格式: FF F5 ID LEN STATUS [DATA...] CHECK
+    if len(packet) >= 7 and packet[0:2] == HEADER_RESP:
+        servo_id = packet[2]
+        length = packet[3]
+        status = packet[4]
+        data_len = max(0, length - 2)  # LEN = status(1) + data(n) + checksum(1)
+        expected_len = 4 + length      # header(2)+id(1)+len(1)+payload(length)
+        if len(packet) != expected_len:
+            return None
+        data_bytes = list(packet[5:5 + data_len]) if data_len > 0 else []
+        checksum = packet[-1]
+        calc = (~(servo_id + length + status + sum(data_bytes))) & 0xFF
+        if checksum != calc:
+            return None
+        return {
+            "header": 0xFFF5,
+            "id": servo_id,
+            "status": status,
+            "type": "read_data",
+            "data": data_bytes,
+        }
+
     return None
 
 
@@ -124,7 +147,7 @@ class PacketParser:
 
             # 判断长度字段
             length = self.buf[3]
-            need = 8 if length == 4 else 6
+            need = 4 + length  # header(2)+id(1)+len(1)+payload(len)
 
             if len(self.buf) < need:
                 break

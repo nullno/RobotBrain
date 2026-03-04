@@ -192,41 +192,19 @@ def _enter_main_ui(app, gate):
 
 def refresh_link_indicator(app, dt=0):
     """10 秒周期心跳检测，带失败重试（最多 2 次快速重试）。"""
-    now = time.time()
-    last_check = float(getattr(app, "_link_last_check_time", 0.0) or 0.0)
-    interval = 10.0  # 10 秒检测一次
-    if (now - last_check) < interval:
-        return
-    app._link_last_check_time = now
-
     try:
         indicator = None
         root = getattr(app, "root_widget", None)
         if root and getattr(root, "ids", None):
             indicator = root.ids.get("esp32_indicator")
         ctrl = getattr(app, "wifi_servo", None) or get_wifi_servo()
+       
+        host = getattr(ctrl, "host", "") if ctrl else ""
+        connected = bool(ctrl and ctrl.is_connected)
+        state = {"connected": connected, "host": host}
         if indicator:
-            state = {
-                "connected": bool(ctrl and ctrl.is_connected),
-                "host": getattr(ctrl, "host", "") if ctrl else "",
-            }
-            if ctrl and ctrl.is_connected:
-                st = None
-                # 失败重试：最多 2 次
-                for _retry in range(2):
-                    try:
-                        st = ctrl.request_status(timeout=1.0)
-                        if st:
-                            break
-                    except Exception:
-                        pass
-                    time.sleep(0.3)
-                if st:
-                    state["wifi_rssi"] = st.get("wifi", {}).get("rssi", 0)
-                    state["servo_count"] = len(st.get("servos", {}))
-                else:
-                    state["connected"] = False
             indicator.update_state(state)
+
     except Exception:
         pass
 

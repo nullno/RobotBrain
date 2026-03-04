@@ -21,7 +21,6 @@ from widgets.connection_status import (
 )
 from app import esp32_runtime as e_runtime
 from services.wifi_servo import get_controller as get_wifi_servo
-from app import device_runtime
 from app import bootstrap_runtime
 from app import ai_runtime
 from app import android_ui_runtime
@@ -30,7 +29,6 @@ from app import platform_runtime
 import logging
 import traceback
 
-gyroscope = platform_runtime.load_gyroscope_module()
 run_on_ui_thread = platform_runtime.get_run_on_ui_thread() or (lambda f: f)
 
 
@@ -89,7 +87,6 @@ class RobotDashboardApp(App):
         bootstrap_runtime.init_ai_core(self)
         bootstrap_runtime.init_runtime_loops(self)
         bootstrap_runtime.init_runtime_status_panel(self)
-        bootstrap_runtime.start_permission_and_otg_watchers(self)
 
         # 周期刷新右上角链路指示
         # 心跳检测每 2 秒调度一次，但内部实现 10 秒间隔
@@ -115,16 +112,6 @@ class RobotDashboardApp(App):
             pass
 
     # ================== 硬件 ==================
-    def _setup_gyroscope(self):
-        global gyroscope
-        gyroscope = device_runtime.setup_gyroscope(self)
-
-    def _check_android_permissions(self):
-        return device_runtime.check_android_permissions()
-
-    def _start_permission_watcher(self):
-        device_runtime.start_permission_watcher(self)
-
     def _safe_refresh_ui(self, dt=0):
         ui_runtime.safe_refresh_ui(self, dt=dt)
 
@@ -144,8 +131,8 @@ class RobotDashboardApp(App):
                     )
         except Exception:
             pass
-        # 无连接时回退到设备本地传感器
-        return device_runtime.get_gyro_data(self, gyroscope)
+        # 无连接时返回零姿态
+        return (0.0, 0.0, 0.0)
 
     # ================== ESP32 引导弹窗 ==================
     def _ensure_esp32_popup(self):
