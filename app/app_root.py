@@ -26,7 +26,6 @@ from app import bootstrap_runtime
 from app import ai_runtime
 from app import android_ui_runtime
 from app import ui_runtime
-from app import balance_runtime
 from app import platform_runtime
 import logging
 import traceback
@@ -56,15 +55,15 @@ class RobotDashboardApp(App):
         except Exception:
             return True
 
-    # ================== 平衡参数持久化 ==================
+    # ================== 平衡参数（已迁移至固件） ==================
     def _balance_tuning_file(self):
-        return balance_runtime.balance_tuning_file(self)
+        return None
 
     def save_balance_tuning(self):
-        return balance_runtime.save_balance_tuning(self)
+        return False
 
     def load_balance_tuning(self):
-        return balance_runtime.load_balance_tuning(self)
+        return False
 
     # ================== 生命周期 ==================
     def on_start(self):
@@ -84,15 +83,16 @@ class RobotDashboardApp(App):
         bootstrap_runtime.init_servo_bus(self)
         bootstrap_runtime.init_logging(self)
 
-        neutral = bootstrap_runtime.init_balance_and_gyro(self)
+        # 加载中位值（不再初始化本地平衡控制器，平衡算法已迁移至固件）
+        bootstrap_runtime.init_neutral_positions(self)
 
         bootstrap_runtime.init_ai_core(self)
-        bootstrap_runtime.init_motion_controller(self, neutral)
         bootstrap_runtime.init_runtime_loops(self)
         bootstrap_runtime.init_runtime_status_panel(self)
         bootstrap_runtime.start_permission_and_otg_watchers(self)
 
         # 周期刷新右上角链路指示
+        # 心跳检测每 2 秒调度一次，但内部实现 10 秒间隔
         Clock.schedule_interval(lambda dt: refresh_link_indicator(self), 2.0)
 
         # 配网门禁：未联网前遮罩主界面，主界面容器初始 opacity=0
@@ -129,26 +129,22 @@ class RobotDashboardApp(App):
         ui_runtime.safe_refresh_ui(self, dt=dt)
 
     def _get_gyro_data(self):
+        """从 ESP32 WiFi telemetry 获取 IMU 数据。"""
         try:
             ctrl = getattr(self, 'wifi_servo', None) or get_wifi_servo()
             if ctrl and ctrl.is_connected:
                 imu_data = ctrl.get_imu()
-                if imu_data:
-                    return imu_data.get('pitch', 0), imu_data.get('roll', 0), imu_data.get('yaw', 0)
+                if imu_data and isinstance(imu_data, tuple):
+                    return imu_data
+                if imu_data and isinstance(imu_data, dict):
+                    return (
+                        float(imu_data.get('pitch', 0)),
+                        float(imu_data.get('roll', 0)),
+                        float(imu_data.get('yaw', 0)),
+                    )
         except Exception:
             pass
-        try:
-            imu = getattr(self, 'imu_reader', None)
-            if imu:
-                return imu.get_orientation()
-        except Exception:
-            pass
-        try:
-            mc = getattr(self, 'motion_controller', None)
-            if mc and getattr(mc, 'imu', None):
-                return mc.imu.get_orientation()
-        except Exception:
-            pass
+        # 无连接时回退到设备本地传感器
         return device_runtime.get_gyro_data(self, gyroscope)
 
     # ================== ESP32 引导弹窗 ==================
@@ -183,6 +179,7 @@ class RobotDashboardApp(App):
 
     # ================== 主循环 ==================
     def _update_loop(self, dt):
+        """主循环：仅更新 UI 显示（IMU 姿态面板），平衡算法已迁移至固件。"""
         try:
             p, r, y = self._get_gyro_data()
             now = time.time()
@@ -196,70 +193,6 @@ class RobotDashboardApp(App):
                 if 'gyro_panel' in self.root_widget.ids:
                     self.root_widget.ids.gyro_panel.update(p, r, y)
                 self._last_gyro_ui_update_time = now
-
-            ctrl = getattr(self, 'wifi_servo', None) or get_wifi_servo()
-            if ctrl and ctrl.is_connected:
-                if not bool(getattr(self, '_enable_live_servo_sync', False)):
-                    return
-
-                suspend_sync_until = float(getattr(self, '_suspend_servo_sync_until', 0.0) or 0.0)
-                if now < suspend_sync_until:
-                    return
-
-                active_period = float(getattr(self, '_sync_active_period', 0.1) or 0.1)
-                idle_period = float(getattr(self, '_sync_idle_period', 0.22) or 0.22)
-                pose_threshold = float(getattr(self, '_sync_pose_threshold_deg', 0.5) or 0.5)
-                target_threshold = int(getattr(self, '_sync_target_threshold', 3) or 3)
-                compute_pose_threshold = float(getattr(self, '_sync_compute_pose_threshold_deg', 0.2) or 0.2)
-                compute_idle_period = float(getattr(self, '_sync_compute_idle_period', idle_period) or idle_period)
-
-                last_compute_t = float(getattr(self, '_last_sync_compute_time', 0.0) or 0.0)
-                last_compute_pitch = float(getattr(self, '_last_sync_compute_pitch', 0.0) or 0.0)
-                last_compute_roll = float(getattr(self, '_last_sync_compute_roll', 0.0) or 0.0)
-                last_targets = getattr(self, '_last_sync_targets', None)
-
-                compute_due = (now - last_compute_t) >= max(0.05, compute_idle_period)
-                compute_pose_changed = (
-                    last_targets is None
-                    or abs(float(p) - last_compute_pitch) >= compute_pose_threshold
-                    or abs(float(r) - last_compute_roll) >= compute_pose_threshold
-                )
-
-                if compute_pose_changed or compute_due:
-                    targets = self.balance_ctrl.compute(p, r, y)
-                    self._last_sync_compute_time = now
-                    self._last_sync_compute_pitch = float(p)
-                    self._last_sync_compute_roll = float(r)
-                else:
-                    targets = last_targets
-                    if not isinstance(targets, dict):
-                        targets = None
-
-                last_send_t = float(getattr(self, '_last_sync_send_time', 0.0) or 0.0)
-                last_pitch = float(getattr(self, '_last_sync_pitch', 0.0) or 0.0)
-                last_roll = float(getattr(self, '_last_sync_roll', 0.0) or 0.0)
-
-                pose_changed = (
-                    abs(float(p) - last_pitch) >= pose_threshold
-                    or abs(float(r) - last_roll) >= pose_threshold
-                )
-                target_changed = self._targets_changed(targets, last_targets, threshold=target_threshold)
-                elapsed = now - last_send_t
-
-                should_send = False
-                if last_targets is None:
-                    should_send = True
-                elif pose_changed or target_changed:
-                    should_send = elapsed >= active_period
-                else:
-                    should_send = elapsed >= idle_period
-
-                if should_send:
-                    ctrl.set_targets(targets or {}, duration_ms=100)
-                    self._last_sync_send_time = now
-                    self._last_sync_targets = dict(targets or {})
-                    self._last_sync_pitch = float(p)
-                    self._last_sync_roll = float(r)
         except Exception as e:
             try:
                 now = time.time()

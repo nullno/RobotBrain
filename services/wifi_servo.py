@@ -221,6 +221,49 @@ class WiFiServoController:
         logger.info("set_single servo %d pos=%d dur=%d → %s", servo_id, position, duration_ms, "ok" if ok else "fail")
         return ok
 
+    def read_full_status(self, servo_id: int, timeout: float = 0.8) -> Optional[Dict[str, Any]]:
+        """读取指定舵机完整状态（位置、温度、电压、电流、速度等）。"""
+        payload = {"type": "read_full_status", "servo_id": int(servo_id)}
+        resp = self._send_and_recv(payload, timeout)
+        if resp and resp.get("type") == "read_full_status_resp":
+            data = resp.get("data") or {}
+            logger.info("read_full_status servo %d → %s", servo_id, data)
+            return data
+        logger.warning("read_full_status servo %d → timeout", servo_id)
+        return None
+
+    def read_temperature(self, servo_id: int, timeout: float = 0.5) -> Optional[int]:
+        """读取指定舵机温度（℃）。"""
+        payload = {"type": "read_temperature", "servo_id": int(servo_id)}
+        resp = self._send_and_recv(payload, timeout)
+        if resp and resp.get("type") == "read_temperature_resp":
+            return resp.get("temperature")
+        return None
+
+    def read_voltage(self, servo_id: int, timeout: float = 0.5) -> Optional[float]:
+        """读取指定舵机供电电压（V）。"""
+        payload = {"type": "read_voltage", "servo_id": int(servo_id)}
+        resp = self._send_and_recv(payload, timeout)
+        if resp and resp.get("type") == "read_voltage_resp":
+            return resp.get("voltage")
+        return None
+
+    def set_torque_single(self, servo_id: int, enable: bool = True, timeout: float = 0.5) -> bool:
+        """使能或释放单个舵机扭矩。"""
+        payload = {"type": "torque_single", "servo_id": int(servo_id), "enable": bool(enable)}
+        resp = self._send_and_recv(payload, timeout)
+        ok = bool(resp and resp.get("ok"))
+        logger.info("torque_single servo %d enable=%s → %s", servo_id, enable, "ok" if ok else "fail")
+        return ok
+
+    def change_servo_id(self, old_id: int, new_id: int, timeout: float = 0.5) -> bool:
+        """修改舵机 ID（需写入 EEPROM）。"""
+        payload = {"type": "set_servo_id", "old_id": int(old_id), "new_id": int(new_id)}
+        resp = self._send_and_recv(payload, timeout)
+        ok = bool(resp and resp.get("ok"))
+        logger.info("set_servo_id %d → %d: %s", old_id, new_id, "ok" if ok else "fail")
+        return ok
+
     # -------------------- 状态查询 --------------------
 
     def request_status(self, timeout: float = 0.5) -> Optional[Dict[str, Any]]:

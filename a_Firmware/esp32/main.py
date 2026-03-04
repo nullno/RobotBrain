@@ -16,6 +16,8 @@ import machine
 
 #  模块化导入 
 from servo_controller import ServoController
+from imu_controller import IMUController
+from balance_controller import BalanceController
 
 try:
     import network
@@ -69,6 +71,18 @@ except Exception as e:
 
 # 舵机控制器（模块化）
 servo = ServoController(uart, servo_count=SERVO_COUNT)
+
+# IMU 控制器（互补滤波）
+imu_ctrl = IMUController(i2c, addr=IMU_ADDR)
+try:
+    if i2c is not None:
+        imu_ctrl.init()
+        print("imu controller init ok")
+except Exception as e:
+    print("imu controller init failed: {}".format(e))
+
+# 平衡控制器
+balance_ctrl = BalanceController()
 
 # 全局状态
 state = {
@@ -165,25 +179,13 @@ def update_ble_wifi_status(info=None):
 
 #  IMU 读取 
 def read_mpu6050():
-    if i2c is None:
-        return None
+    """使用 IMU 控制器更新姿态（互补滤波）。"""
     try:
-        i2c.writeto_mem(IMU_ADDR, 0x6B, b"\x00")
-        data = i2c.readfrom_mem(IMU_ADDR, 0x3B, 14)
-
-        def to_i16(h, l):
-            v = (h << 8) | l
-            return v - 65536 if v & 0x8000 else v
-
-        ax = to_i16(data[0], data[1])
-        ay = to_i16(data[2], data[3])
-        az = to_i16(data[4], data[5])
-        gx = to_i16(data[8], data[9])
-        gy = to_i16(data[10], data[11])
-        gz = to_i16(data[12], data[13])
-        state["imu"].update({"accel": (ax, ay, az), "gyro": (gx, gy, gz)})
+        result = imu_ctrl.update()
+        if result:
+            state["imu"] = imu_ctrl.get_state_dict()
     except Exception:
-        return None
+        pass
     return state["imu"]
 
 
@@ -363,6 +365,54 @@ async def handle_command(msg, addr, sock=None):
         servo.set_single(sid, pos, dur)
         resp = {"type": "set_single_resp", "ok": True, "servo_id": sid}
 
+    elif mtype == "read_full_status":
+        sid = int(msg.get("servo_id", 1))
+        st = servo.read_full_status(sid)
+        resp = {"type": "read_full_status_resp", "servo_id": sid, "data": st or {}}
+
+    elif mtype == "read_temperature":
+        sid = int(msg.get("servo_id", 1))
+        temp = servo.read_temperature(sid)
+        resp = {"type": "read_temperature_resp", "servo_id": sid, "temperature": temp}
+
+    elif mtype == "read_voltage":
+        sid = int(msg.get("servo_id", 1))
+        volt = servo.read_voltage(sid)
+        resp = {"type": "read_voltage_resp", "servo_id": sid, "voltage": volt}
+
+    elif mtype == "torque_single":
+        sid = int(msg.get("servo_id", 1))
+        enable = bool(msg.get("enable", True))
+        if enable:
+            servo.torque_on([sid])
+        else:
+            servo.torque_off([sid])
+        resp = {"type": "torque_single_resp", "ok": True, "servo_id": sid}
+
+    elif mtype == "set_servo_id":
+        old_id = int(msg.get("old_id", 1))
+        new_id = int(msg.get("new_id", 1))
+        servo.set_servo_id(old_id, new_id)
+        resp = {"type": "set_servo_id_resp", "ok": True}
+
+    elif mtype == "balance_enable":
+        enable = bool(msg.get("enable", True))
+        balance_ctrl.enabled = enable
+        resp = {"type": "balance_enable_resp", "enabled": balance_ctrl.enabled}
+
+    elif mtype == "balance_set_gains":
+        balance_ctrl.set_gains(
+            gain_p=msg.get("gain_p"),
+            gain_r=msg.get("gain_r"),
+            gain_y=msg.get("gain_y"),
+        )
+        resp = {
+            "type": "balance_set_gains_resp",
+            "gain_p": balance_ctrl.gain_p,
+            "gain_r": balance_ctrl.gain_r,
+            "gain_y": balance_ctrl.gain_y,
+        }
+
     else:
         log("cmd: unknown type={}".format(mtype))
 
@@ -473,30 +523,66 @@ async def ble_status_task():
 
 
 async def imu_task():
+    """10ms IMU 采样 + 互补滤波更新。"""
     while True:
         read_mpu6050()
+        await asyncio.sleep_ms(10)
+
+
+async def balance_task():
+    """平衡控制任务 —— 50ms 周期读取 IMU 姿态，计算补偿并驱动舵机。"""
+    await asyncio.sleep_ms(5000)  # 等待系统初始化
+    while True:
+        if balance_ctrl.enabled:
+            try:
+                p = imu_ctrl.pitch
+                r = imu_ctrl.roll
+                y = imu_ctrl.yaw
+                targets = balance_ctrl.compute(p, r, y)
+                if targets:
+                    servo.set_positions(
+                        {str(sid): pos for sid, pos in targets.items()},
+                        duration=80,
+                    )
+            except Exception:
+                pass
         await asyncio.sleep_ms(50)
 
 
 async def servo_poll_task():
-    """周期性读取在线舵机位置，保持缓存更新。"""
-    await asyncio.sleep_ms(3000)  # 启动后延迟
+    """后台轮询读取舵机完整状态（温度、电压、位置等）。"""
+    await asyncio.sleep_ms(3000)
+    poll_index = 0
     while True:
         if servo.available:
             try:
-                cached = servo.get_cached_positions()
-                if cached:
-                    # 轮询已知舵机位置（每次最多6个）
-                    ids = list(cached.keys())[:6]
-                    for sid in ids:
-                        try:
-                            servo.read_position(sid)
-                        except Exception:
-                            pass
-                        await asyncio.sleep_ms(20)
+                online = servo.get_online_ids()
+                if not online:
+                    online = list(range(1, SERVO_COUNT + 1))
+                # 每次读取一批（4个）的完整状态
+                batch_size = 4
+                start = poll_index % len(online)
+                batch = online[start:start + batch_size]
+                for sid in batch:
+                    try:
+                        servo.read_full_status(sid)
+                    except Exception:
+                        pass
+                    await asyncio.sleep_ms(15)
+                poll_index += batch_size
             except Exception:
                 pass
-        await asyncio.sleep_ms(500)
+        await asyncio.sleep_ms(400)
+
+
+async def interpolation_task():
+    """插值平滑输出任务 —— 20ms 周期驱动舵机平滑运动。"""
+    while True:
+        try:
+            servo.interpolation_step()
+        except Exception:
+            pass
+        await asyncio.sleep_ms(20)
 
 
 async def ws_task():
@@ -631,7 +717,9 @@ async def main():
     asyncio.create_task(udp_server())
     asyncio.create_task(telemetry_task())
     asyncio.create_task(imu_task())
+    asyncio.create_task(balance_task())
     asyncio.create_task(servo_poll_task())
+    asyncio.create_task(interpolation_task())
     asyncio.create_task(ws_task())
     asyncio.create_task(http_server())
 

@@ -76,7 +76,8 @@ class AngleKnob(FloatLayout):
                 self._anim_ev = None
             return False
 
-        alpha = min(1.0, max(0.0, dt * 20.0))
+        # 更快的插值系数，跟手更丝滑
+        alpha = min(1.0, max(0.0, dt * 30.0))
         self.display_value = current + delta * alpha
         return True
 
@@ -155,13 +156,15 @@ class AngleKnob(FloatLayout):
 
         dist_sq = dx * dx + dy * dy
         max_r = self._radius + dp(18)
-        min_r = max(dp(16), self._radius * 0.35)
+        min_r = max(dp(16), self._radius * 0.25)
         if dist_sq < (min_r * min_r) or dist_sq > (max_r * max_r):
             return
 
         raw = (90.0 - (atan2(dy, dx) * 180.0 / 3.1415926)) % 360.0
 
         if self._drag_last_raw is None:
+            # 首次触摸直接跳转到该角度，立即响应
+            self.set_value(raw)
             self._drag_last_raw = raw
             return
 

@@ -243,11 +243,15 @@ def render_status_cards(owner, cards):
 
 
 def refresh_servo_status(owner):
+    """刷新舵机连接状态 —— 始终显示全部 25 个卡片。
+
+    在线舵机显示实时数据，离线舵机显示灰色占位卡。
+    """
     status_grid = getattr(owner, "_status_grid", None)
     if status_grid is None:
         return
 
-    # 首次刷新先填充占位卡，避免出现空白页（尤其是移动端首帧）
+    # 首次刷新先填充全部 25 张占位卡
     try:
         has_widgets = bool(getattr(status_grid, "children", None))
         has_cache = bool(getattr(owner, "_status_cards_cache", None))
@@ -264,31 +268,34 @@ def refresh_servo_status(owner):
 
     app = App.get_running_app()
 
-    # 优先通过 wifi_servo 获取状态
+    # 通过 wifi_servo 获取状态，始终构建全部 25 张卡片
     try:
         ctrl = getattr(app, "wifi_servo", None) or get_wifi_servo()
         if ctrl and ctrl.is_connected:
-            st = ctrl.request_status(timeout=0.8)
+            st = ctrl.request_status(timeout=1.0)
             if st and "servos" in st:
+                online_servos = st.get("servos", {})
                 cards = []
-                for sid_s, sdata in st["servos"].items():
-                    sid = int(sid_s)
-                    data = {
-                        "pos": sdata.get("position"),
-                        "temp": sdata.get("temperature"),
-                        "volt": sdata.get("voltage"),
-                        "torque": sdata.get("torque"),
-                    }
-                    cards.append((sid, data, True))
-                if cards:
-                    owner._status_cards_cache = cards
-                    owner._status_cards_cache_time = time.time()
-                    Clock.schedule_once(lambda dt, c=cards: render_status_cards(owner, c), 0)
-                    return
+                for sid in range(1, 26):
+                    sdata = online_servos.get(str(sid)) or online_servos.get(sid)
+                    if sdata:
+                        data = {
+                            "pos": sdata.get("position"),
+                            "temp": sdata.get("temperature"),
+                            "volt": sdata.get("voltage"),
+                            "torque": sdata.get("torque"),
+                        }
+                        cards.append((sid, data, True))
+                    else:
+                        cards.append((sid, None, False))
+                owner._status_cards_cache = cards
+                owner._status_cards_cache_time = time.time()
+                Clock.schedule_once(lambda dt, c=cards: render_status_cards(owner, c), 0)
+                return
     except Exception:
         pass
+
     if time.time() < suspend_until:
-        # 轮询暂停期间若有缓存则继续展示，避免用户看到空白
         try:
             cards = list(getattr(owner, "_status_cards_cache", None) or [])
             if cards:
@@ -318,8 +325,10 @@ def refresh_servo_status(owner):
         Clock.schedule_once(_render_cached, 0)
         return
 
-    # wifi_servo 未返回数据，显示占位卡
+    # wifi_servo 未返回数据，显示全部 25 个占位卡（灰色离线）
     cards = [(sid, None, False) for sid in range(1, 26)]
 
     owner._status_cards_cache = list(cards)
     owner._status_cards_cache_time = time.time()
+    Clock.schedule_once(lambda dt, c=cards: render_status_cards(owner, c), 0)
+

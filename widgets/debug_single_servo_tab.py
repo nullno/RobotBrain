@@ -326,29 +326,33 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
             owner._show_info_popup(f"ID {sid} 未连接")
         return ok
 
-    def _move_to_angle(angle_deg, show_tip=True):
+    def _move_to_angle(angle_deg, show_tip=True, duration_override=None):
         app = App.get_running_app()
         sid = _get_sid()
 
         # 优先 WiFi 舵机控制器（固件范围 0-1000）
         wifi_ctrl = getattr(app, "wifi_servo", None)
         if not (wifi_ctrl and wifi_ctrl.is_connected):
-            owner._show_info_popup("未连接舵机")
+            if show_tip:
+                owner._show_info_popup("未连接舵机")
             return
 
         def _do_wifi():
             try:
                 _ensure_torque()
                 pos = int(angle_deg / 360.0 * 1000)
-                try:
-                    dur = int(ti_dur.text)
-                    dur = max(0, dur)
-                except Exception:
-                    dur = 500
+                if duration_override is not None:
+                    dur = max(0, int(duration_override))
+                else:
+                    try:
+                        dur = int(ti_dur.text)
+                        dur = max(0, dur)
+                    except Exception:
+                        dur = 500
                 wifi_ctrl.set_single(sid, pos, duration_ms=dur)
                 owner._mark_servo_writable(sid)
                 if show_tip:
-                    msg = f"ID {sid} 转到 {angle_deg}° ({dur}ms) [WiFi]"
+                    msg = f"ID {sid} 转到 {angle_deg:.0f}\u00b0 ({dur}ms) [WiFi]"
                     Clock.schedule_once(lambda dt, m=msg: owner._show_info_popup(m))
             except Exception as e:
                 msg = f"移动失败: {e}"
@@ -368,7 +372,7 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
         Clock.schedule_once(lambda dt: knob_sync_state.__setitem__("busy", False), 0)
 
     def _move_zero(_):
-        _move_to_angle(0)
+        _move_to_angle(0, duration_override=500)
         _set_knob_and_text(0)
 
     def _move_60(_):
@@ -380,12 +384,14 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
         _set_knob_and_text(360)
 
     def _move_knob_angle(dt=None):
+        """旋钮实时控制舵机 —— 使用短 duration 保证丝滑跟手。"""
         try:
             if knob_sync_state.get("busy"):
                 return
             ang = float(getattr(angle_knob, "value", 0.0))
             ti_c_angle.text = str(int(round(ang)))
-            _move_to_angle(ang, show_tip=False)
+            # 旋钮控制使用 100ms 短时间，确保跟手不卡顿
+            _move_to_angle(ang, show_tip=False, duration_override=100)
         except Exception:
             pass
 
@@ -410,27 +416,34 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
         if not (wifi_ctrl and wifi_ctrl.is_connected):
             owner._show_info_popup("未连接舵机")
             return
-        if not _require_sid_online(sid, strict=False):
-            return
 
         def _do_read():
             try:
-                status = wifi_ctrl.request_status(timeout=1.5)
-                servos = (status or {}).get("servos", {})
-                info = servos.get(str(sid)) or servos.get(int(sid))
-                if info:
-                    pos = info.get("position")
-                    temp = info.get("temperature")
-                    volt = info.get("voltage")
-                    msg = f"ID {sid} -> pos:{pos} temp:{temp}°C volt:{_format_voltage(volt)}V"
-                    if pos is not None:
-                        try:
-                            deg = max(0.0, min(360.0, (float(pos) / 1000.0) * 360.0))
-                            Clock.schedule_once(lambda dt, d=deg: _set_knob_and_text(d), 0)
-                        except Exception:
-                            pass
+                # 直接读取单个舵机位置（更快响应，不依赖全局 status）
+                pos = wifi_ctrl.read_servo_position(sid, timeout=1.0)
+                if pos is not None:
+                    try:
+                        deg = max(0.0, min(360.0, (float(pos) / 1000.0) * 360.0))
+                        Clock.schedule_once(lambda dt, d=deg: _set_knob_and_text(d), 0)
+                    except Exception:
+                        pass
+                    msg = f"ID {sid} -> pos:{pos} ({deg:.0f}\u00b0)"
                 else:
                     msg = f"ID {sid} 读取失败：未收到返回数据"
+
+                # 尝试获取完整状态（温度/电压），但不阻塞主要流程
+                try:
+                    status = wifi_ctrl.request_status(timeout=0.8)
+                    servos = (status or {}).get("servos", {})
+                    info = servos.get(str(sid)) or servos.get(int(sid))
+                    if info:
+                        temp = info.get("temperature")
+                        volt = info.get("voltage")
+                        if temp is not None or volt is not None:
+                            msg += f" temp:{temp}\u00b0C volt:{_format_voltage(volt)}V"
+                except Exception:
+                    pass
+
                 Clock.schedule_once(lambda dt, m=msg: owner._show_info_popup(m))
             except Exception as e:
                 msg = f"读取失败: {e}"
@@ -693,7 +706,7 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
     btn_set_id.bind(on_release=_set_id)
     btn_motor_mode.bind(on_release=_set_motor_mode)
 
-    knob_move_trigger = Clock.create_trigger(_move_knob_angle, 0.04)
+    knob_move_trigger = Clock.create_trigger(_move_knob_angle, 0.02)
     angle_knob.bind(value=lambda *_: knob_move_trigger())
     Clock.schedule_once(lambda dt: _set_knob_and_text(0), 0)
 

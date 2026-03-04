@@ -1,29 +1,34 @@
 """
-servo_controller.py — ESP32 舵机控制模块。
+servo_controller.py - ESP32 舵机控制模块（增强版）。
 
-封装 uservo SDK 的所有舵机操作，提供清晰的 API 接口。
-由 main.py 加载使用，后续可扩展 IMU、摄像头等传感器模块。
+功能：
+- 舵机位置控制（带插值平滑算法）
+- 舵机状态读取（位置、温度、电压、电流、速度）
+- 扭矩控制、模式切换（舵机/电机）
+- 电机模式旋转控制
+- 在线扫描、ping 检测
+- 异步位置设置 + 同步批量写入
 
-功能:
-- ping / 批量 ping
-- 批量设置位置 (set_positions)
-- 单舵机设置位置 (set_single)
-- 读取单舵机位置 (read_position)
-- 扭矩开关 (torque_on / torque_off)
-- 电机模式 (set_motor_mode / set_servo_mode / set_motor_speed)
-- 批量状态查询 (get_all_status)
+参考: UART_PythonSDK2025 数据表定义
 """
 
 import time
 
 try:
-    from uservo import UartServoManager
+    from uservo import UartServoManager, pack_packet, CODE_READ_DATA, CODE_WRITE_DATA
 except ImportError:
     UartServoManager = None
+    pack_packet = None
+    CODE_READ_DATA = 0x02
+    CODE_WRITE_DATA = 0x03
+
+try:
+    import ustruct
+except ImportError:
+    ustruct = None
 
 
 def log(msg):
-    """统一日志输出。"""
     try:
         ts = time.ticks_ms()
         print("[servo_ctrl {:.3f}] {}".format(ts / 1000.0, msg))
@@ -34,15 +39,108 @@ def log(msg):
             pass
 
 
+# ---- 舵机寄存器地址（与 UART_PythonSDK2025/src/data_table.py 对齐）----
+ADDR_SERVO_ID = 0x05
+ADDR_STALL_PROTECTION = 0x06
+ADDR_ANGLE_LOWERB = 0x09
+ADDR_ANGLE_UPPERB = 0x0B
+ADDR_TEMP_PROTECTION = 0x0D
+ADDR_VOLTAGE_UPPERB = 0x0E
+ADDR_VOLTAGE_LOWERB = 0x0F
+ADDR_TORQUE_UPPERB = 0x10
+ADDR_MIDDLE_ADJUST = 0x14
+ADDR_MOTOR_MODE = 0x1C
+ADDR_MOTOR_DIR = 0x1D
+ADDR_TORQUE_ENABLE = 0x28
+ADDR_TARGET_POSITION = 0x2A
+ADDR_RUNTIME_MS = 0x2C
+ADDR_ELECTRIC_CURRENT = 0x2E
+ADDR_CURRENT_POSITION = 0x38
+ADDR_CURRENT_VELOCITY = 0x3A
+ADDR_CURRENT_VOLTAGE = 0x3E
+ADDR_CURRENT_TEMPERATURE = 0x3F
+ADDR_MOTOR_SPEED = 0x41
+
+# 协议指令类型
+CMD_PING = 0x01
+CMD_READ = 0x02
+CMD_WRITE = 0x03
+CMD_REG_WRITE = 0x04
+CMD_ACTION = 0x05
+CMD_RESET = 0x06
+CMD_SYNC_WRITE = 0x83
+
+SERVO_ID_BROADCAST = 0xFE
+MOTOR_MODE_SERVO = 0x01
+MOTOR_MODE_DC = 0x00
+TORQUE_ON = 0x01
+TORQUE_OFF = 0x00
+
+
+class InterpolationEngine:
+    """舵机运动插值平滑引擎。
+
+    对每个舵机维护当前位置和目标位置，通过 smoothstep 插值
+    分步输出中间值，让运动更自然顺畅。
+    """
+
+    def __init__(self):
+        self._targets = {}    # {sid: (target_pos, duration_ms, start_time, start_pos)}
+        self._current = {}    # {sid: current_pos}
+
+    def set_target(self, sid, target_pos, duration_ms, current_pos=None):
+        sid = int(sid)
+        target_pos = max(0, min(4095, int(target_pos)))
+        duration_ms = max(1, int(duration_ms))
+        now = time.ticks_ms()
+        start = current_pos if current_pos is not None else self._current.get(sid, target_pos)
+        self._targets[sid] = (target_pos, duration_ms, now, int(start))
+        self._current[sid] = int(start)
+
+    def update(self):
+        """计算当前时刻所有舵机的插值位置。"""
+        now = time.ticks_ms()
+        output = {}
+        done = []
+        for sid, (target, dur, start_t, start_pos) in self._targets.items():
+            elapsed = time.ticks_diff(now, start_t)
+            if elapsed >= dur:
+                self._current[sid] = target
+                output[sid] = target
+                done.append(sid)
+            else:
+                ratio = elapsed / dur
+                # smoothstep 缓动
+                ratio = ratio * ratio * (3.0 - 2.0 * ratio)
+                pos = int(start_pos + (target - start_pos) * ratio)
+                pos = max(0, min(4095, pos))
+                self._current[sid] = pos
+                output[sid] = pos
+        for sid in done:
+            del self._targets[sid]
+        return output
+
+    def has_pending(self):
+        return len(self._targets) > 0
+
+    def update_current(self, sid, pos):
+        self._current[int(sid)] = int(pos)
+
+    def get_current(self, sid):
+        return self._current.get(int(sid))
+
+
 class ServoController:
-    """ESP32 舵机控制器 — 基于 uservo SDK。"""
+    """ESP32 舵机控制器（增强版）。"""
 
     def __init__(self, uart, servo_count=25):
         self.servo_count = servo_count
         self._uart = uart
         self._manager = None
-        self._positions = {}   # {sid: last_known_pos}
-        self._online = set()   # 在线舵机 ID 集合
+        self._positions = {}
+        self._online = set()
+        self._status_cache = {}
+        self._interpolation = InterpolationEngine()
 
         if uart and UartServoManager:
             try:
@@ -57,10 +155,9 @@ class ServoController:
     def available(self):
         return self._manager is not None
 
-    # ──────────── Ping ────────────
+    # ─────────────── Ping / Scan ───────────────
 
     def ping(self, servo_id):
-        """Ping 单个舵机,返回 0=在线, 非0=离线。"""
         if not self._manager:
             return -1
         try:
@@ -69,14 +166,12 @@ class ServoController:
                 self._online.add(int(servo_id))
             else:
                 self._online.discard(int(servo_id))
-            log("ping id={} result={}".format(servo_id, result))
             return result
         except Exception as e:
-            log("ping id={} error: {}".format(servo_id, e))
+            log("ping id={} err: {}".format(servo_id, e))
             return -1
 
     def scan(self, id_range=None):
-        """扫描指定范围的舵机,返回在线 ID 列表。"""
         if not self._manager:
             return []
         ids = id_range or range(1, self.servo_count + 1)
@@ -90,144 +185,271 @@ class ServoController:
                     self._online.discard(int(sid))
             except Exception:
                 pass
-        log("scan: {} servos online".format(len(online)))
+        log("scan: {} online".format(len(online)))
         return online
 
-    # ──────────── 位置控制 ────────────
+    # ─────────────── 位置控制（带插值平滑）───────────────
 
     def set_positions(self, targets, duration_ms=300):
-        """批量设置舵机位置。targets: {sid: position}"""
         if not self._manager:
-            log("set_positions: no manager")
             return False
         dur = max(1, int(duration_ms))
         count = 0
+        direct_targets = {}
         for sid, pos in targets.items():
             try:
                 sid_i = int(sid)
-                pos_i = self._clamp(int(pos), 0, 4096)
-                self._manager.set_servo_position(sid_i, pos_i, dur)
+                pos_i = self._clamp(int(pos), 0, 4095)
+                cur = self._positions.get(sid_i)
+                self._interpolation.set_target(sid_i, pos_i, dur, cur)
                 self._positions[sid_i] = pos_i
+                direct_targets[sid_i] = pos_i
                 count += 1
             except Exception as e:
                 log("set_pos id={} err: {}".format(sid, e))
+
         if count > 0:
-            log("set_positions: {} servos, dur={}ms".format(count, dur))
+            # 短时间直接写入（快速响应旋钮操作）
+            if dur <= 120:
+                for sid_i, pos_i in direct_targets.items():
+                    try:
+                        self._manager.set_servo_position(sid_i, pos_i, dur)
+                        self._interpolation.update_current(sid_i, pos_i)
+                    except Exception:
+                        pass
+            # 较长时间走插值（由 interp_task 驱动）
         return count > 0
 
     def set_single(self, servo_id, position, duration_ms=300):
-        """设置单个舵机位置。"""
         return self.set_positions({int(servo_id): int(position)}, duration_ms)
 
+    def interpolation_step(self):
+        """执行一步插值输出（由异步任务定时调用）。"""
+        if not self._manager or not self._interpolation.has_pending():
+            return False
+        output = self._interpolation.update()
+        for sid, pos in output.items():
+            try:
+                self._manager.set_servo_position(int(sid), int(pos), 30)
+            except Exception:
+                pass
+        return self._interpolation.has_pending()
+
+    # ─────────────── 位置读取 ───────────────
+
     def read_position(self, servo_id):
-        """读取单个舵机当前位置,返回 int 或 None。"""
         if not self._manager:
             return None
         try:
             pos = self._manager.read_servo_position(int(servo_id))
             if pos is not None:
                 self._positions[int(servo_id)] = int(pos)
-                log("read_pos id={} pos={}".format(servo_id, pos))
+                self._interpolation.update_current(int(servo_id), int(pos))
             return pos
         except Exception as e:
             log("read_pos id={} err: {}".format(servo_id, e))
             return None
 
-    # ──────────── 扭矩控制 ────────────
+    # ─────────────── 完整状态读取 ───────────────
+
+    def read_temperature(self, servo_id):
+        return self._read_register_byte(int(servo_id), ADDR_CURRENT_TEMPERATURE)
+
+    def read_voltage(self, servo_id):
+        return self._read_register_byte(int(servo_id), ADDR_CURRENT_VOLTAGE)
+
+    def read_current_ma(self, servo_id):
+        return self._read_register_word(int(servo_id), ADDR_ELECTRIC_CURRENT)
+
+    def read_velocity(self, servo_id):
+        return self._read_register_word(int(servo_id), ADDR_CURRENT_VELOCITY)
+
+    def read_full_status(self, servo_id):
+        """读取完整状态：位置、温度、电压、电流、速度。"""
+        result = {}
+        sid = int(servo_id)
+        pos = self.read_position(sid)
+        if pos is not None:
+            result["position"] = int(pos)
+        temp = self.read_temperature(sid)
+        if temp is not None:
+            result["temperature"] = int(temp)
+        volt = self.read_voltage(sid)
+        if volt is not None:
+            result["voltage"] = int(volt)
+        current = self.read_current_ma(sid)
+        if current is not None:
+            result["current_ma"] = int(current)
+        vel = self.read_velocity(sid)
+        if vel is not None:
+            result["velocity"] = int(vel)
+        if result:
+            self._status_cache[sid] = result
+        return result if result else None
+
+    # ─────────────── 扭矩控制 ───────────────
 
     def torque_on(self, ids=None):
-        """启用扭矩。ids=None 表示全部。"""
         return self._set_torque(True, ids)
 
     def torque_off(self, ids=None):
-        """释放扭矩。ids=None 表示全部。"""
         return self._set_torque(False, ids)
 
     def _set_torque(self, enable, ids=None):
         if not self._manager:
             return False
         ids = ids or range(1, self.servo_count + 1)
-        flag = 1 if enable else 0
+        flag = TORQUE_ON if enable else TORQUE_OFF
         count = 0
         for sid in ids:
             try:
-                self._manager.set_torque_switch(int(sid), flag)
+                self._write_register_byte(int(sid), ADDR_TORQUE_ENABLE, flag)
                 count += 1
             except Exception:
                 pass
         log("torque {}={} servos".format("on" if enable else "off", count))
         return count > 0
 
-    # ──────────── 电机模式 ────────────
+    def set_torque_limit(self, servo_id, limit):
+        limit = max(0, min(1000, int(limit)))
+        return self._write_register_word(int(servo_id), ADDR_TORQUE_UPPERB, limit)
+
+    # ─────────────── 模式切换 ───────────────
 
     def set_motor_mode(self, servo_id):
-        """将舵机切换为电机模式。"""
-        if not self._manager:
-            return False
-        try:
-            self._manager.set_servo_mode(int(servo_id), 0)
-            log("motor_mode id={}".format(servo_id))
-            return True
-        except Exception as e:
-            log("motor_mode id={} err: {}".format(servo_id, e))
-            return False
+        return self._write_register_byte(int(servo_id), ADDR_MOTOR_MODE, MOTOR_MODE_DC)
 
     def set_servo_mode(self, servo_id):
-        """将舵机切换为舵机模式。"""
-        if not self._manager:
-            return False
-        try:
-            self._manager.set_servo_mode(int(servo_id), 1)
-            log("servo_mode id={}".format(servo_id))
-            return True
-        except Exception as e:
-            log("servo_mode id={} err: {}".format(servo_id, e))
-            return False
-
-    def set_motor_speed(self, servo_id, speed):
-        """设置电机转速 (0~100)。"""
-        if not self._manager:
-            return False
-        try:
-            self._manager.set_motor_speed(int(servo_id), int(speed))
-            log("motor_speed id={} speed={}".format(servo_id, speed))
-            return True
-        except Exception as e:
-            log("motor_speed err: {}".format(e))
-            return False
+        return self._write_register_byte(int(servo_id), ADDR_MOTOR_MODE, MOTOR_MODE_SERVO)
 
     def set_motor_direction(self, servo_id, direction):
-        """设置电机方向 (0/1)。"""
-        if not self._manager:
+        return self._write_register_byte(int(servo_id), ADDR_MOTOR_DIR, int(direction))
+
+    def set_motor_speed(self, servo_id, speed):
+        speed = max(0, min(100, int(speed)))
+        return self._write_register_byte(int(servo_id), ADDR_MOTOR_SPEED, speed)
+
+    def motor_stop(self, servo_id):
+        return self.set_motor_speed(int(servo_id), 0)
+
+    # ─────────────── 高级功能 ───────────────
+
+    def set_servo_id(self, old_id, new_id):
+        return self._write_register_byte(int(old_id), ADDR_SERVO_ID, int(new_id))
+
+    def set_angle_limits(self, servo_id, lower, upper):
+        self._write_register_word(int(servo_id), ADDR_ANGLE_LOWERB, self._clamp(int(lower), 0, 4095))
+        self._write_register_word(int(servo_id), ADDR_ANGLE_UPPERB, self._clamp(int(upper), 0, 4095))
+
+    def set_middle_adjust(self, servo_id, offset):
+        return self._write_register_word(int(servo_id), ADDR_MIDDLE_ADJUST, int(offset))
+
+    # ─────────────── 批量同步写入 ───────────────
+
+    def sync_set_positions(self, id_list, pos_list, time_list):
+        """同步批量写入多个舵机位置（一帧完成）。"""
+        if not self._manager or not id_list or not ustruct:
             return False
         try:
-            self._manager.set_motor_direction(int(servo_id), int(direction))
+            params = ustruct.pack('>BB', ADDR_TARGET_POSITION, 0x04)
+            for i in range(len(id_list)):
+                sid = int(id_list[i])
+                pos = self._clamp(int(pos_list[i]), 0, 4095)
+                t = int(time_list[i]) if i < len(time_list) else 300
+                params += ustruct.pack('>BHH', sid, pos, t)
+            if pack_packet:
+                pkt = pack_packet(SERVO_ID_BROADCAST, CMD_SYNC_WRITE, params)
+                self._manager.uart.write(pkt)
+            for i in range(len(id_list)):
+                self._positions[int(id_list[i])] = int(pos_list[i])
             return True
         except Exception as e:
-            log("motor_dir err: {}".format(e))
+            log("sync_set err: {}".format(e))
             return False
 
-    # ──────────── 批量状态 ────────────
+    # ─────────────── 状态汇总 ───────────────
 
     def get_all_status(self):
-        """读取所有已知在线舵机的位置,返回 {sid: {position: int}}。"""
         result = {}
         ids = list(self._online) if self._online else list(range(1, self.servo_count + 1))
         for sid in ids:
-            pos = self.read_position(sid)
-            if pos is not None:
-                result[sid] = {"position": int(pos)}
-        # 也包含缓存的位置（那些 read 失败但之前 set 过的）
+            try:
+                st = self.read_full_status(sid)
+                if st:
+                    result[sid] = st
+            except Exception:
+                pass
+            time.sleep_ms(5)
         for sid, pos in self._positions.items():
             if sid not in result:
                 result[sid] = {"position": int(pos)}
         return result
 
     def get_cached_positions(self):
-        """返回缓存的舵机位置（不发起新读取）。"""
         return dict(self._positions)
 
-    # ──────────── 工具方法 ────────────
+    def get_cached_status(self):
+        return dict(self._status_cache)
+
+    def get_online_ids(self):
+        return sorted(list(self._online))
+
+    # ─────────────── 底层寄存器读写 ───────────────
+
+    def _read_register_byte(self, servo_id, addr):
+        if not self._manager or not pack_packet or not ustruct:
+            return None
+        try:
+            params = ustruct.pack('>BB', addr, 0x01)
+            pkt = pack_packet(int(servo_id), CODE_READ_DATA, params)
+            self._manager.uart.write(pkt)
+            resp = self._manager.read_response(timeout=80)
+            if resp and resp.get("type") == "read_position":
+                val = resp.get("pos")
+                return val & 0xFF if val is not None else None
+            return None
+        except Exception as e:
+            log("read_reg 0x{:02X} id={} err: {}".format(addr, servo_id, e))
+            return None
+
+    def _read_register_word(self, servo_id, addr):
+        if not self._manager or not pack_packet or not ustruct:
+            return None
+        try:
+            params = ustruct.pack('>BB', addr, 0x02)
+            pkt = pack_packet(int(servo_id), CODE_READ_DATA, params)
+            self._manager.uart.write(pkt)
+            resp = self._manager.read_response(timeout=80)
+            if resp and resp.get("type") == "read_position":
+                return resp.get("pos")
+            return None
+        except Exception as e:
+            log("read_reg 0x{:02X} id={} err: {}".format(addr, servo_id, e))
+            return None
+
+    def _write_register_byte(self, servo_id, addr, value):
+        if not self._manager or not pack_packet or not ustruct:
+            return False
+        try:
+            params = ustruct.pack('>BB', addr, int(value) & 0xFF)
+            pkt = pack_packet(int(servo_id), CODE_WRITE_DATA, params)
+            self._manager.uart.write(pkt)
+            return True
+        except Exception as e:
+            log("write_reg 0x{:02X} id={} err: {}".format(addr, servo_id, e))
+            return False
+
+    def _write_register_word(self, servo_id, addr, value):
+        if not self._manager or not pack_packet or not ustruct:
+            return False
+        try:
+            params = ustruct.pack('>BH', addr, int(value) & 0xFFFF)
+            pkt = pack_packet(int(servo_id), CODE_WRITE_DATA, params)
+            self._manager.uart.write(pkt)
+            return True
+        except Exception as e:
+            log("write_reg 0x{:02X} id={} err: {}".format(addr, servo_id, e))
+            return False
 
     @staticmethod
     def _clamp(val, lo, hi):
