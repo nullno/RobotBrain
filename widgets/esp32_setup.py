@@ -62,7 +62,7 @@ class Esp32SetupPopup(BoxLayout):
 
         # 标题
         header = Label(
-            text="ESP32 配网",
+            text="--机器人配网--",
             size_hint_y=None, height=dp(28),
             color=(0.9, 0.95, 1, 1), font_name=theme.FONT,
         )
@@ -94,7 +94,7 @@ class Esp32SetupPopup(BoxLayout):
 
         # 日志框
         self.log_lbl = TextInput(
-            text="", readonly=True, size_hint_y=None, height=dp(160),
+            text="", readonly=True, size_hint_y=None, height=dp(220),
             font_name=theme.FONT, background_normal="", background_active="",
             background_color=(0.07, 0.08, 0.1, 1),
             foreground_color=(1, 1, 1, 1), padding=(dp(12), dp(10)), cursor_width=0,
@@ -116,7 +116,7 @@ class Esp32SetupPopup(BoxLayout):
 
         self.add_widget(header)
         self.add_widget(form)
-        self.add_widget(self.status_lbl)
+        # self.add_widget(self.status_lbl)
         self.add_widget(btn_row)
         self.add_widget(self.log_lbl)
 
@@ -187,7 +187,7 @@ class Esp32SetupPopup(BoxLayout):
                         return
                 self._append_log("已保存主机离线，请扫描蓝牙配网")
             else:
-                self._append_log("无已保存主机，请扫描蓝牙配网")
+                self._append_log("未检测到已保存主机，请扫描蓝牙配网")
         threading.Thread(target=_try, daemon=True).start()
 
     # -------------------- BLE 扫描 --------------------
@@ -377,7 +377,7 @@ class Esp32SetupPopup(BoxLayout):
             prev = self.log_lbl.text or ""
             lines = (prev + "\n" + line).strip().split("\n")
             self.log_lbl.text = "\n".join(lines[-12:])
-            self.status_lbl.text = msg
+            # self.status_lbl.text = msg
         Clock.schedule_once(update, 0)
 
 
