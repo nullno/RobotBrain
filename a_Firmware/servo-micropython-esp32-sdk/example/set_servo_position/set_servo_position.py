@@ -17,9 +17,9 @@ servo_id = 1
 
 # 创建串口对象 使用串口2作为控制对象
 # 波特率: 115200
-# RX: gpio 16
-# TX: gpio 17
-uart = UART(2, baudrate=115200)
+# RX: gpio 48
+# TX: gpio 47
+uart = UART(2, baudrate=115200, tx=47, rx=48)
 # 创建舵机管理器
 uservo = UartServoManager(uart, srv_num=servo_num)
 
@@ -31,6 +31,6 @@ print("设置舵机位置为0")
 uservo.set_servo_position(servo_id, 0, 200) # 设置舵机位置
 time.sleep(1)
 print("设置舵机位置为2048")
-uservo.set_servo_position(servo_id, 2048, 200) # 设置舵机位置
+uservo.set_servo_position(servo_id, 1000, 200) # 设置舵机位置
 time.sleep(1)
 

@@ -1,192 +1,188 @@
-from kivy.uix.widget import Widget
-from kivy.graphics import Color, Line, PushMatrix, PopMatrix, Rotate, Rectangle
-from kivy.core.text import Label as CoreLabel
-from app.theme import COLORS, FONT
-from widgets.runtime_status import RuntimeStatusLogger
+"""
+GyroPanel - 迷你三维小人姿态指示器。
 
-_gyro_logged = False
+在主界面左上角绘制一个线框小人，根据 pitch/roll/yaw 实时旋转，
+直观显示机器人空间姿态。
+"""
+
+import math
+from kivy.uix.widget import Widget
+from kivy.graphics import Color, Line, Ellipse, Rectangle as GRect
+from kivy.core.text import Label as CoreLabel
+from kivy.clock import Clock
+from kivy.metrics import dp
+from app.theme import COLORS, FONT
+
+# -- 三维小人骨骼定义（归一化坐标，朝前站立） --
+# Y 向上, X 向右, Z 朝屏幕外
+_BONES = {
+    "head":       (0.0,  1.70, 0.0),
+    "neck":       (0.0,  1.45, 0.0),
+    "shoulder_l": (-0.35, 1.40, 0.0),
+    "shoulder_r": ( 0.35, 1.40, 0.0),
+    "elbow_l":    (-0.45, 1.05, 0.0),
+    "elbow_r":    ( 0.45, 1.05, 0.0),
+    "hand_l":     (-0.38, 0.72, 0.0),
+    "hand_r":     ( 0.38, 0.72, 0.0),
+    "hip_c":      (0.0,  0.85, 0.0),
+    "hip_l":      (-0.18, 0.82, 0.0),
+    "hip_r":      ( 0.18, 0.82, 0.0),
+    "knee_l":     (-0.20, 0.42, 0.0),
+    "knee_r":     ( 0.20, 0.42, 0.0),
+    "foot_l":     (-0.18, 0.02, 0.0),
+    "foot_r":     ( 0.18, 0.02, 0.0),
+}
+
+_LIMBS = [
+    ("neck", "shoulder_l"), ("neck", "shoulder_r"),
+    ("shoulder_l", "elbow_l"), ("shoulder_r", "elbow_r"),
+    ("elbow_l", "hand_l"), ("elbow_r", "hand_r"),
+    ("neck", "hip_c"),
+    ("hip_c", "hip_l"), ("hip_c", "hip_r"),
+    ("hip_l", "knee_l"), ("hip_r", "knee_r"),
+    ("knee_l", "foot_l"), ("knee_r", "foot_r"),
+]
+
+
+def _rotate_xyz(x, y, z, pitch_deg, roll_deg, yaw_deg):
+    """绕 XYZ 轴分别旋转，返回新的 (x, y, z)。"""
+    p = math.radians(pitch_deg)
+    r = math.radians(roll_deg)
+    w = math.radians(yaw_deg)
+    # Yaw (Y)
+    x1 = x * math.cos(w) + z * math.sin(w)
+    y1 = y
+    z1 = -x * math.sin(w) + z * math.cos(w)
+    # Pitch (X)
+    x2 = x1
+    y2 = y1 * math.cos(p) - z1 * math.sin(p)
+    z2 = y1 * math.sin(p) + z1 * math.cos(p)
+    # Roll (Z)
+    x3 = x2 * math.cos(r) - y2 * math.sin(r)
+    y3 = x2 * math.sin(r) + y2 * math.cos(r)
+    return x3, y3, z2
+
+
+def _project(x3, y3, z3, cx, cy, scale, persp=3.5):
+    """简单透视投影。"""
+    f = persp / (persp + z3) if (persp + z3) > 0.01 else 1.0
+    return cx + x3 * scale * f, cy + y3 * scale * f
+
 
 class GyroPanel(Widget):
+    """迷你三维小人姿态部件。"""
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.pitch = 0
-        self.roll = 0
-        self.yaw = 0
-        self._expanded = True
-        self._expanded_hint_y = 0.1
-        self._collapsed_hint_y = 0.06
-        # 增加平滑缓冲变量
-        self._target_pitch = 0
-        self._target_roll = 0
-        self._target_yaw = 0
-        self._text_tex_cache = {}
-        
-        self.bind(pos=self.draw, size=self.draw)
-        try:
-            RuntimeStatusLogger.log_info('GyroPanel 初始化')
-        except Exception:
-            pass
-        
-        # 启动动画循环用于平滑过渡
-        from kivy.clock import Clock
-        self._anim_interval = 1.0 / 30.0
-        Clock.schedule_interval(self._animate_smooth, self._anim_interval)
+        self.pitch = 0.0
+        self.roll = 0.0
+        self.yaw = 0.0
+        self._target_pitch = 0.0
+        self._target_roll = 0.0
+        self._target_yaw = 0.0
+        self._text_cache = {}
 
-    def _animate_smooth(self, dt):
-        # 简单的线性插值平滑处理 (Lerp)，平滑系数 0.15
-        alpha = 0.2
-        changed = False
-        if abs(self.pitch - self._target_pitch) > 0.01:
-            self.pitch += (self._target_pitch - self.pitch) * alpha
-            changed = True
-        if abs(self.roll - self._target_roll) > 0.01:
-            self.roll += (self._target_roll - self.roll) * alpha
-            changed = True
-        if abs(self.yaw - self._target_yaw) > 0.01:
-            self.yaw += (self._target_yaw - self.yaw) * alpha
-            changed = True
-
-        if changed:
-            self.draw()
-
-    def on_touch_down(self, touch):
-        try:
-            if self.collide_point(*touch.pos) and bool(getattr(touch, 'is_double_tap', False)):
-                self.toggle_visible()
-                return True
-        except Exception:
-            pass
-        return super().on_touch_down(touch)
-
-    def toggle_visible(self):
-        self._expanded = not self._expanded
-        if self._expanded:
-            self.size_hint = (1, self._expanded_hint_y)
-            try:
-                RuntimeStatusLogger.log_info('顶部陀螺仪已展开（双击可隐藏）')
-            except Exception:
-                pass
-        else:
-            self.size_hint = (1, self._collapsed_hint_y)
-        self.draw()
+        self.bind(pos=self._request_draw, size=self._request_draw)
+        Clock.schedule_interval(self._animate_smooth, 1.0 / 24.0)
 
     def update(self, pitch, roll, yaw=0):
-        # 仅更新目标值，实际绘制由 _animate_smooth 接管
-        self._target_pitch = pitch
-        self._target_roll = roll
-        self._target_yaw = yaw
-        
-        global _gyro_logged
-        if not _gyro_logged:
-            try:
-                RuntimeStatusLogger.log_info(f'陀螺仪第一次更新: pitch={pitch:.2f}, roll={roll:.2f}, yaw={yaw:.2f}')
-            except Exception:
-                pass
-            _gyro_logged = True
-        # self.draw() # 移出，由 Loop 统一绘制
+        self._target_pitch = float(pitch)
+        self._target_roll = float(roll)
+        self._target_yaw = float(yaw)
 
-    def _get_text_texture(self, text, color):
-        """生成数字纹理"""
-        key = str(text)
-        if key in self._text_tex_cache:
-            return self._text_tex_cache[key]
-        label = CoreLabel(text=key, font_size=11, font_name=FONT)
-        label.refresh()
-        tex = label.texture
-        self._text_tex_cache[key] = tex
-        if len(self._text_tex_cache) > 64:
-            try:
-                first_key = next(iter(self._text_tex_cache.keys()))
-                self._text_tex_cache.pop(first_key, None)
-            except Exception:
-                pass
-        return tex
+    def _animate_smooth(self, dt):
+        alpha = 0.25
+        changed = False
+        for attr in ('pitch', 'roll', 'yaw'):
+            cur = getattr(self, attr)
+            tgt = getattr(self, '_target_' + attr)
+            if abs(cur - tgt) > 0.05:
+                setattr(self, attr, cur + (tgt - cur) * alpha)
+                changed = True
+        if changed:
+            self._draw()
 
-    def draw(self, *args):
+    def _request_draw(self, *_):
+        self._draw()
+
+    def _draw(self):
         self.canvas.clear()
-
-        if not self._expanded:
+        w, h = self.width, self.height
+        if w < 10 or h < 10:
             return
 
-        # 新实现（小巧精致版）：去掉边框，绘制旋转的地平线以直观展示前后（pitch）和左右（roll）倾角
-        from kivy.metrics import dp
-        max_w = dp(1000)  # 扩大显示面积以提高（左右）灵敏度观察
-        w = min(self.width * 0.62, max_w)
-        h = dp(100)  # 也扩大高度
-        x, y = self.center_x - w / 2, self.top - h - dp(6)
-        cx, cy = x + w / 2, y + h / 2
+        cx = self.x + w * 0.5
+        cy = self.y + h * 0.45
+        scale = min(w, h) * 0.30
 
-        # 调整为赛博朋克配色：暗紫背景 + 霓虹青/粉作为指示色
-        NEON_CYAN = (0.0, 0.9, 1.0)
-        NEON_PINK = (0.95, 0.18, 0.82)
-        SKY_COLOR = (0.18, 0.06, 0.28, 0.95)   # 暗紫调的天空
-        GROUND_COLOR = (0.04, 0.02, 0.06, 0.95) # 更暗的地面
-        r, g, b = NEON_CYAN
-        HORIZON_ALPHA = 0.48
-        TICK_ALPHA = 0.36
-        CROSS_ALPHA = 0.50
-        ARROW_ALPHA_SCALE = 0.48
+        projected = {}
+        for name, (bx, by, bz) in _BONES.items():
+            rx, ry, rz = _rotate_xyz(bx, by, bz, self.pitch, self.roll, self.yaw)
+            px, py = _project(rx, ry, rz, cx, cy, scale)
+            projected[name] = (px, py, rz)
 
-        # 由 pitch（前后）决定地平线的垂直偏移；roll 决定旋转角（缩放以便小面板也能明显可见）
-        pitch_offset = (self.pitch / 25.0) * (h * 0.5)  # 降低灵敏度，使范围更合理
-        pitch_offset = max(-h * 0.8, min(h * 0.8, pitch_offset))
+        limb_data = []
+        for a, b in _LIMBS:
+            pa = projected[a]
+            pb = projected[b]
+            avg_z = (pa[2] + pb[2]) / 2.0
+            limb_data.append((avg_z, a, b))
+        limb_data.sort(key=lambda t: t[0])
+
+        CYAN = (0.0, 0.9, 1.0)
+        PINK = (0.95, 0.35, 0.75)
 
         with self.canvas:
-            # 背景
-            Color(0, 0, 0, 0.08)
-            Rectangle(pos=(x, y), size=(w, h))
+            # 地面参考
+            Color(CYAN[0], CYAN[1], CYAN[2], 0.12)
+            ground_y = cy - scale * 0.55
+            Ellipse(pos=(cx - scale * 0.4, ground_y - dp(2)), size=(scale * 0.8, dp(4)))
 
-            # --- 保存当前坐标系状态 ---
-            PushMatrix()
-            
-            display_roll = self.roll * 1.5 
-            Rotate(angle=display_roll, origin=(cx, cy)) # 注意：方向可能需要反转，视传感器而定
+            # 肢体线段
+            for avg_z, a, b in limb_data:
+                pa = projected[a]
+                pb = projected[b]
+                depth_alpha = max(0.25, min(0.95, 0.6 + avg_z * 0.35))
+                lw = 1.6 if avg_z > 0 else 1.2
+                Color(CYAN[0], CYAN[1], CYAN[2], depth_alpha)
+                Line(points=[pa[0], pa[1], pb[0], pb[1]], width=lw)
 
-            # 绘制地平线 (加长线条保证旋转后能覆盖屏幕)
-            # 使用相对中心的坐标绘制
-            Color(NEON_CYAN[0], NEON_CYAN[1], NEON_CYAN[2], HORIZON_ALPHA)
-            # 线条更加长，确保旋转大角度时不会露馅
-            Line(points=[cx - w * 1.5, cy + pitch_offset, cx + w * 1.5, cy + pitch_offset], width=1.5)
+            # 关节点
+            for name in ('shoulder_l', 'shoulder_r', 'elbow_l', 'elbow_r',
+                         'hip_l', 'hip_r', 'knee_l', 'knee_r',
+                         'hand_l', 'hand_r', 'foot_l', 'foot_r'):
+                px, py, pz = projected[name]
+                da = max(0.2, min(0.8, 0.5 + pz * 0.3))
+                rr = dp(1.8)
+                Color(CYAN[0], CYAN[1], CYAN[2], da)
+                Ellipse(pos=(px - rr, py - rr), size=(rr * 2, rr * 2))
 
-            # 刻度
-            Color(r, g, b, TICK_ALPHA)
-            # 将刻度也通过偏移绘制，使其跟随地平线移动
-            for off in [-2, -1, 1, 2]: # 简化刻度
-                ly = cy + pitch_offset + off * dp(20)
-                # 刻度线长度随距离缩减，制造透视感
-                scale_w = dp(40) - abs(off) * dp(5)
-                Line(points=[cx - scale_w - dp(10), ly, cx - dp(10), ly], width=1.2)
-                Line(points=[cx + dp(10), ly, cx + scale_w + dp(10), ly], width=1.2)
-                
-            # --- 恢复坐标系 ---
-            PopMatrix()
+            # 头部
+            hx, hy, hz = projected["head"]
+            head_r = dp(5)
+            Color(PINK[0], PINK[1], PINK[2], 0.7)
+            Ellipse(pos=(hx - head_r, hy - head_r), size=(head_r * 2, head_r * 2))
 
-            # 中心十字准星（不随旋转），更精致
-            Color(NEON_PINK[0], NEON_PINK[1], NEON_PINK[2], CROSS_ALPHA)
-            Line(points=[cx - 8, cy, cx - 3, cy], width=1.6)
-            Line(points=[cx + 3, cy, cx + 8, cy], width=1.6)
-            Line(points=[cx, cy - 8, cx, cy - 3], width=1.6)
-            Line(points=[cx, cy + 3, cx, cy + 8], width=1.6)
+            # 数值
+            Color(CYAN[0], CYAN[1], CYAN[2], 0.8)
+            lbl_text = "P{} R{}".format(int(self.pitch), int(self.roll))
+            tex = self._get_text_tex(lbl_text)
+            GRect(texture=tex, pos=(cx - tex.size[0] / 2, self.y + dp(2)), size=tex.size)
 
-            # 数值显示：Pitch（上）和 Roll（下）
-            pitch_tex = self._get_text_texture(f"P {int(self.pitch)}°", (NEON_CYAN[0], NEON_CYAN[1], NEON_CYAN[2], 1))
-            roll_tex = self._get_text_texture(f"R {int(self.roll)}°", (NEON_CYAN[0], NEON_CYAN[1], NEON_CYAN[2], 1))
-            Color(NEON_CYAN[0], NEON_CYAN[1], NEON_CYAN[2], 1)
-            Rectangle(texture=pitch_tex, pos=(cx - pitch_tex.size[0] / 2, cy + dp(26)), size=pitch_tex.size)
-            Rectangle(texture=roll_tex, pos=(cx - roll_tex.size[0] / 2, cy - dp(34)), size=roll_tex.size)
+    def _get_text_tex(self, text):
+        if text in self._text_cache:
+            return self._text_cache[text]
+        lbl = CoreLabel(text=text, font_size=9, font_name=FONT)
+        lbl.refresh()
+        tex = lbl.texture
+        self._text_cache[text] = tex
+        if len(self._text_cache) > 32:
+            first = next(iter(self._text_cache))
+            self._text_cache.pop(first, None)
+        return tex
 
-            # 左右指向箭头（提示倾斜方向）
-            arrow_alpha = min(1.0, abs(self.roll) / 30.0 + 0.1) * ARROW_ALPHA_SCALE  # 降低透明度，避免抢视觉中心
-            Color(NEON_CYAN[0], NEON_CYAN[1], NEON_CYAN[2], arrow_alpha)
-            if self.roll > 2:
-                Line(points=[cx + dp(30), cy, cx + dp(50), cy, cx + dp(46), cy + dp(4)], width=1.6)
-            elif self.roll < -2:
-                Line(points=[cx - dp(30), cy, cx - dp(50), cy, cx - dp(46), cy + dp(4)], width=1.6)
+    def toggle_visible(self):
+        pass
 
-            # 前后提示箭头（基于 pitch）
-            p_alpha = min(1.0, abs(self.pitch) / 30.0 + 0.1) * ARROW_ALPHA_SCALE  # 降低透明度，避免抢视觉中心
-            Color(NEON_CYAN[0], NEON_CYAN[1], NEON_CYAN[2], p_alpha)
-            if self.pitch > 3:
-                Line(points=[cx, cy - dp(30), cx, cy - dp(50), cx + dp(4), cy - dp(46)], width=1.6)
-            elif self.pitch < -3:
-                Line(points=[cx, cy + dp(30), cx, cy + dp(50), cx + dp(4), cy + dp(46)], width=1.6)
+    def draw(self, *args):
+        self._draw()

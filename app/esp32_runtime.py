@@ -26,7 +26,7 @@ def _connect_to_host(app, host: str, port: int = 5005, *, save: bool = True) -> 
         app.wifi_servo = ctrl
         app._esp32_host = host
         app._esp32_port = int(port or 5005)
-        app._enable_live_servo_sync = True
+        # live servo sync 默认保持当前值，不强制打开，避免在未调试时高频发送
         RuntimeStatusLogger.log_info(f"已连接 ESP32: {host}:{port}")
         init_motion_controller_after_connect(app)
         if save:

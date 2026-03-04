@@ -204,14 +204,10 @@ class UartServoManager:
     # 0：扭矩关闭 非0：扭矩打开
     # 舵机上电默认锁力，需要关闭扭矩才可自由掰动
     # -------------------------
-    def set_torque_switch(self, servo_id, enable):
+    def set_qorque_switch(self, servo_id, enable):
         params = ustruct.pack('>BB', ADDR_TORQUE_SWITCH, enable)
         pkt = pack_packet(servo_id, CODE_WRITE_DATA, params)
         self.uart.write(pkt)
-
-    # 保留旧接口名，避免调用方兼容性问题
-    def set_qorque_switch(self, servo_id, enable):
-        return self.set_torque_switch(servo_id, enable)
 
     # -------------------------
     # 舵机模式切换

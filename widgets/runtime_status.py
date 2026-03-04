@@ -10,6 +10,7 @@ RuntimeStatusPanel - 左下角运行状态透明浮层
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.label import Label
+from kivy.uix.textinput import TextInput
 from kivy.clock import Clock
 from kivy.graphics import Color, RoundedRectangle
 from kivy.metrics import dp
@@ -19,6 +20,7 @@ import threading
 import time
 import logging
 import os
+import re
 
 
 def _pick_emoji_font():
@@ -89,24 +91,26 @@ class RuntimeStatusPanel(BoxLayout):
         # )
         # self.add_widget(title_label)
         
-        # 日志文本区域（可滚动）
+        # 日志文本区域（可滚动 + 可复制）
         self.scroll_view = ScrollView(size_hint=(1, 1))
         emoji_font = _pick_emoji_font()
-        label_kwargs = {}
+        font_kw = {}
         if emoji_font:
-            label_kwargs['font_name'] = emoji_font
-        self.log_label = Label(
+            font_kw['font_name'] = emoji_font
+        self.log_label = TextInput(
             text='[等待信息...]',
-            markup=True,
+            readonly=True,
             size_hint_y=None,
-            color=(0.85, 0.9, 0.98, 1.0),
+            foreground_color=(0.85, 0.9, 0.98, 1.0),
+            background_color=(0, 0, 0, 0),
             font_size='10sp',
-            halign='left',
-            valign='top',
-            text_size=(dp(270), None),  # \u8bbe\u7f6e\u6587\u672c\u5bbd\u5ea6\uff0c\u786e\u4fdd\u6ec6\u5de6\u6709\u6548
-            **label_kwargs,
+            cursor_width=0,
+            padding=(dp(4), dp(2)),
+            background_normal='',
+            background_active='',
+            **font_kw,
         )
-        self.log_label.bind(texture_size=self.log_label.setter('size'))
+        self.log_label.bind(minimum_height=self.log_label.setter('height'))
         self.scroll_view.add_widget(self.log_label)
         self.add_widget(self.scroll_view)
         
@@ -128,7 +132,6 @@ class RuntimeStatusPanel(BoxLayout):
         if self._expanded:
             self.width = self._expanded_width
             self.height = self._expanded_height
-            self.log_label.text_size = (dp(270), None)
             self.scroll_view.opacity = 1.0
             self.scroll_view.disabled = False
             self._dirty = True
@@ -153,23 +156,22 @@ class RuntimeStatusPanel(BoxLayout):
         """
         timestamp = time.strftime('%H:%M:%S')
         
-        # 根据类别选择颜色
-        color_map = {
-            'info': '[color=00e6ff]',     # 青色
-            'action': '[color=00ff88]',   # 绿色
-            'servo': '[color=ffdd00]',    # 黄色
-            'error': '[color=ff5555]',    # 红色
+        # 类别前缀
+        prefix_map = {
+            'info': '▶',
+            'action': '►',
+            'servo': '⚙',
+            'error': '✖',
         }
-        color_tag = color_map.get(category, color_map['info'])
-        
-        # 兼容某些字体不支持 emoji variation selector，先去除 FE0F
+        prefix = prefix_map.get(category, '▶')
+
         try:
-            message = str(message).replace("\ufe0f", "")
+            message = str(message).replace('\ufe0f', '')
         except Exception:
             pass
 
-        # 格式化日志
-        formatted_log = f"{color_tag}{timestamp}[/color] {message}"
+        # 纯文本格式（TextInput 不支持 markup）
+        formatted_log = f'{prefix} {timestamp} {message}'
         
         with self._lock:
             self.logs.append(formatted_log)
@@ -185,10 +187,9 @@ class RuntimeStatusPanel(BoxLayout):
                 return
 
             if self.logs:
-                # 仅渲染最近 30 条，降低 UI 文本重排开销
                 all_logs = '\n'.join(list(self.logs)[-30:])
             else:
-                all_logs = '[color=888888][等待信息...][/color]'
+                all_logs = '[等待信息...]'
 
             if all_logs != self._last_render_text:
                 self.log_label.text = all_logs

@@ -1,25 +1,5 @@
-#:import COLORS app.theme.COLORS
-
+# gyro_panel.kv - GyroPanel 使用自定义 canvas 绘制，此文件仅作占位
 <GyroPanel>:
-    orientation: "horizontal"
-    spacing: 10
-    padding: 10
     canvas.before:
         Color:
-            rgba: COLORS["card"]
-        RoundedRectangle:
-            pos: self.pos
-            size: self.size
-            radius: [18]
-
-    Label:
-        text: "{:.1f}".format(root.pitch)
-        color: COLORS["primary"]
-
-    Label:
-        text: "{:.1f}".format(root.roll)
-        color: COLORS["primary"]
-
-    Label:
-        text: "{:.1f}".format(root.yaw)
-        color: COLORS["primary"]
+            rgba: 0, 0, 0, 0

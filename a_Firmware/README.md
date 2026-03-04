@@ -37,12 +37,11 @@ python flash.py --chip esp32s3 --offset 0x0 --port COM5 --baud 460800 --bin esp3
 mpremote connect COM5 repl #测试输入 `import os; os.listdir();`
 python cp.py #复制esp32目录下的程序到板子
 mpremote connect COM5 fs ls #查看板子系统文件
-mpremote connect COM5 reset #重启
+
 ```
 2) 复位开发板：
 ```bash
-mpremote connect COM5 repl
-import machine; machine.reset()
+mpremote connect COM5 reset 
 ```
 3) 固件启动后：
 - 尝试使用存储的 Wi-Fi 配置连接；若无配置或失败，将启用 AP，SSID 为 `ROBOT-ESP32-S3`。

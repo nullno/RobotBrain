@@ -17,8 +17,8 @@ servo_id = 1
 
 # 创建串口对象 使用串口2作为控制对象
 # 波特率: 115200
-# RX: gpio 16
-# TX: gpio 17
+# RX: gpio 48
+# TX: gpio 47
 uart = UART(2, baudrate=115200)
 # 创建舵机管理器
 uservo = UartServoManager(uart, srv_num=servo_num)
