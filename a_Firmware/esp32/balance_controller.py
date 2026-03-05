@@ -35,6 +35,13 @@ class BalanceController:
                     pass
         self.neutral = base
 
+        # ======== 传感器安装方向适配 ========
+        # 如果 YbImu 模块安装方向导致横滚俯仰反相，可修改此处
+        self.invert_pitch = False  # 是否反转俯仰角 (前倾应为正)
+        self.invert_roll = False   # 是否反转横滚角 (右倾应为正)
+        self.invert_yaw = False    # 是否反转偏航角
+        # ==================================
+
         # 平衡增益（可通过 WiFi 指令动态调整）
         self.gain_p = 5.5   # Pitch (前后) 增益
         self.gain_r = 4.2   # Roll  (左右) 增益
@@ -71,9 +78,9 @@ class BalanceController:
         """根据 IMU 姿态计算 25 路舵机目标位置。
 
         Args:
-            pitch: 俯仰角（度），正=前倾
-            roll:  横滚角（度），正=右倾
-            yaw:   偏航角（度），正=左转
+            pitch: 俯仰角（度），逻辑要求 正=前倾
+            roll:  横滚角（度），逻辑要求 正=右倾
+            yaw:   偏航角（度），逻辑要求 正=左转
 
         Returns:
             dict {servo_id: position} 范围 0-4095
@@ -82,9 +89,11 @@ class BalanceController:
             return dict(self.neutral)
 
         targets = dict(self.neutral)
-        p = float(pitch)
-        r = float(roll)
-        y = float(yaw)
+        
+        # 适配安装方向
+        p = float(pitch) * (-1 if self.invert_pitch else 1)
+        r = float(roll) * (-1 if self.invert_roll else 1)
+        y = float(yaw) * (-1 if self.invert_yaw else 1)
 
         # === 腿部平衡（核心） ===
         p_offset = int(p * self.gain_p)
