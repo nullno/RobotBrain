@@ -325,7 +325,7 @@ class Esp32SetupPopup(BoxLayout):
             app._esp32_port = port
         except Exception:
             pass
-        self._append_log(f"配网成功 ✓  {host}:{port}")
+        self._append_log(f"配网成功-->{host}:{port}")
 
         def _notify(dt):
             try:

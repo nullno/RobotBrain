@@ -21,16 +21,25 @@ def _connect_to_host(app, host: str, port: int = 5005, *, save: bool = True) -> 
     """初始化 wifi_servo 控制器并绑定到 app。"""
     try:
         ctrl = init_controller(host, int(port or 5005))
-        app.wifi_servo = ctrl
-        app._esp32_host = host
-        app._esp32_port = int(port or 5005)
-        # live servo sync 默认保持当前值，不强制打开，避免在未调试时高频发送
-        RuntimeStatusLogger.log_info(f"已连接 ESP32: {host}:{port}")
-        init_motion_controller_after_connect(app)
-        if save:
-            save_host(host, port, app)
-        stop_background_discovery(app)
-        return True
+        # 增加一次心跳握手请求，避免假连接假日志
+        status = ctrl.request_status(timeout=1.0)
+        
+        if status is not None:
+            app.wifi_servo = ctrl
+            app._esp32_host = host
+            app._esp32_port = int(port or 5005)
+            # live servo sync 默认保持当前值，不强制打开，避免在未调
+            # 试时高频发送
+            RuntimeStatusLogger.log_info(f"已连接 ESP32: {host}:{port}")
+            init_motion_controller_after_connect(app)
+            if save:
+                save_host(host, port, app)
+            stop_background_discovery(app)
+            return True
+        else:
+            RuntimeStatusLogger.log_error(f"找到 {host}，但握手失败，实际未连接")
+            return False
+            
     except Exception as e:
         logger.warning("连接 ESP32 失败: %s", e)
     return False

@@ -258,11 +258,14 @@ def telemetry_payload():
             wifi_ip = sta.ifconfig()[0]
         except Exception:
             pass
-    # 获取舵机缓存位置
+    # 获取舵机缓存位置和完整状态
     servo_data = {}
-    cached = servo.get_cached_positions()
-    for sid, pos in cached.items():
-        servo_data[str(sid)] = {"position": int(pos)}
+    cached_pos = servo.get_cached_positions()
+    cached_status = servo.get_cached_status()
+    for sid, pos in cached_pos.items():
+        st = dict(cached_status.get(sid, {}))
+        st["position"] = int(pos)
+        servo_data[str(sid)] = st
 
     return {
         "type": "telemetry",
@@ -291,8 +294,12 @@ async def handle_command(msg, addr, sock=None):
     - motor_speed    : 设置电机转速
     - scan           : 扫描在线舵机
     """
+    global last_cmd_ticks
     mtype = msg.get("type") or msg.get("cmd") or "servo_targets"
     resp = None
+
+    if mtype in ("servo_targets", "keyframe", "set_single"):
+        last_cmd_ticks = time.ticks_ms()
 
     if mtype == "discover":
         resp = {"type": "discover_resp", "port": UDP_PORT, "device": DEVICE_NAME}
@@ -432,16 +439,29 @@ async def udp_server():
     log("udp: listening on :{}".format(UDP_PORT))
     while True:
         try:
-            data, addr = sock.recvfrom(2048)
+            # 一次性处理所有到达的 UDP 数据包，排空缓冲区
+            while True:
+                data = None
+                try:
+                    data, addr = sock.recvfrom(2048)
+                except Exception:
+                    # EAGAIN, 没数据了
+                    pass
+                
+                if not data:
+                    break
+                    
+                try:
+                    msg = json.loads(data.decode())
+                    # 避免在频繁通讯时大量打印日志降低性能，可选择性跳过
+                    mt = msg.get("type", "?")
+                    if mt not in ("status", "servo_targets", "keyframe", "set_single"):
+                        log("udp: recv type={} from={}".format(mt, addr[0]))
+                    await handle_command(msg, addr, sock)
+                except Exception as e:
+                    log("udp: handle err={}".format(e))
         except Exception:
-            data = None
-        if data:
-            try:
-                msg = json.loads(data.decode())
-                log("udp: recv type={} from={}".format(msg.get("type", "?"), addr[0]))
-                await handle_command(msg, addr, sock)
-            except Exception as e:
-                log("udp: handle err={}".format(e))
+            pass
         await asyncio.sleep_ms(10)
 
 
@@ -549,11 +569,19 @@ async def balance_task():
         await asyncio.sleep_ms(50)
 
 
+last_cmd_ticks = 0
+
 async def servo_poll_task():
     """后台轮询读取舵机完整状态（温度、电压、位置等）。"""
+    global last_cmd_ticks
     await asyncio.sleep_ms(3000)
     poll_index = 0
     while True:
+        # 如果近期有控制指令，则暂停状态轮询（保留 1 秒纯净期），提升操作丝滑度
+        if time.ticks_diff(time.ticks_ms(), last_cmd_ticks) < 1000:
+            await asyncio.sleep_ms(100)
+            continue
+            
         if servo.available:
             try:
                 online = servo.get_online_ids()

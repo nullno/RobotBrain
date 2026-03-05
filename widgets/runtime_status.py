@@ -91,8 +91,7 @@ class RuntimeStatusPanel(BoxLayout):
         # )
         # self.add_widget(title_label)
         
-        # 日志文本区域（可滚动 + 可复制）
-        self.scroll_view = ScrollView(size_hint=(1, 1))
+        # 日志文本区域（自由选择复制 + 支持滚动）
         emoji_font = _pick_emoji_font()
         font_kw = {}
         if emoji_font:
@@ -100,19 +99,17 @@ class RuntimeStatusPanel(BoxLayout):
         self.log_label = TextInput(
             text='[等待信息...]',
             readonly=True,
-            size_hint_y=None,
+            size_hint=(1, 1),
             foreground_color=(0.85, 0.9, 0.98, 1.0),
             background_color=(0, 0, 0, 0),
             font_size='10sp',
-            cursor_width=0,
+            use_bubble=True,
             padding=(dp(4), dp(2)),
             background_normal='',
             background_active='',
             **font_kw,
         )
-        self.log_label.bind(minimum_height=self.log_label.setter('height'))
-        self.scroll_view.add_widget(self.log_label)
-        self.add_widget(self.scroll_view)
+        self.add_widget(self.log_label)
         
         # 启动日志刷新定时器（仅在内容变化时刷新）
         refresh_interval = 0.45 if _kivy_platform == 'android' else 0.25
@@ -132,15 +129,15 @@ class RuntimeStatusPanel(BoxLayout):
         if self._expanded:
             self.width = self._expanded_width
             self.height = self._expanded_height
-            self.scroll_view.opacity = 1.0
-            self.scroll_view.disabled = False
+            self.log_label.opacity = 1.0
+            self.log_label.disabled = False
             self._dirty = True
             RuntimeStatusLogger.log_info('日志面板已展开（双击可隐藏）')
         else:
             self.width = self._collapsed_width
             self.height = self._collapsed_height
-            self.scroll_view.opacity = 0.0
-            self.scroll_view.disabled = True
+            self.log_label.opacity = 0.0
+            self.log_label.disabled = True
     
     def add_log(self, message: str, category: str = 'info'):
         """
@@ -193,6 +190,7 @@ class RuntimeStatusPanel(BoxLayout):
 
             if all_logs != self._last_render_text:
                 self.log_label.text = all_logs
+                self.log_label.cursor = (0, len(all_logs.split('\n')))
                 self._last_render_text = all_logs
             self._dirty = False
 

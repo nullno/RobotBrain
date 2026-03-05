@@ -7,6 +7,7 @@ GyroPanel - 迷你三维小人姿态指示器。
 
 import math
 from kivy.uix.widget import Widget
+from kivy.uix.behaviors import ButtonBehavior
 from kivy.graphics import Color, Line, Ellipse, Rectangle as GRect
 from kivy.core.text import Label as CoreLabel
 from kivy.clock import Clock
@@ -69,7 +70,7 @@ def _project(x3, y3, z3, cx, cy, scale, persp=3.5):
     return cx + x3 * scale * f, cy + y3 * scale * f
 
 
-class GyroPanel(Widget):
+class GyroPanel(ButtonBehavior, Widget):
     """迷你三维小人姿态部件。"""
 
     def __init__(self, **kwargs):

@@ -36,6 +36,14 @@ import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+try:
+    from widgets.runtime_status import RuntimeStatusLogger
+except ImportError:
+    class RuntimeStatusLogger:
+        @classmethod
+        def log(cls, msg, cat='info'):
+            pass
+
 logger = logging.getLogger(__name__)
 
 # UDP 调试输出开关，默认关闭，设环境变量 WIFI_SERVO_UDP_DEBUG=1 可开启
@@ -46,6 +54,17 @@ SERVO_MIN = 0
 SERVO_MAX = 4095
 DEFAULT_UDP_PORT = 5005
 MAX_SERVO_ID = 25
+
+
+def angle_to_pos(angle: float) -> int:
+    """将角度(0~360)转换为内部位置值(0~4095)"""
+    val = (float(angle) / 360.0) * SERVO_MAX
+    return max(SERVO_MIN, min(SERVO_MAX, int(round(val))))
+
+def pos_to_angle(pos: int) -> float:
+    """将内部位置值(0~4095)转换为角度(0~360)"""
+    val = (float(pos) / float(SERVO_MAX)) * 360.0
+    return max(0.0, min(360.0, val))
 
 
 class WiFiServoController:
@@ -115,17 +134,18 @@ class WiFiServoController:
         for sid, pos in (targets or {}).items():
             try:
                 sid_i = int(sid)
-                if sid_i < 1 or sid_i > MAX_SERVO_ID:
+                if sid_i < 1 or sid_i > 255:
                     continue
                 safe[str(sid_i)] = max(SERVO_MIN, min(SERVO_MAX, int(pos)))
             except (ValueError, TypeError):
                 continue
         if not safe:
             return False
+        # 为了不卡顿，允许 duration 最低给 0
         payload = {
             "type": "servo_targets",
             "targets": safe,
-            "duration": max(30, int(duration_ms)),
+            "duration": max(0, int(duration_ms)),
         }
         return self._send(payload)
 
@@ -214,7 +234,7 @@ class WiFiServoController:
             "type": "set_single",
             "servo_id": int(servo_id),
             "position": int(position),
-            "duration": max(30, int(duration_ms)),
+            "duration": max(0, int(duration_ms)),
         }
         resp = self._send_and_recv(payload, timeout)
         ok = bool(resp and resp.get("ok"))
@@ -273,21 +293,13 @@ class WiFiServoController:
             包含 imu / servos / wifi 等字段的 dict，超时返回 None。
         """
         payload = {"type": "status"}
-        with self._lock:
-            if not self._host or not self._sock:
-                return None
-            try:
-                data = json.dumps(payload).encode("utf-8")
-                self._sock.sendto(data, (self._host, self._port))
-                self._sock.settimeout(float(timeout))
-                resp_data, _ = self._sock.recvfrom(4096)
-                obj = json.loads(resp_data.decode("utf-8"))
-                self._last_status = obj
-                self._last_status_ts = time.time()
-                self._connected = True
-                return obj
-            except Exception:
-                return self._last_status if self._last_status else None
+        # 使用更新过的_send_and_recv来兼容读缓冲处理并防丢包
+        resp = self._send_and_recv(payload, timeout)
+        if resp:
+            self._last_status = resp
+            self._last_status_ts = time.time()
+            return resp
+        return self._last_status if self._last_status else None
 
     def get_cached_status(self) -> Dict[str, Any]:
         """返回最近一次缓存的 telemetry。"""
@@ -353,39 +365,78 @@ class WiFiServoController:
                 data = json.dumps(payload).encode("utf-8")
                 self._sock.sendto(data, (self._host, self._port))
                 self._connected = True
+                cmd_type = payload.get("type", "?")
+                if cmd_type not in ("status", "servo_targets"):
+                    RuntimeStatusLogger.log(f"UDP 发送 [{cmd_type}]: {data.decode('utf-8')}", "servo")
                 if UDP_DEBUG:
                     logger.debug("UDP → %s:%d  %s", self._host, self._port, payload.get("type", "?"))
                 return True
             except Exception as e:
+                RuntimeStatusLogger.log(f"UDP 发送失败 [{payload.get('type')}]: {e}", "error")
                 logger.debug("UDP send failed: %s", e)
                 self._connected = False
                 return False
 
     def _send_and_recv(self, payload: dict, timeout: float = 0.5) -> Optional[Dict[str, Any]]:
-        """发送指令并等待回复（阻塞）。用于需要返回结果的指令。"""
+        """发送指令并等待回复（阻塞）。用于需要返回结果的指令。能过滤无关报文（如心跳）。"""
         with self._lock:
             if not self._host:
                 return None
             self._ensure_socket()
             if not self._sock:
                 return None
+            
+            # 清空接收缓冲区，防止读到旧数据
+            self._sock.settimeout(0.0)
+            while True:
+                try:
+                    self._sock.recvfrom(4096)
+                except Exception:
+                    break
+
             try:
                 data = json.dumps(payload).encode("utf-8")
                 self._sock.sendto(data, (self._host, self._port))
+                cmd_type = payload.get("type", "?")
+                expected_resp_type = cmd_type + "_resp" if cmd_type != "status" else "telemetry"
+                
+                if cmd_type != "status":
+                    RuntimeStatusLogger.log(f"UDP 发送 [{cmd_type}]: {data.decode('utf-8')}", "servo")
                 if UDP_DEBUG:
                     logger.debug("UDP → %s:%d  %s", self._host, self._port, payload.get("type", "?"))
-                self._sock.settimeout(float(timeout))
-                resp_data, _ = self._sock.recvfrom(4096)
-                obj = json.loads(resp_data.decode("utf-8"))
-                if UDP_DEBUG:
-                    logger.debug("UDP ← %s", obj.get("type", "?"))
-                self._connected = True
-                return obj
+                
+                t0 = time.time()
+                while time.time() - t0 < timeout:
+                    rem = timeout - (time.time() - t0)
+                    if rem <= 0:
+                        break
+                    self._sock.settimeout(rem)
+                    resp_data, _ = self._sock.recvfrom(4096)
+                    obj = json.loads(resp_data.decode("utf-8"))
+                    
+                    if obj.get("type") == "telemetry":
+                        self._last_status = obj
+                        self._last_status_ts = time.time()
+
+                    # 识别到所期望的反馈类型，或者是通用错误信息等即返回
+                    if obj.get("type") in (expected_resp_type, "error"):
+                        if cmd_type != "status":
+                            RuntimeStatusLogger.log(f"UDP 接收 [{cmd_type}]: {resp_data.decode('utf-8')}", "info")
+                        if UDP_DEBUG:
+                            logger.debug("UDP ← %s", obj.get("type", "?"))
+                        self._connected = True
+                        return obj
+                        
+                return None
             except socket.timeout:
+                cmd_type = payload.get("type", "?")
+                if cmd_type != "status":
+                    RuntimeStatusLogger.log(f"UDP 接收超时 [{cmd_type}]", "error")
                 if UDP_DEBUG:
                     logger.debug("UDP recv timeout for %s", payload.get("type", "?"))
                 return None
             except Exception as e:
+                RuntimeStatusLogger.log(f"UDP 通信错误 [{payload.get('type')}]: {e}", "error")
                 logger.debug("UDP send_and_recv failed: %s", e)
                 self._connected = False
                 return None

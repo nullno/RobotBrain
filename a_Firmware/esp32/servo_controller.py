@@ -139,7 +139,7 @@ class ServoController:
     def set_positions(self, targets, duration_ms=300):
         if not self._manager:
             return False
-        dur = max(1, int(duration_ms))
+        dur = max(0, int(duration_ms))
         count = 0
         for sid, pos in targets.items():
             try:
@@ -188,26 +188,60 @@ class ServoController:
         return self._read_register_word(int(servo_id), ADDR_CURRENT_VELOCITY)
 
     def read_full_status(self, servo_id):
-        """读取完整状态：位置、温度、电压、电流、速度。"""
+        """读取完整状态：位置、速度、电压、温度 (通过一次性连续读取优化速度)。"""
         result = {}
         sid = int(servo_id)
-        pos = self.read_position(sid)
-        if pos is not None:
+        
+        # 0x38起连续读8字节，覆盖: 0x38(Pos,2), 0x3A(Vel,2), 0x3C(Teac,1), 0x3D(Res,1), 0x3E(Volt,1), 0x3F(Temp,1)
+        data = self._read_register_bytes(sid, ADDR_CURRENT_POSITION, 8)
+        if data and len(data) >= 8:
+            pos = (data[0] << 8) | data[1]
+            vel = (data[2] << 8) | data[3]
+            volt = data[6]
+            temp = data[7]
+            
             result["position"] = int(pos)
-        temp = self.read_temperature(sid)
-        if temp is not None:
-            result["temperature"] = int(temp)
-        volt = self.read_voltage(sid)
-        if volt is not None:
-            result["voltage"] = int(volt)
-        current = self.read_current_ma(sid)
-        if current is not None:
-            result["current_ma"] = int(current)
-        vel = self.read_velocity(sid)
-        if vel is not None:
             result["velocity"] = int(vel)
-        if result:
+            result["voltage"] = int(volt)
+            result["temperature"] = int(temp)
+            
+            self._positions[sid] = int(pos)
+            
+            # 单独读电流 (因为在 0x2E，与0x38不连续)
+            current = self.read_current_ma(sid)
+            if current is not None:
+                result["current_ma"] = int(current)
+            
+            # 单独读扭矩状态 (0x28)
+            torque_val = self._read_register_byte(sid, ADDR_TORQUE_ENABLE)
+            if torque_val is not None:
+                result["torque"] = (torque_val == TORQUE_ON)
+                
             self._status_cache[sid] = result
+        else:
+            # 兼容后备逻辑
+            pos = self.read_position(sid)
+            if pos is not None:
+                result["position"] = int(pos)
+            temp = self.read_temperature(sid)
+            if temp is not None:
+                result["temperature"] = int(temp)
+            volt = self.read_voltage(sid)
+            if volt is not None:
+                result["voltage"] = int(volt)
+            current = self.read_current_ma(sid)
+            if current is not None:
+                result["current_ma"] = int(current)
+            vel = self.read_velocity(sid)
+            if vel is not None:
+                result["velocity"] = int(vel)
+            torque_val = self._read_register_byte(sid, ADDR_TORQUE_ENABLE)
+            if torque_val is not None:
+                result["torque"] = (torque_val == TORQUE_ON)
+            
+            if result:
+                self._status_cache[sid] = result
+                
         return result if result else None
 
     # ─────────────── 扭矩控制 ───────────────
@@ -227,6 +261,10 @@ class ServoController:
         for sid in ids:
             try:
                 self._write_register_byte(int(sid), ADDR_TORQUE_ENABLE, flag)
+                # 记录扭矩状态到内存，以便状态查询时立刻得到更新
+                if int(sid) not in self._status_cache:
+                    self._status_cache[int(sid)] = {}
+                self._status_cache[int(sid)]["torque"] = enable
                 count += 1
             except Exception:
                 pass
@@ -325,6 +363,8 @@ class ServoController:
         try:
             params = ustruct.pack('>BB', addr, 0x01)
             pkt = pack_packet(int(servo_id), CODE_READ_DATA, params)
+            if hasattr(self._manager, "clear_buffer"):
+                self._manager.clear_buffer()
             self._manager.uart.write(pkt)
             resp = self._manager.read_response(timeout=80)
             if resp and resp.get("type") == "read_data":
@@ -338,12 +378,36 @@ class ServoController:
             log("read_reg 0x{:02X} id={} err: {}".format(addr, servo_id, e))
             return None
 
+    def _read_register_bytes(self, servo_id, addr, length):
+        if not self._manager or not pack_packet or not ustruct:
+            return None
+        try:
+            params = ustruct.pack('>BB', addr, length & 0xFF)
+            pkt = pack_packet(int(servo_id), CODE_READ_DATA, params)
+            if hasattr(self._manager, "clear_buffer"):
+                self._manager.clear_buffer()
+            self._manager.uart.write(pkt)
+            resp = self._manager.read_response(timeout=80)
+            if resp and resp.get("type") == "read_data":
+                data = resp.get("data") or []
+                return data if len(data) >= length else None
+            # 兼容处理
+            if length == 2 and resp and resp.get("type") == "read_position":
+                val = resp.get("pos")
+                return [(val >> 8) & 0xFF, val & 0xFF]
+            return None
+        except Exception as e:
+            log("read_regs 0x{:02X} id={} err: {}".format(addr, servo_id, e))
+            return None
+
     def _read_register_word(self, servo_id, addr):
         if not self._manager or not pack_packet or not ustruct:
             return None
         try:
             params = ustruct.pack('>BB', addr, 0x02)
             pkt = pack_packet(int(servo_id), CODE_READ_DATA, params)
+            if hasattr(self._manager, "clear_buffer"):
+                self._manager.clear_buffer()
             self._manager.uart.write(pkt)
             resp = self._manager.read_response(timeout=80)
             if resp and resp.get("type") == "read_data":

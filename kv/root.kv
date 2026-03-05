@@ -23,7 +23,8 @@ FloatLayout:
             id: gyro_panel
             size_hint: None, None
             size: dp(90), dp(120)
-            pos_hint: {"x": -0.02, "top": 1}
+            pos_hint: {"right": 0.98, "y": 0.04}
+            on_release: app.root_widget.ids.debug_panel.open_debug()
 
         Esp32Indicator:
             id: esp32_indicator
@@ -43,15 +44,3 @@ FloatLayout:
         RuntimeStatusPanel:
             id: runtime_status
             pos_hint: {"x": 0.01, "y": 0.08}
-
-        Button:
-            size_hint: None, None
-            size: dp(20), dp(20)
-            pos_hint: {"right": 0.98, "y": 0.04}
-            background_normal: ""
-            background_down: ""
-            on_release: app.root_widget.ids.debug_panel.open_debug()
-            Image:
-                source: "assets/icon_debug.png"
-                size: self.parent.size
-                pos: self.parent.pos

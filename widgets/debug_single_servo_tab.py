@@ -1,7 +1,7 @@
 import threading
 import time
 
-from services.wifi_servo import SERVO_MAX
+from services.wifi_servo import SERVO_MAX, angle_to_pos, pos_to_angle
 
 from kivy.app import App
 from kivy.clock import Clock
@@ -86,23 +86,13 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
 
     btn_zero = square_button_cls(text="归零\n(回中位)")
     btn_read = square_button_cls(text="读取状态")
-    btn_read_diag = square_button_cls(text="读回自检\n(10次)")
-    btn_60 = square_button_cls(text="转动60°")
     btn_360 = square_button_cls(text="转动360°")
-    btn_torque_toggle = square_button_cls(text="扭矩: ?")
-    btn_spin = square_button_cls(text="间歇旋转")
-    btn_set_id = square_button_cls(text="设置ID")
-    btn_motor_mode = square_button_cls(text="电机模式")
+    btn_torque_toggle = square_button_cls(text="扭矩: ON")
 
     grid.add_widget(btn_zero)
     grid.add_widget(btn_read)
-    grid.add_widget(btn_read_diag)
-    grid.add_widget(btn_60)
     grid.add_widget(btn_360)
     grid.add_widget(btn_torque_toggle)
-    grid.add_widget(btn_spin)
-    grid.add_widget(btn_set_id)
-    grid.add_widget(btn_motor_mode)
 
     grid_anchor = AnchorLayout(
         anchor_x="center", anchor_y="top", size_hint=(1, None)
@@ -342,7 +332,7 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
         def _do_wifi():
             try:
                 _ensure_torque()
-                pos = int(angle_deg / 360.0 * SERVO_MAX)
+                pos = angle_to_pos(angle_deg)
                 if duration_override is not None:
                     dur = max(0, int(duration_override))
                 else:
@@ -385,19 +375,46 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
         _move_to_angle(360)
         _set_knob_and_text(360)
 
+    _knob_timer = {}
+
     def _move_knob_angle(dt=None):
-        """旋钮实时控制舵机 —— 使用短 duration 保证丝滑跟手。"""
+        """旋钮实时控制舵机 —— 节流与防抖发送"""
         try:
             if knob_sync_state.get("busy"):
                 return
             ang = float(getattr(angle_knob, "value", 0.0))
             ti_c_angle.text = str(int(round(ang)))
-            # 旋钮控制使用 100ms 短时间，确保跟手不卡顿
-            _move_to_angle(ang, show_tip=False, duration_override=100)
+            
+            # 使用简单的节流(Throttle)机制：30ms 频率上限
+            now = time.time()
+            last_t = _knob_timer.get("last_send_time", 0.0)
+            
+            if now - last_t < 0.03:
+                # 仍在节流期内，取消之前的定时发送，重新计划最后一次发送
+                if "pending_event" in _knob_timer:
+                    _knob_timer["pending_event"].cancel()
+                _knob_timer["pending_event"] = Clock.schedule_once(_move_knob_angle, 0.03 - (now - last_t))
+                return
+                
+            _knob_timer["last_send_time"] = now
+            
+            app = App.get_running_app()
+            sid = _get_sid()
+            wifi_ctrl = getattr(app, "wifi_servo", None)
+            if not (wifi_ctrl and wifi_ctrl.is_connected):
+                return
+                
+            # 发送指令，采用 40ms 平滑时间，降低延迟且更丝滑
+            pos = angle_to_pos(ang)
+            wifi_ctrl.set_single(sid, pos, duration_ms=40)
+            owner._mark_servo_writable(sid)
+            
         except Exception:
             pass
 
     def _format_voltage(v):
+        if v is None:
+            return "-"
         try:
             fv = float(v)
         except Exception:
@@ -421,30 +438,53 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
 
         def _do_read():
             try:
-                # 直接读取单个舵机位置（更快响应，不依赖全局 status）
-                pos = wifi_ctrl.read_servo_position(sid, timeout=1.0)
-                if pos is not None:
-                    try:
-                        deg = max(0.0, min(360.0, (float(pos) / float(SERVO_MAX)) * 360.0))
-                        Clock.schedule_once(lambda dt, d=deg: _set_knob_and_text(d), 0)
-                    except Exception:
-                        pass
-                    msg = f"ID {sid} -> pos:{pos} ({deg:.0f}\u00b0)"
+                # 尝试获取完整状态（温度/电压），不阻塞主要流程
+                info = wifi_ctrl.read_full_status(sid, timeout=1.0)
+                if not info:
+                    # 退级至只读位置
+                    pos = wifi_ctrl.read_servo_position(sid, timeout=1.0)
+                    if pos is not None:
+                        try:
+                            deg = pos_to_angle(pos)
+                            Clock.schedule_once(lambda dt, d=deg: _set_knob_and_text(d), 0)
+                        except Exception:
+                            pass
+                        msg = f"ID {sid} -> pos:{pos} ({deg:.0f}\u00b0)"
+                    else:
+                        msg = f"ID {sid} 读取失败：未收到返回数据"
                 else:
-                    msg = f"ID {sid} 读取失败：未收到返回数据"
-
-                # 尝试获取完整状态（温度/电压），但不阻塞主要流程
-                try:
-                    status = wifi_ctrl.request_status(timeout=0.8)
-                    servos = (status or {}).get("servos", {})
-                    info = servos.get(str(sid)) or servos.get(int(sid))
-                    if info:
-                        temp = info.get("temperature")
-                        volt = info.get("voltage")
-                        if temp is not None or volt is not None:
-                            msg += f" temp:{temp}\u00b0C volt:{_format_voltage(volt)}V"
-                except Exception:
-                    pass
+                    pos = info.get("position", "-")
+                    if pos != "-":
+                        try:
+                            deg = pos_to_angle(pos)
+                            Clock.schedule_once(lambda dt, d=deg: _set_knob_and_text(d), 0)
+                            msg = f"ID {sid} -> pos:{pos} ({deg:.0f}\u00b0)"
+                        except Exception:
+                            msg = f"ID {sid} -> pos:{pos}"
+                    else:
+                        msg = f"ID {sid} -> 状态读取成功, 无位置信息"
+                        
+                    temp = info.get("temperature", "-")
+                    volt = info.get("voltage")
+                    current = info.get("current_ma", "-")
+                    vel = info.get("velocity", "-")
+                    torque = info.get("torque")
+                    
+                    # 容错：如果 torque 字段存在，则将其同步到按钮状态
+                    if torque is not None:
+                        tq_str = "ON" if torque else "OFF"
+                        Clock.schedule_once(lambda dt, t=tq_str: setattr(btn_torque_toggle, 'text', f"扭矩: {t}"), 0)
+                    else:
+                        tq_str = "未知"
+                    
+                    volt_str = _format_voltage(volt)
+                    if volt is not None:
+                        volt_str += "V"
+                        
+                    msg += f"\n温:{temp}℃ 压:{volt_str} 流:{current}mA 速:{vel} 力:{tq_str}"
+                    
+                    # 尝试更新到界面缓存中，虽然有心跳也在更新
+                    owner._mark_servo_writable(sid)
 
                 Clock.schedule_once(lambda dt, m=msg: owner._show_info_popup(m))
             except Exception as e:
@@ -453,98 +493,8 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
 
         threading.Thread(target=_do_read, daemon=True).start()
 
-    def _readback_self_test(_):
-        app = App.get_running_app()
-        sid = _get_sid()
-        try:
-            app._latest_probe_sid = int(sid)
-        except Exception:
-            pass
-
-        wifi_ctrl = getattr(app, "wifi_servo", None)
-        if not (wifi_ctrl and wifi_ctrl.is_connected):
-            owner._show_info_popup("未连接舵机")
-            return
-        if not _require_sid_online(sid, strict=False):
-            return
-
-        try:
-            now_ts = time.time()
-            owner._status_poll_suspended_until = max(
-                float(getattr(owner, "_status_poll_suspended_until", 0.0) or 0.0),
-                now_ts + 2.2,
-            )
-        except Exception:
-            pass
-
-        def _do_test():
-            samples = 10
-            ok_count = 0
-            pos_values = []
-            t0 = time.time()
-
-            try:
-                for _idx in range(samples):
-                    try:
-                        status = wifi_ctrl.request_status(timeout=1.0)
-                        servos = (status or {}).get("servos", {})
-                        info = servos.get(str(sid)) or servos.get(int(sid))
-                        if info is None:
-                            continue
-                        pos = info.get("position")
-                        if pos is None:
-                            continue
-                        ok_count += 1
-                        pos_values.append(int(pos))
-                    except Exception:
-                        pass
-                    time.sleep(0.09)
-
-                elapsed_ms = int((time.time() - t0) * 1000)
-                success_rate = int(round((ok_count / float(samples)) * 100.0))
-
-                if pos_values:
-                    pos_min = min(pos_values)
-                    pos_max = max(pos_values)
-                    msg = (
-                        f"ID {sid} 读回自检: 成功 {ok_count}/{samples} ({success_rate}%)，"
-                        f"耗时 {elapsed_ms}ms，位置范围 [{pos_min}, {pos_max}]"
-                    )
-                else:
-                    msg = (
-                        f"ID {sid} 读回自检: 成功 0/{samples} (0%)，"
-                        f"耗时 {elapsed_ms}ms"
-                    )
-
-                try:
-                    if RuntimeStatusLogger:
-                        if ok_count == 0:
-                            RuntimeStatusLogger.log_error(msg)
-                        else:
-                            RuntimeStatusLogger.log_info(msg)
-                except Exception:
-                    pass
-
-                Clock.schedule_once(lambda dt, m=msg: owner._show_info_popup(m), 0)
-            except Exception as e:
-                emsg = f"读回自检失败: {e}"
-                try:
-                    if RuntimeStatusLogger:
-                        RuntimeStatusLogger.log_error(emsg)
-                except Exception:
-                    pass
-                Clock.schedule_once(lambda dt, m=emsg: owner._show_info_popup(m), 0)
-            finally:
-                try:
-                    owner._status_poll_suspended_until = 0.0
-                    Clock.schedule_once(lambda dt: owner.refresh_servo_status(), 0)
-                except Exception:
-                    pass
-
-        threading.Thread(target=_do_test, daemon=True).start()
-
     def _update_torque_label(dt=None):
-        btn_torque_toggle.text = "扭矩: -"
+        btn_torque_toggle.text = "扭矩: ON"
 
     def _toggle_torque(_):
         app = App.get_running_app()
@@ -553,65 +503,26 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
         if not (wifi_ctrl and wifi_ctrl.is_connected):
             owner._show_info_popup("未连接舵机")
             return
+        
+        # 获取当前扭矩状态，尝试反转
+        current_torque = True
         try:
-            # wifi_servo 的 set_torque 为全局切换
-            wifi_ctrl.set_torque(True)
+            info = wifi_ctrl.read_full_status(sid, timeout=0.8)
+            if info and "torque" in info:
+                current_torque = info["torque"]
+        except Exception:
+            pass
+            
+        target_torque = not current_torque
+        try:
+            # 兼容 WiFi 传字典的方式，或者全局
+            wifi_ctrl.set_torque(target_torque) 
             owner._mark_servo_writable(sid)
-            owner._show_info_popup("已启用扭矩")
+            t_str = "启用" if target_torque else "释放"
+            owner._show_info_popup(f"已{t_str}扭矩")
+            btn_torque_toggle.text = f"扭矩:{'ON' if target_torque else 'OFF'}"
         except Exception as ex:
             owner._show_info_popup(f"扭矩操作失败: {ex}")
-
-    if not hasattr(owner, "_spin_controllers"):
-        owner._spin_controllers = {}
-
-    def _spin_toggle(_):
-        sid = _get_sid()
-        ctrl = owner._spin_controllers.get(sid)
-        if ctrl and ctrl.get("running"):
-            ctrl["running"] = False
-            owner._show_info_popup("停止间歇旋转")
-            return
-
-        app = App.get_running_app()
-        wifi_ctrl = getattr(app, "wifi_servo", None)
-        if not (wifi_ctrl and wifi_ctrl.is_connected):
-            owner._show_info_popup("未连接舵机")
-            return
-        if not _require_sid_online(sid, strict=False):
-            return
-
-        stop_flag = {"running": True}
-        owner._spin_controllers[sid] = stop_flag
-        owner._mark_servo_writable(sid)
-
-        def _run_spin():
-            a = int(SERVO_MAX * (50.0 / 360.0))   # ≈50°
-            b = int(SERVO_MAX * (350.0 / 360.0))  # ≈350°
-            try:
-                while stop_flag["running"]:
-                    try:
-                        wifi_ctrl.set_single(sid, a, duration_ms=400)
-                    except Exception:
-                        pass
-                    time.sleep(0.6)
-                    if not stop_flag["running"]:
-                        break
-                    try:
-                        wifi_ctrl.set_single(sid, b, duration_ms=400)
-                    except Exception:
-                        pass
-                    time.sleep(0.6)
-            finally:
-                stop_flag["running"] = False
-
-        threading.Thread(target=_run_spin, daemon=True).start()
-        owner._show_info_popup("开始间歇旋转")
-
-    def _set_id(_):
-        owner._show_info_popup("WiFi 模式暂不支持修改舵机 ID")
-
-    def _set_motor_mode(_):
-        owner._show_info_popup("WiFi 模式暂不支持设置电机模式")
 
     def _do_c_go(_):
         try:
@@ -699,14 +610,9 @@ def build_single_servo_tab_content(owner, tab_item, tech_button_cls, square_butt
     btn_inc.bind(on_release=_inc)
     btn_dec.bind(on_release=_dec)
     btn_zero.bind(on_release=_move_zero)
-    btn_60.bind(on_release=_move_60)
     btn_360.bind(on_release=_move_360)
     btn_read.bind(on_release=_read_status)
-    btn_read_diag.bind(on_release=_readback_self_test)
     btn_torque_toggle.bind(on_release=_toggle_torque)
-    btn_spin.bind(on_release=_spin_toggle)
-    btn_set_id.bind(on_release=_set_id)
-    btn_motor_mode.bind(on_release=_set_motor_mode)
 
     knob_move_trigger = Clock.create_trigger(_move_knob_angle, 0.02)
     angle_knob.bind(value=lambda *_: knob_move_trigger())

@@ -208,6 +208,8 @@ class ServoStatusCard(FloatLayout):
 
     def update_data(self, data):
         def _format_voltage(v):
+            if v is None:
+                return "-"
             try:
                 fv = float(v)
             except Exception:
@@ -219,10 +221,10 @@ class ServoStatusCard(FloatLayout):
 
         self.body.clear_widgets()
         fields = [
-            ("角度", "-" if not data else str(data.get("pos", 0))),
-            ("温度", "-" if not data else f"{data.get('temp',0)}°C"),
-            ("电压", "-" if not data else _format_voltage(data.get("volt", 0))),
-            ("扭矩", "-" if not data else ("ON" if data.get("torque") else "OFF")),
+            ("角度", "-" if not data or data.get("pos") is None else str(data.get("pos"))),
+            ("温度", "-" if not data or data.get("temp") is None else f"{data.get('temp')}°C"),
+            ("电压", "-" if not data or data.get("volt") is None else _format_voltage(data.get("volt"))),
+            ("扭矩", "-" if not data or data.get("torque") is None else ("ON" if data.get("torque") else "OFF")),
         ]
 
         for key, val in fields:
