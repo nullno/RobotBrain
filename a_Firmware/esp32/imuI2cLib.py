@@ -224,8 +224,8 @@ class IMUI2C(object):
 
 
 if __name__ == '__main__':
-    # ESP32 默认 I2C 引脚: SCL=22, SDA=21
-    i2c = machine.I2C(0, scl=machine.Pin(22), sda=machine.Pin(21), freq=400000)
+    # ESP32-S3 I2C 引脚: SCL=41, SDA=42
+    i2c = machine.I2C(0, scl=machine.Pin(41), sda=machine.Pin(42), freq=100000)
     bot = IMUI2C(i2c, debug=True)
 
     version = bot.get_version()

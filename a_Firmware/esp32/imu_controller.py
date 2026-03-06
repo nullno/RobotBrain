@@ -39,13 +39,17 @@ class IMUController:
 
     def init(self):
         """初始化 IMU 并进行必要的配置。"""
+        print(">> [IMUController] Starting initialization... Target I2C Address: {}".format(hex(self.addr)))
         if self.i2c is None:
+            print(">> [IMUController] Error: I2C object is None!")
             return False
         
         try:
-            self.imu_dev = IMUI2C(self.i2c, addr=self.addr, debug=False)
+            print(">> [IMUController] Creating IMUI2C instance (debug enabled)...")
+            self.imu_dev = IMUI2C(self.i2c, addr=self.addr, debug=True)
             
             # 读取版本号，验证通讯是否成功
+            print(">> [IMUController] Reading device version...")
             version = self.imu_dev.get_version()
             if version:
                 print("YbImu (I2C) 初始化成功, Version: {}".format(version))
@@ -54,6 +58,15 @@ class IMUController:
                 self.imu_dev.set_algo_type(9) 
                 
                 self._initialized = True
+                
+                # 初始化成功后，读取一次 IMU 数据并打印
+                print(">> [IMUController] Attempting first read after init...")
+                first_read = self.update()
+                if first_read:
+                    print(">> [IMUController] First read success! Pitch={:.2f}, Roll={:.2f}, Yaw={:.2f}".format(*first_read))
+                else:
+                    print(">> [IMUController] Warning: First read returned None.")
+                    
                 return True
             else:
                 print("未检测到 YbImu，请检查 I2C 接线！")

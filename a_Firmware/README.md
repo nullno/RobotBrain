@@ -8,7 +8,6 @@
 - `esp32/servo_controller.py`：高级舵机执行与查询适配层，供 `main.py` 调用。
 - `flash.py`：基于 esptool 的烧录助手。
 - `FLASHING.md`：本说明。
-- 其他子目录：`imuLib/`、`servo-micropython-esp32-sdk/` 为参考库与示例。
 
 ## 环境准备
 - Python 3.8+
@@ -78,8 +77,8 @@ IMU 模块负责为人形机器人提供高精度的姿态估计（Pitch/Roll/Ya
 我们采用内置硬件级卡尔曼/互补滤波解算的 YbImu 模块，直接通过 I2C 接口总线输出欧拉角（不再占用 ESP32 的算力资源）。
 
 **ESP32 默认 I2C 接线定义:**
-- SCL -> Pin 22
-- SDA -> Pin 21
+- SCL -> Pin 41
+- SDA -> Pin 42
 - VCC -> 3.3V
 - GND -> GND
 - 模块 I2C 通讯地址: `0x23`
@@ -94,9 +93,9 @@ IMU 模块负责为人形机器人提供高精度的姿态估计（Pitch/Roll/Ya
 
 #### 3.1 本地 3D 姿态可视化 (Windows / Mac)
 在把 IMU 装上机器人前，您可以在电脑上通过 USB 串口或者直接插入电脑独立测试这个传感器，并通过一个 3D 程序直观查看其姿态指向对不对。
-1. 切换目录到 `imuLib`，安装依赖：
+1. 切换目录到 `docs/imuLib`，安装依赖：
    ```bash
-   cd a_Firmware/imuLib
+   cd docs/imuLib
    pip install vpython pyserial
    ```
 2. 运行 3D 人形机器人可视化程序，注意需要修改脚本里的串口号 (例如从 `COM8` 改为您的实际端口)：

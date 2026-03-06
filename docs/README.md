@@ -123,7 +123,7 @@ mpremote connect serial:/dev/ttyUSB0 exec "import machine; machine.reset()"
 优化和完善机器人主控程序：
 1.这个是一个机器人主控程序,可以运行在pc/手机上；
 2.局域网wifi内，pc/手机端运行这个程序通过wifi控制esp32下发动作指令给舵机，接线逻辑是[esp32+imu->CH340舵机驱动板->舵机（25个）]，
-3.固件目录a_Firmware,a_Firmware/esp32是esp32开发板烧录程序;a_Firmware/imuLib 是 imu 开发板烧录程序;servo-micropython-esp32-sdk 这个文件是 esp32开发板 sdk,对应完成编写烧录程序
+3.固件目录a_Firmware,a_Firmware/esp32是esp32开发板烧录程序;
 4.保留现在的表情和各功能面板模块，在此基础上完善项目；在主程序和esp32 处在wifi配对情况下；开始读取各种舵机数据和执行各种动作，陀螺仪指示 读取imu 开发板数据（也是）保持机器人姿态平衡，相关代码在balance_ctrl.py；
 
 

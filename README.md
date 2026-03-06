@@ -52,12 +52,10 @@ RobotBrain/
 ├── assets/                 # 字体、图标资源
 ├── data/                   # 配置数据（AI 模型等）
 ├── logs/                   # 运行日志
-│
+├── docs/                   # 资料文档 舵机调试工具
 ├── a_DebugPanel/           # 🔧 独立项目：装机调试面板工具
 ├── a_Firmware/             # 🔧 独立项目：ESP32 固件烧录程序
 │   ├── esp32/              #    MicroPython 固件源码
-│   ├── imuLib/             #    IMU 库
-│   └── servo-micropython-esp32-sdk/
 │
 ├── requirements.txt
 └── buildozer.spec          # Android 打包配置

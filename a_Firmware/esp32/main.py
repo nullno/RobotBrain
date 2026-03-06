@@ -49,9 +49,9 @@ UART_ID = 1
 UART_BAUD = 115200
 UART_TX_PIN = 47
 UART_RX_PIN = 48
-I2C_SCL_PIN = 20
-I2C_SDA_PIN = 21
-IMU_ADDR = 0x68
+I2C_SCL_PIN = 41
+I2C_SDA_PIN = 42
+IMU_ADDR = 0x23
 SERVO_COUNT = 25
 TELEMETRY_MS = 400
 BLE_WIFI_STATUS_UUID = "0000ffac-0000-1000-8000-00805f9b34fb"
@@ -545,7 +545,11 @@ async def ble_status_task():
 async def imu_task():
     """10ms IMU 采样 + 互补滤波更新。"""
     while True:
-        read_mpu6050()
+        try:
+            read_mpu6050()
+        except Exception as e:
+            # 增加异常保护防止死循环锁死 REPL 线程
+            print("imu_task err:", e)
         await asyncio.sleep_ms(10)
 
 
@@ -760,7 +764,14 @@ async def main():
         await asyncio.sleep_ms(1000)
 
 
-try:
-    asyncio.run(main())
-finally:
-    asyncio.new_event_loop()
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n>> User interrupted (Ctrl+C). Exiting main loop...")
+    except Exception as e:
+        print("\n>> Fatal error in main loop:", e)
+    finally:
+        # 彻底清理并释放资源，防止锁死 REPL
+        print(">> Cleaning up asyncio loop...")
+        asyncio.new_event_loop()
