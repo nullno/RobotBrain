@@ -21,35 +21,14 @@ def on_ai_action(app, instance, action, emotion):
     if action in ("", "none"):
         return
 
-    motion = getattr(app, "motion_controller", None)
-    if not motion:
-        print("AI action skipped: motion_controller is not ready")
-        return
-
+    from services.wifi_servo import get_controller
     def _run_motion():
         try:
-            if hasattr(motion, "run_action"):
-                motion.run_action(action)
-                return
-
-            if action == "walk" and hasattr(motion, "walk"):
-                motion.walk(steps=2)
-            elif action == "stop" and hasattr(motion, "stop"):
-                motion.stop()
-            elif action == "nod" and hasattr(motion, "nod"):
-                motion.nod(times=1)
-            elif action == "shake_head" and hasattr(motion, "shake_head"):
-                motion.shake_head(times=1)
-            elif action == "wave" and hasattr(motion, "wave"):
-                motion.wave(side="right", times=1)
-            elif action == "sit" and hasattr(motion, "sit"):
-                motion.sit()
-            elif action == "stand" and hasattr(motion, "stand"):
-                motion.stand()
-            elif action == "twist" and hasattr(motion, "twist"):
-                motion.twist(angle_deg=25)
+            ctrl = get_controller()
+            if ctrl and ctrl.is_connected:
+                ctrl.send_motion(action)
             else:
-                print(f"AI action not supported by motion controller: {action}")
+                print("AI action skipped: ESP32 not connected")
         except Exception as e:
             print(f"AI action execution failed: {action}, err={e}")
 

@@ -18,6 +18,7 @@ import machine
 from servo_controller import ServoController
 from imu_controller import IMUController
 from balance_controller import BalanceController
+from motion_sdk import MotionSDK
 
 try:
     import network
@@ -83,6 +84,8 @@ except Exception as e:
 
 # 平衡控制器
 balance_ctrl = BalanceController()
+global motion_sdk
+motion_sdk = MotionSDK(servo, balance_ctrl)
 
 # 全局状态
 state = {
@@ -329,7 +332,15 @@ async def handle_command(msg, addr, sock=None):
     elif mtype == "motion":
         name = str(msg.get("name", "")).lower().strip()
         log("cmd: motion={}".format(name))
-        # TODO: 预设动作序列播放
+        if motion_sdk and hasattr(motion_sdk, name):
+            func = getattr(motion_sdk, name)
+            try:
+                import _thread
+                _thread.start_new_thread(func, ())
+            except ImportError:
+                func()
+        else:
+            log("Unknown motion or no SDK: {}".format(name))
 
     elif mtype == "status":
         resp = telemetry_payload()

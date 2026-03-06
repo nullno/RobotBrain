@@ -1,0 +1,144 @@
+<RemoteButton@Button>:
+    font_name: app.theme_font
+    font_size: "18sp"
+    background_normal: ""
+    background_color: (0.2, 0.6, 1, 1) if self.state == 'normal' else (0.1, 0.4, 0.8, 1)
+    color: 1, 1, 1, 1
+    size_hint: None, None
+    size: dp(80), dp(45)
+
+<RemotePanel>:
+    size_hint: 0.85, 0.85
+    auto_dismiss: True
+    background_color: 0, 0, 0, 0.8
+    
+    BoxLayout:
+        orientation: "vertical"
+        padding: dp(20)
+        spacing: dp(20)
+        canvas.before:
+            Color:
+                rgba: 0.1, 0.15, 0.2, 0.95
+            RoundedRectangle:
+                pos: self.pos
+                size: self.size
+                radius: [dp(15)]
+                
+        Label:
+            text: "机器人动作遥控器"
+            font_name: app.theme_font
+            font_size: "24sp"
+            bold: True
+            size_hint_y: None
+            height: dp(50)
+            color: 0.9, 0.9, 1, 1
+
+        GridLayout:
+            cols: 2
+            spacing: dp(40)
+            
+            # 左侧：方向/行板
+            GridLayout:
+                cols: 3
+                spacing: dp(10)
+                size_hint_x: 0.4
+                
+                Widget:  # Empty
+                RemoteButton:
+                    text: "前进"
+                    on_release: root.send_motion("walk")
+                Widget:  # Empty
+                
+                RemoteButton:
+                    text: "左转"
+                    on_release: root.send_motion("turn_left")
+                RemoteButton:
+                    text: "站立"
+                    on_release: root.send_motion("stand")
+                RemoteButton:
+                    text: "右转"
+                    on_release: root.send_motion("turn_right")
+                    
+                Widget:  # Empty
+                RemoteButton:
+                    text: "后退"
+                    on_release: root.send_motion("backward")
+                Widget:  # Empty
+
+            # 右侧：动作网格
+            ScrollView:
+                size_hint_x: 0.6
+                GridLayout:
+                    cols: 3
+                    spacing: dp(15)
+                    size_hint_y: None
+                    height: self.minimum_height
+                    padding: dp(10)
+
+                    RemoteButton:
+                        text: "蹲下"
+                        on_release: root.send_motion("crouch")
+                    RemoteButton:
+                        text: "晃动"
+                        on_release: root.send_motion("swagger")
+                    RemoteButton:
+                        text: "叉腰"
+                        on_release: root.send_motion("akimbo")
+                    RemoteButton:
+                        text: "点头"
+                        on_release: root.send_motion("nod")
+                    RemoteButton:
+                        text: "摇头"
+                        on_release: root.send_motion("shake_head")
+                    RemoteButton:
+                        text: "弯腰"
+                        on_release: root.send_motion("bend_over")
+                    RemoteButton:
+                        text: "扎马步"
+                        on_release: root.send_motion("horse_stance")
+                    RemoteButton:
+                        text: "金鸡独立"
+                        on_release: root.send_motion("golden_rooster")
+                    RemoteButton:
+                        text: "手倒立"
+                        on_release: root.send_motion("handstand")
+                    RemoteButton:
+                        text: "单手倒立"
+                        on_release: root.send_motion("one_hand_handstand")
+                    RemoteButton:
+                        text: "思考"
+                        on_release: root.send_motion("think")
+                    RemoteButton:
+                        text: "比心"
+                        on_release: root.send_motion("make_heart")
+                    RemoteButton:
+                        text: "挥手"
+                        on_release: root.send_motion("wave")
+                    RemoteButton:
+                        text: "拒绝"
+                        on_release: root.send_motion("refuse")
+                    RemoteButton:
+                        text: "爬行"
+                        on_release: root.send_motion("crawl")
+                    RemoteButton:
+                        text: "坐下"
+                        on_release: root.send_motion("sit")
+                    RemoteButton:
+                        text: "坐凳子"
+                        on_release: root.send_motion("sit_chair")
+                    RemoteButton:
+                        text: "小步跑"
+                        on_release: root.send_motion("trot")
+                    RemoteButton:
+                        text: "上楼梯"
+                        on_release: root.send_motion("climb_stairs")
+        
+        Button:
+            text: "关闭"
+            font_name: app.theme_font
+            size_hint: None, None
+            size: dp(100), dp(40)
+            pos_hint: {"center_x": 0.5}
+            background_color: 0.8, 0.3, 0.3, 1
+            color: 1, 1, 1, 1
+            on_release: root.dismiss()

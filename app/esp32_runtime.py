@@ -31,7 +31,6 @@ def _connect_to_host(app, host: str, port: int = 5005, *, save: bool = True) -> 
             # live servo sync 默认保持当前值，不强制打开，避免在未调
             # 试时高频发送
             RuntimeStatusLogger.log_info(f"已连接 ESP32: {host}:{port}")
-            init_motion_controller_after_connect(app)
             if save:
                 save_host(host, port, app)
             stop_background_discovery(app)
@@ -129,30 +128,6 @@ def stop_background_discovery(app):
         ev.set()
 
 
-# ────────────────── 运动控制器 ──────────────────
-
-def init_motion_controller_after_connect(app):
-    """连接成功后初始化占位字段（本地 IMU/串口已弃用）。"""
-    app.imu_reader = None
-    app.motion_controller = None
 
 
-# ────────────────── 兼容 stubs ──────────────────
 
-def ensure_android_usb_reconnect_watcher(app, reason=""):
-    pass
-
-def is_duplicate_usb_attach_event(app, signature, interval_sec=4.0):
-    return False
-
-def handle_android_usb_attach_intent(app, source="resume"):
-    pass
-
-def schedule_servo_scan_after_connect(app, source="连接", allow_extra_retry=True):
-    try:
-        app._servo_scan_completed = True
-    except Exception:
-        pass
-
-def handle_otg_event(app, event, device_id, list_ports_module=None):
-    pass

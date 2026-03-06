@@ -2,10 +2,11 @@
 
 from kivy.metrics import dp
 from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.image import Image
 
 
-class Esp32Indicator(BoxLayout):
+class Esp32Indicator(ButtonBehavior, BoxLayout):
     """极简 ESP32 状态图标徽章 (≈18×18dp)。"""
 
     def __init__(self, **kwargs):
@@ -23,6 +24,16 @@ class Esp32Indicator(BoxLayout):
         )
 
         self.add_widget(self._icon)
+
+    def on_release(self):
+        try:
+            from widgets.remote_panel import RemotePanel
+            panel = RemotePanel()
+            panel.open()
+        except Exception as e:
+            print(e)
+
+
 
     # ── 外部接口 ──────────────────────────────
     def update_state(self, state: dict):

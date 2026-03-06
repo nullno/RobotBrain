@@ -73,43 +73,57 @@ class RobotDashboardApp(App):
 
     # ================== 构建入口 ==================
     def build(self):
+        self.ai_core = None
         bootstrap_runtime.init_android_permissions(self)
 
         Builder.load_file('kv/style.kv')
         self.root_widget = Builder.load_file('kv/root.kv')
 
+        # 挂载配网门禁层，确保 Kivy 第一帧即可将其直接渲染，避免黑屏
+        self._esp32_gate = setup_connection_gate(self)
+
+        # 延迟执行所有后端设备的加载和初始化，释放主线程渲染第一帧
+        Clock.schedule_once(self._delayed_init, 0.1)
+
+        return self.root_widget
+
+    def _delayed_init(self, dt):
         bootstrap_runtime.init_servo_bus(self)
         bootstrap_runtime.init_logging(self)
-
-        # 加载中位值（不再初始化本地平衡控制器，平衡算法已迁移至固件）
         bootstrap_runtime.init_neutral_positions(self)
-
-        bootstrap_runtime.init_ai_core(self)
         bootstrap_runtime.init_runtime_loops(self)
-        bootstrap_runtime.init_runtime_status_panel(self)
 
-        # 周期刷新右上角链路指示
-        # 心跳检测每 2 秒调度一次，但内部实现 10 秒间隔
         Clock.schedule_interval(lambda dt: refresh_link_indicator(self), 2.0)
 
-        # 配网门禁：未联网前遮罩主界面，主界面容器初始 opacity=0
-        self._esp32_gate = setup_connection_gate(self)
         if self._esp32_gate:
             Clock.schedule_interval(lambda dt: poll_connection(self, self._esp32_gate, dt), 1.0)
         elif is_esp32_ready(self):
-            # 已连接，直接显示主界面
             self._show_main_content()
-
-        return self.root_widget
 
     def _show_main_content(self):
         try:
             main = self.root_widget.ids.get('main_content')
             if main:
+                if not getattr(self, '_main_content_loaded', False):
+                    from kivy.lang import Builder
+                    from kivy.factory import Factory
+                    Builder.load_file('kv/main_content.kv')
+                    main_ui = Factory.MainContentContainer()
+                    main.add_widget(main_ui)
+                    # 将动态加载的主界面的 ids 挂载到 root_widget 以保证兼容性
+                    self.root_widget.ids.update(main_ui.ids)
+                    self._main_content_loaded = True
+                    
+                    # 在表情加载完成后再初始化核心组件
+                    import app.bootstrap_runtime as bootstrap_runtime
+                    bootstrap_runtime.init_runtime_status_panel(self)
+                    bootstrap_runtime.init_ai_core(self)
+                
                 main.opacity = 1
                 main.disabled = False
-        except Exception:
-            pass
+        except Exception as e:
+            import logging
+            logging.error(f"Failed to load main ui: {e}")
 
     # ================== 硬件 ==================
     def _safe_refresh_ui(self, dt=0):

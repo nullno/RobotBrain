@@ -145,3 +145,9 @@ mpremote connect serial:/dev/ttyUSB0 exec "import machine; machine.reset()"
 1.进去系统前弹出esp32_setup.py，扫描esp32蓝牙设备主动连接后 检测到esp32已连接wifi 就提示配网成功并记住它的网络信息，再进入主界面，否则留在此弹窗进行配网操作，成功让esp32设备连接wifi后，记录它的网络信息供后续通信传输数据；如果esp32 断网离线应该，同步在主程序提示（使用universal_tip.py，所有提示都用这个），待设备重启好，继续连接设备进行正常数据通信；
 2.有了1步骤，services下的ble_provisioner.py，comm_config.py，control_bridge.py，esp32_client.py，esp32_discovery.py，esp32_link.py，imu_service.py，servo_bus.py 等 代码都可以不要了，app/usb_runtime.py这个代码肯定也没有 都移除掉；整体优化一下项目
 3.主界面右上角的连接状态调整的迷你好看一些；
+
+
+
+1.基于 imu_controller.py和docs/assembly_guide.md，帮我在balance_controller.py实现机器人的静止和行走运动的姿态平衡不摔倒，包括施加外力推它也能自主矫正姿态；imu的Z轴位为机器人的站立方向，X正轴为磁力计的正北方向也就是身体背面，X负轴为南向也就是机器人的正面也就是脸的朝面；Y轴是肩膀方向；舵机各关节装机参考（ssembly_guide.md）注意中位值和建议角度；
+2.姿态平衡完成后，新建一个模块，帮我实现基础运动的SDK供我后续在主程序中通过wifi通信调用，比如行走、后退、蹲下、站立、站立晃动、左右转身、叉腰、弯腰、摇头、点头、扎马步、单腿站立、倒立、单手倒立、小步跑、挥手、拒绝、坐下、思考、比爱心、金鸡站立、爬行、坐凳子、上楼梯等动作
+3.基于以上固件sdk动作，给我在主程序新增一个widgets，写一个遥控器界面，通过电机右上角的连接状态，切换到遥控器界面，做好看一些，是个遥控器的布局；

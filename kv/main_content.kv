@@ -1,0 +1,30 @@
+﻿<MainContentContainer@FloatLayout>:
+    CameraView:
+        id: camera_view
+        opacity: 0
+
+    GyroPanel:
+        id: gyro_panel
+        size_hint: None, None
+        size: dp(90), dp(120)
+        pos_hint: {"right": 0.98, "y": 0.04}
+        on_release: app.root_widget.ids.debug_panel.open_debug() if 'debug_panel' in app.root_widget.ids else None
+
+    Esp32Indicator:
+        id: esp32_indicator
+        size_hint: None, None
+        size: dp(20), dp(20)
+        pos_hint: {"right": 0.99, "top": 0.985}
+
+    RobotFace:
+        id: face
+        camera_view: camera_view
+        size_hint: (0.8, 0.6)
+        pos_hint: {"center_x": 0.5, "center_y": 0.5}
+
+    DebugPanel:
+        id: debug_panel
+
+    RuntimeStatusPanel:
+        id: runtime_status
+        pos_hint: {"x": 0.01, "y": 0.08}

@@ -15,7 +15,6 @@ from app import esp32_runtime as esp32_runtime
 from widgets.runtime_status import RuntimeStatusLogger
 from services.ai_core import AICore
 from services.wifi_servo import get_controller as get_wifi_servo, load_host, init_controller
-from services.neutral import load_neutral
 
 
 def init_android_permissions(app):
@@ -121,17 +120,13 @@ def init_logging(app):
 
 def init_neutral_positions(app):
     """加载中位值（平衡算法已迁移至固件，此处仅保留中位数据供 UI 使用）。"""
-    neutral_raw = load_neutral() or {}
+    neutral_raw = {}
     try:
         neutral = {int(k): int(v) for k, v in neutral_raw.items()}
     except Exception:
         neutral = {i: 2048 for i in range(1, 26)}
     app.neutral_positions = neutral
 
-    # 不再创建本地 BalanceController
-    app.balance_ctrl = None
-    app.motion_controller = None
-    app.imu_reader = None
 
     return neutral
 
@@ -140,10 +135,6 @@ def init_balance_and_gyro(app):
     """兼容接口 —— 重定向到 init_neutral_positions。"""
     return init_neutral_positions(app)
 
-
-def init_motion_controller(app, neutral=None):
-    """兼容占位 —— 平衡/运动由固件处理，主程序不再初始化本地 MotionController。"""
-    app.motion_controller = None
 
 
 def init_runtime_loops(app):
