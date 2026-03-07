@@ -174,14 +174,17 @@ def _enter_main_ui(app, gate):
             gate.parent.remove_widget(gate)
     except Exception:
         pass
-    # 显示主界面组件
+    # 显示主界面组件（确保真正加载主表情界面而非空白容器）
     try:
-        root = getattr(app, "root_widget", None)
-        if root and hasattr(root, "ids"):
-            main = root.ids.get("main_content")
-            if main:
-                main.opacity = 1
-                main.disabled = False
+        if hasattr(app, "_show_main_content"):
+            app._show_main_content()
+        else:
+            root = getattr(app, "root_widget", None)
+            if root and hasattr(root, "ids"):
+                main = root.ids.get("main_content")
+                if main:
+                    main.opacity = 1
+                    main.disabled = False
     except Exception:
         pass
     try:

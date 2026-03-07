@@ -27,12 +27,16 @@ from app import android_ui_runtime
 from app import ui_runtime
 from app import platform_runtime
 import logging
+from kivy.properties import StringProperty
+from app import theme
 import traceback
 
 run_on_ui_thread = platform_runtime.get_run_on_ui_thread() or (lambda f: f)
 
 
 class RobotDashboardApp(App):
+    theme_font = StringProperty(theme.FONT)
+
     def _targets_changed(self, new_targets, old_targets, threshold=3):
         try:
             if not isinstance(new_targets, dict) or not isinstance(old_targets, dict):

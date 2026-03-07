@@ -5,6 +5,7 @@
 import os
 import threading
 import logging
+import time
 
 from services.wifi_servo import (
     WiFiServoController, init_controller, get_controller,
@@ -21,10 +22,16 @@ def _connect_to_host(app, host: str, port: int = 5005, *, save: bool = True) -> 
     """初始化 wifi_servo 控制器并绑定到 app。"""
     try:
         ctrl = init_controller(host, int(port or 5005))
-        # 增加一次心跳握手请求，避免假连接假日志
-        status = ctrl.request_status(timeout=1.0)
-        
-        if status is not None:
+        # 增加多次心跳握手请求，避免设备刚入网时偶发超时
+        handshake_ok = False
+        for attempt in range(3):
+            status = ctrl.request_status(timeout=1.0 + attempt * 0.2)
+            if status is not None:
+                handshake_ok = True
+                break
+            time.sleep(0.35)
+
+        if handshake_ok:
             app.wifi_servo = ctrl
             app._esp32_host = host
             app._esp32_port = int(port or 5005)
@@ -36,7 +43,9 @@ def _connect_to_host(app, host: str, port: int = 5005, *, save: bool = True) -> 
             stop_background_discovery(app)
             return True
         else:
-            RuntimeStatusLogger.log_error(f"找到 {host}，但握手失败，实际未连接")
+            RuntimeStatusLogger.log_error(
+                f"找到 {host}，但握手失败（重试 3 次），实际未连接"
+            )
             return False
             
     except Exception as e:
