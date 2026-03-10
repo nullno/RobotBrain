@@ -183,6 +183,54 @@ class OtherSettingsPanel(BoxLayout):
         vis_body.add_widget(self._vision_loading)
         self.add_widget(vis_box)
 
+        # 摄像头切换设置
+        cam_box, cam_body = self._create_section_box("远程摄像头")
+        self._cam_body = cam_body
+        self._cam_status = Label(
+            text="摄像头源: 本地",
+            size_hint_y=None,
+            height=dp(28),
+            color=(0.8, 0.9, 1, 1),
+            halign="left",
+            valign="middle",
+        )
+        self._cam_status.bind(size=self._cam_status.setter("text_size"))
+        cam_body.add_widget(self._cam_status)
+
+        cam_hint = Label(
+            text="切换表情眼睛画面源：本地摄像头或其他连接设备",
+            size_hint_y=None,
+            height=dp(24),
+            color=(0.7, 0.8, 0.9, 1),
+            halign="left",
+            valign="middle",
+        )
+        cam_hint.bind(size=cam_hint.setter("text_size"))
+        cam_body.add_widget(cam_hint)
+
+        cam_row1 = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(8))
+        self._cam_source_spinner = Spinner(
+            text="本地摄像头",
+            values=["本地摄像头"],
+            size_hint=(1, 1),
+        )
+        self._btn_cam_refresh = self._make_button("刷新列表", width=dp(100))
+        cam_row1.add_widget(self._cam_source_spinner)
+        cam_row1.add_widget(self._btn_cam_refresh)
+        cam_body.add_widget(cam_row1)
+
+        cam_row2 = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(8))
+        self._btn_cam_switch = self._make_button("切换画面", width=dp(100))
+        self._btn_cam_register = self._make_button("注册设备", width=dp(100))
+        self._btn_cam_upload = self._make_button("开启共享", width=dp(100))
+        cam_row2.add_widget(self._btn_cam_switch)
+        cam_row2.add_widget(self._btn_cam_register)
+        cam_row2.add_widget(self._btn_cam_upload)
+        cam_body.add_widget(cam_row2)
+
+        self._cam_upload_enabled = False
+        self.add_widget(cam_box)
+
         self._btn_apply.bind(on_release=self._apply_preset)
         self._btn_refresh.bind(on_release=lambda *_: self.refresh_status())
         self._btn_bal_apply.bind(on_release=self._apply_balance)
@@ -192,10 +240,17 @@ class OtherSettingsPanel(BoxLayout):
         self._btn_axis_normal.bind(on_release=lambda *_: self._set_axis_mode("normal"))
         self._btn_axis_swapped.bind(on_release=lambda *_: self._set_axis_mode("swapped"))
 
+        # 摄像头切换事件绑定
+        self._btn_cam_refresh.bind(on_release=lambda *_: self._refresh_camera_sources())
+        self._btn_cam_switch.bind(on_release=lambda *_: self._switch_camera_source())
+        self._btn_cam_register.bind(on_release=lambda *_: self._register_camera())
+        self._btn_cam_upload.bind(on_release=lambda *_: self._toggle_frame_upload())
+
         Clock.schedule_once(lambda _dt: self.refresh_status(), 0)
         Clock.schedule_once(lambda _dt: self._refresh_balance(), 0)
         Clock.schedule_once(lambda _dt: self._ensure_level_loaded(), 0)
         Clock.schedule_once(lambda _dt: self._ensure_vision_loaded(), 0.12)
+        Clock.schedule_once(lambda _dt: self._refresh_camera_sources(), 0.5)
 
     def _ensure_level_loaded(self):
         if self._level_loaded:
@@ -448,3 +503,133 @@ class OtherSettingsPanel(BoxLayout):
             )
         except Exception:
             self._status.text = "状态：读取失败"
+
+    # ==================== 远程摄像头切换 ====================
+
+    def _get_camera_view(self):
+        """获取CameraView实例。"""
+        try:
+            app = App.get_running_app()
+            root = getattr(app, "root_widget", None)
+            if root and getattr(root, "ids", None):
+                cam = root.ids.get("camera_view")
+                if cam is not None:
+                    return cam
+
+            from widgets.camera_view import CameraView
+
+            def _walk(widget):
+                if isinstance(widget, CameraView):
+                    return widget
+                for child in getattr(widget, "children", []):
+                    found = _walk(child)
+                    if found is not None:
+                        return found
+                return None
+
+            if root is not None:
+                return _walk(root)
+        except Exception:
+            pass
+        return None
+
+    def _refresh_camera_sources(self):
+        """刷新可用摄像头源列表（包含P2P直连信息）。"""
+        try:
+            cam = self._get_camera_view()
+            sources = [{"id": "local", "name": "本地摄像头"}]
+            
+            if cam and hasattr(cam, "get_available_sources"):
+                sources = cam.get_available_sources()
+            
+            # 更新下拉框选项，保存完整设备信息用于P2P直连
+            source_names = []
+            self._camera_source_map = {}  # name -> id
+            self._camera_source_info = {}  # name -> full device info
+            for src in sources:
+                name = src.get("name", src.get("id", "未知"))
+                source_names.append(name)
+                self._camera_source_map[name] = src.get("id", "local")
+                self._camera_source_info[name] = src  # 保存完整信息包括ip/port
+            
+            if source_names:
+                self._cam_source_spinner.values = tuple(source_names)
+                # 设置当前选中项
+                if cam:
+                    current = cam.get_camera_source()
+                    for name, sid in self._camera_source_map.items():
+                        if sid == current or (current == "local" and sid == "local"):
+                            self._cam_source_spinner.text = name
+                            break
+            
+            # 更新状态
+            current_source = "本地" if (not cam or cam.get_camera_source() == "local") else cam.current_source_name
+            self._cam_status.text = f"摄像头源: {current_source}"
+            
+            self._notify(f"找到 {len(sources)} 个摄像头源")
+        except Exception as e:
+            self._notify(f"刷新摄像头源失败: {e}")
+
+    def _switch_camera_source(self):
+        """切换到选中的摄像头源（P2P直连）。"""
+        try:
+            cam = self._get_camera_view()
+            if not cam or not hasattr(cam, "set_camera_source"):
+                self._notify("未找到CameraView，无法切换")
+                return
+            
+            selected_name = self._cam_source_spinner.text
+            source_map = getattr(self, "_camera_source_map", {})
+            source_info = getattr(self, "_camera_source_info", {})
+            source_id = source_map.get(selected_name, "local")
+            
+            # 获取完整设备信息用于P2P直连
+            if source_id == "local":
+                target = "local"
+            else:
+                target = source_info.get(selected_name, {"id": source_id})
+            
+            if cam.set_camera_source(target):
+                current = "本地" if source_id == "local" else selected_name
+                self._cam_status.text = f"摄像头源: {current}"
+                self._notify(f"已切换摄像头: {selected_name}")
+            else:
+                self._notify("切换摄像头失败")
+        except Exception as e:
+            self._notify(f"切换摄像头失败: {e}")
+
+    def _register_camera(self):
+        """向ESP32注册本设备（仅用于设备发现）。"""
+        try:
+            cam = self._get_camera_view()
+            if not cam or not hasattr(cam, "register_with_esp32"):
+                self._notify("未找到CameraView，无法注册")
+                return
+            
+            if cam.register_with_esp32():
+                self._notify("设备注册成功")
+                Clock.schedule_once(lambda dt: self._refresh_camera_sources(), 0.5)
+            else:
+                self._notify("设备注册失败，请检查ESP32连接")
+        except Exception as e:
+            self._notify(f"注册失败: {e}")
+
+    def _toggle_frame_upload(self):
+        """切换P2P视频流共享（启动本地HTTP流服务器）。"""
+        try:
+            cam = self._get_camera_view()
+            if not cam or not hasattr(cam, "enable_stream_sharing"):
+                self._notify("未找到CameraView，无法共享")
+                return
+            
+            self._cam_upload_enabled = not getattr(self, "_cam_upload_enabled", False)
+            cam.enable_stream_sharing(self._cam_upload_enabled)
+            
+            if self._cam_upload_enabled:
+                self._btn_cam_upload.text = "停止共享"
+                self._notify("已开始P2P共享本地画面 (端口5010)")
+            else:
+                self._btn_cam_upload.text = "开启共享"
+                self._notify("已停止共享本地画面")
+        except Exception as e:
+            self._notify(f"共享切换失败: {e}")

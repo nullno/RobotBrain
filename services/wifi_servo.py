@@ -284,6 +284,49 @@ class WiFiServoController:
         logger.info("set_servo_id %d → %d: %s", old_id, new_id, "ok" if ok else "fail")
         return ok
 
+    # -------------------- 设备发现（P2P直连）--------------------
+
+    def device_register(self, name: str, has_camera: bool = True, stream_port: int = 5010, timeout: float = 1.0) -> Optional[Dict[str, Any]]:
+        """向ESP32注册本设备，获取所有设备列表（包含IP供P2P直连）。
+        
+        Args:
+            name: 设备名称（如"PC"、"Android"）
+            has_camera: 是否有可用摄像头
+            stream_port: 本机视频流服务端口（供其他设备直连）
+        Returns:
+            {"client_id": str, "devices": [{"id", "name", "ip", "stream_port", "has_camera", "is_self"}, ...]}
+        """
+        payload = {
+            "type": "device_register",
+            "name": str(name),
+            "has_camera": bool(has_camera),
+            "stream_port": int(stream_port),
+        }
+        resp = self._send_and_recv(payload, timeout)
+        if resp and resp.get("type") == "device_register_resp":
+            self._device_id = resp.get("client_id")
+            logger.info("device_register → id=%s, devices=%d", self._device_id, len(resp.get("devices", [])))
+            return resp
+        logger.warning("device_register failed")
+        return None
+
+    def device_list(self, timeout: float = 1.0) -> List[Dict[str, Any]]:
+        """获取当前已注册的设备列表（包含IP供P2P直连）。
+        
+        Returns:
+            [{"id": str, "name": str, "ip": str, "stream_port": int, "has_camera": bool}, ...]
+        """
+        payload = {"type": "device_list"}
+        resp = self._send_and_recv(payload, timeout)
+        if resp and resp.get("type") == "device_list_resp":
+            return resp.get("devices", [])
+        return []
+
+    @property
+    def device_id(self) -> Optional[str]:
+        """当前设备在ESP32上注册的ID。"""
+        return getattr(self, "_device_id", None)
+
     # -------------------- 状态查询 --------------------
 
     def request_status(self, timeout: float = 0.5) -> Optional[Dict[str, Any]]:

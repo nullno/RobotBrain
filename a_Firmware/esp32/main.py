@@ -97,6 +97,10 @@ _last_wifi_state = {"wifi_ok": False, "ip": None, "ap_mode": False}
 _ble_status_ctx = {"ble": None, "status_handle": None}
 _ble_adv_ctx = {"adv_data": None, "resp_data": None, "interval_us": 100000, "name": None}
 
+# 设备发现注册表：仅存储设备信息，不中继视频流
+_device_registry = {}  # {client_id: {"ip": str, "port": int, "name": str, "has_camera": bool, "last_seen": ticks}}
+_device_counter = 0
+
 
 def log(msg):
     try:
@@ -439,6 +443,74 @@ async def handle_command(msg, addr, sock=None):
             "gain_y": balance_ctrl.gain_y,
         }
 
+    # ============ 设备发现（仅注册，不中继视频流）============
+    elif mtype == "device_register":
+        # 设备注册/心跳，返回所有设备列表供P2P直连
+        global _device_counter
+        client_name = str(msg.get("name", "unknown"))
+        has_camera = bool(msg.get("has_camera", True))
+        client_ip = addr[0] if addr else "0.0.0.0"
+        # 客户端视频流服务端口（供其他设备直连）
+        stream_port = int(msg.get("stream_port", 5010))
+        
+        # 查找是否已注册（按IP匹配）
+        existing_id = None
+        for cid, info in _device_registry.items():
+            if info.get("ip") == client_ip:
+                existing_id = cid
+                break
+        
+        if existing_id:
+            client_id = existing_id
+            _device_registry[client_id]["last_seen"] = time.ticks_ms()
+            _device_registry[client_id]["name"] = client_name
+            _device_registry[client_id]["has_camera"] = has_camera
+            _device_registry[client_id]["stream_port"] = stream_port
+        else:
+            _device_counter += 1
+            client_id = "d{}".format(_device_counter)
+            _device_registry[client_id] = {
+                "ip": client_ip,
+                "stream_port": stream_port,
+                "name": client_name,
+                "last_seen": time.ticks_ms(),
+                "has_camera": has_camera,
+            }
+        
+        # 返回所有在线设备列表（包含IP供P2P直连）
+        devices_list = []
+        now = time.ticks_ms()
+        for cid, info in _device_registry.items():
+            if time.ticks_diff(now, info["last_seen"]) < 30000:
+                devices_list.append({
+                    "id": cid,
+                    "name": info["name"],
+                    "ip": info["ip"],
+                    "stream_port": info["stream_port"],
+                    "has_camera": info["has_camera"],
+                    "is_self": cid == client_id,
+                })
+        resp = {
+            "type": "device_register_resp",
+            "client_id": client_id,
+            "devices": devices_list,
+        }
+
+    elif mtype == "device_list":
+        # 获取已注册的设备列表（包含IP供P2P直连）
+        devices_list = []
+        now = time.ticks_ms()
+        for cid, info in _device_registry.items():
+            if time.ticks_diff(now, info["last_seen"]) < 30000:
+                devices_list.append({
+                    "id": cid,
+                    "name": info["name"],
+                    "ip": info["ip"],
+                    "stream_port": info["stream_port"],
+                    "has_camera": info["has_camera"],
+                })
+        resp = {"type": "device_list_resp", "devices": devices_list}
+
     else:
         log("cmd: unknown type={}".format(mtype))
 
@@ -636,6 +708,22 @@ async def interpolation_task():
         await asyncio.sleep_ms(20)
 
 
+async def device_cleanup_task():
+    """定期清理过期的设备注册信息。"""
+    while True:
+        try:
+            now = time.ticks_ms()
+            expired = [cid for cid, info in _device_registry.items()
+                       if time.ticks_diff(now, info["last_seen"]) > 30000]
+            for cid in expired:
+                del _device_registry[cid]
+            if expired:
+                log("device: cleaned {} expired".format(len(expired)))
+        except Exception as e:
+            log("device: cleanup err {}".format(e))
+        await asyncio.sleep_ms(15000)
+
+
 async def ws_task():
     if ws_server is None:
         return
@@ -773,6 +861,7 @@ async def main():
     asyncio.create_task(interpolation_task())
     asyncio.create_task(ws_task())
     asyncio.create_task(http_server())
+    asyncio.create_task(device_cleanup_task())
 
     ble_setup()
     asyncio.create_task(ble_status_task())

@@ -6,6 +6,14 @@ from kivy.app import App
 from kivy.graphics import PushMatrix, PopMatrix, Rotate, Scale
 from widgets.runtime_status import RuntimeStatusLogger
 import os
+import base64
+import threading
+import socket
+import time
+
+
+# P2P视频流服务端口
+STREAM_SERVER_PORT = 5010
 
 
 class CameraView(Image):
@@ -31,6 +39,17 @@ class CameraView(Image):
         self._display_scale = None
         self._android_fix_mode = self.DEFAULT_ANDROID_FIX_MODE
         self._last_display_mode = None
+
+        # P2P远程摄像头：ESP32只负责设备发现，视频流直连
+        self._camera_source = "local"  # "local" 或 {"ip": str, "port": int, "name": str}
+        self._remote_event = None
+        self._remote_target = None  # {"ip": str, "port": int}
+        self._stream_server = None
+        self._stream_server_thread = None
+        self._latest_jpeg_frame = None
+        self._frame_lock = threading.Lock()
+        self._registered_device_id = None
+        self._stream_sharing_enabled = False
 
         try:
             self._load_saved_android_fix_mode()
@@ -284,6 +303,20 @@ class CameraView(Image):
         except Exception:
             pass
 
+        # 为P2P共享准备JPEG帧
+        if self._stream_sharing_enabled:
+            try:
+                h, w = frame.shape[:2]
+                share_frame = frame
+                if w > 480:
+                    scale = 480 / w
+                    share_frame = self.cv2.resize(frame, (480, int(h * scale)))
+                _, buffer = self.cv2.imencode('.jpg', share_frame, [self.cv2.IMWRITE_JPEG_QUALITY, 60])
+                with self._frame_lock:
+                    self._latest_jpeg_frame = buffer.tobytes()
+            except Exception:
+                pass
+
         try:
             frame = self._apply_fix_mode_to_desktop_frame(frame)
         except Exception:
@@ -480,6 +513,11 @@ class CameraView(Image):
             if self._event:
                 self._event.cancel()
                 self._event = None
+            if self._remote_event:
+                self._remote_event.cancel()
+                self._remote_event = None
+            # 停止流媒体服务器
+            self._stop_stream_server()
             # Android摄像头清理
             try:
                 if hasattr(self, 'camera') and self.camera:
@@ -488,3 +526,303 @@ class CameraView(Image):
                 self._android_camera_started = False
             except Exception:
                 pass
+
+    # ==================== P2P远程摄像头（设备直连，不经过ESP32）====================
+
+    def get_camera_source(self) -> str:
+        """获取当前摄像头源："local" 或远程设备名称。"""
+        if self._camera_source == "local":
+            return "local"
+        if isinstance(self._remote_target, dict):
+            return self._remote_target.get("name", "remote")
+        return "local"
+
+    def set_camera_source(self, source) -> bool:
+        """切换摄像头源。
+        
+        Args:
+            source: "local" 使用本地摄像头，或 {"ip": str, "port": int, "name": str} 远程设备
+        Returns:
+            是否切换成功
+        """
+        try:
+            if source == "local" or source is None:
+                return self._switch_to_local()
+            elif isinstance(source, dict) and source.get("ip"):
+                return self._switch_to_remote_p2p(source)
+            else:
+                RuntimeStatusLogger.log_error(f"无效摄像头源: {source}")
+                return False
+        except Exception as e:
+            RuntimeStatusLogger.log_error(f"切换摄像头源失败: {e}")
+            return False
+
+    def _switch_to_local(self) -> bool:
+        """切换回本地摄像头。"""
+        try:
+            # 停止远程帧拉取
+            if self._remote_event:
+                self._remote_event.cancel()
+                self._remote_event = None
+            
+            self._camera_source = "local"
+            self._remote_target = None
+            
+            # 重启本地摄像头
+            if platform in ("win", "linux", "macosx"):
+                if not self.capture or not self.capture.isOpened():
+                    self._start_desktop()
+                elif not self._event:
+                    self._event = Clock.schedule_interval(self._update_desktop, 1 / 30)
+            else:
+                if not self._android_camera_started:
+                    self._start_android()
+            
+            RuntimeStatusLogger.log_info("已切换到本地摄像头")
+            return True
+        except Exception as e:
+            RuntimeStatusLogger.log_error(f"切换本地摄像头失败: {e}")
+            return False
+
+    def _switch_to_remote_p2p(self, target: dict) -> bool:
+        """P2P直连切换到远程摄像头。"""
+        try:
+            ip = target.get("ip")
+            port = target.get("stream_port", STREAM_SERVER_PORT)
+            name = target.get("name", ip)
+            
+            if not ip:
+                RuntimeStatusLogger.log_error("远程设备IP无效")
+                return False
+            
+            # 暂停本地摄像头采集
+            if self._event:
+                self._event.cancel()
+                self._event = None
+            
+            self._camera_source = "remote"
+            self._remote_target = {"ip": ip, "port": port, "name": name}
+            
+            # 启动P2P远程帧拉取
+            if self._remote_event:
+                self._remote_event.cancel()
+            self._remote_event = Clock.schedule_interval(self._update_remote_frame_p2p, 1 / 15)
+            
+            RuntimeStatusLogger.log_info(f"P2P连接远程摄像头: {name} ({ip}:{port})")
+            return True
+        except Exception as e:
+            RuntimeStatusLogger.log_error(f"P2P连接失败: {e}")
+            return False
+
+    def _update_remote_frame_p2p(self, dt):
+        """从远程设备P2P直接拉取帧。"""
+        if not self._remote_target:
+            return
+        
+        try:
+            ip = self._remote_target.get("ip")
+            port = self._remote_target.get("port", STREAM_SERVER_PORT)
+            
+            # HTTP请求获取JPEG帧
+            import http.client
+            conn = http.client.HTTPConnection(ip, port, timeout=0.5)
+            try:
+                conn.request("GET", "/frame")
+                resp = conn.getresponse()
+                if resp.status == 200:
+                    jpeg_bytes = resp.read()
+                    self._display_jpeg_frame(jpeg_bytes)
+            except Exception:
+                pass
+            finally:
+                conn.close()
+        except Exception:
+            pass
+
+    def _display_jpeg_frame(self, jpeg_bytes: bytes):
+        """将JPEG字节解码并显示。"""
+        try:
+            import numpy as np
+            import cv2
+            nparr = np.frombuffer(jpeg_bytes, np.uint8)
+            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            if frame is None:
+                return
+            
+            # 应用视觉修正模式
+            frame = self._apply_fix_mode_to_desktop_frame(frame)
+            
+            # 转换为Kivy纹理
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            h, w, _ = frame.shape
+            texture = Texture.create(size=(w, h), colorfmt="rgb")
+            texture.blit_buffer(frame.tobytes(), colorfmt="rgb", bufferfmt="ubyte")
+            texture.flip_vertical()
+            self.texture = texture
+        except ImportError:
+            RuntimeStatusLogger.log_error("远程摄像头需要cv2和numpy")
+        except Exception as e:
+            RuntimeStatusLogger.log_error(f"解码远程帧失败: {e}")
+
+    def _get_wifi_servo(self):
+        """获取WiFi舵机控制器（ESP32连接）。"""
+        try:
+            from services.wifi_servo import get_controller
+            return get_controller()
+        except Exception:
+            return None
+
+    def register_with_esp32(self, name: str = None) -> bool:
+        """向ESP32注册本设备（仅用于设备发现）。"""
+        try:
+            ctrl = self._get_wifi_servo()
+            if not ctrl or not ctrl.is_connected:
+                return False
+            
+            if name is None:
+                name = "PC" if platform in ("win", "linux", "macosx") else "Android"
+            
+            has_camera = bool(self.capture) if platform in ("win", "linux", "macosx") else self._android_camera_started
+            
+            result = ctrl.device_register(name, has_camera=has_camera, stream_port=STREAM_SERVER_PORT)
+            if result:
+                self._registered_device_id = result.get("client_id")
+                RuntimeStatusLogger.log_info(f"ESP32设备注册成功: {self._registered_device_id}")
+                return True
+            return False
+        except Exception as e:
+            RuntimeStatusLogger.log_error(f"ESP32注册失败: {e}")
+            return False
+
+    def get_available_sources(self) -> list:
+        """获取可用的摄像头源列表（从ESP32获取已注册设备）。"""
+        sources = [{"id": "local", "name": "本地摄像头", "is_self": True}]
+        try:
+            ctrl = self._get_wifi_servo()
+            if ctrl and ctrl.is_connected:
+                devices = ctrl.device_list()
+                my_id = getattr(ctrl, "_device_id", None)
+                for dev in devices:
+                    if dev.get("id") != my_id and dev.get("has_camera"):
+                        sources.append({
+                            "id": dev["id"],
+                            "name": dev.get("name", "未知设备"),
+                            "ip": dev.get("ip"),
+                            "stream_port": dev.get("stream_port", STREAM_SERVER_PORT),
+                            "is_self": False,
+                        })
+        except Exception:
+            pass
+        return sources
+
+    # ==================== P2P视频流服务器（供其他设备连接）====================
+
+    def enable_stream_sharing(self, enabled: bool = True):
+        """启用/禁用视频流共享（启动HTTP服务供其他设备连接）。"""
+        if enabled:
+            if not self._registered_device_id:
+                self.register_with_esp32()
+            self._start_stream_server()
+            self._stream_sharing_enabled = True
+            RuntimeStatusLogger.log_info(f"视频流共享已启用 (端口 {STREAM_SERVER_PORT})")
+        else:
+            self._stop_stream_server()
+            self._stream_sharing_enabled = False
+            RuntimeStatusLogger.log_info("视频流共享已停止")
+
+    def _start_stream_server(self):
+        """启动HTTP视频流服务器。"""
+        if self._stream_server_thread and self._stream_server_thread.is_alive():
+            return
+        
+        self._stream_server_stop = threading.Event()
+        self._stream_server_thread = threading.Thread(target=self._stream_server_loop, daemon=True)
+        self._stream_server_thread.start()
+
+    def _stop_stream_server(self):
+        """停止HTTP视频流服务器。"""
+        if hasattr(self, '_stream_server_stop'):
+            self._stream_server_stop.set()
+        if self._stream_server:
+            try:
+                self._stream_server.close()
+            except Exception:
+                pass
+            self._stream_server = None
+
+    def _stream_server_loop(self):
+        """HTTP视频流服务器主循环。"""
+        try:
+            server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server.bind(("0.0.0.0", STREAM_SERVER_PORT))
+            server.listen(5)
+            server.settimeout(1.0)
+            self._stream_server = server
+            
+            RuntimeStatusLogger.log_info(f"视频流服务器启动: 0.0.0.0:{STREAM_SERVER_PORT}")
+            
+            while not self._stream_server_stop.is_set():
+                try:
+                    client, addr = server.accept()
+                    threading.Thread(target=self._handle_stream_client, args=(client,), daemon=True).start()
+                except socket.timeout:
+                    continue
+                except Exception:
+                    break
+        except Exception as e:
+            RuntimeStatusLogger.log_error(f"视频流服务器错误: {e}")
+        finally:
+            if server:
+                try:
+                    server.close()
+                except Exception:
+                    pass
+
+    def _handle_stream_client(self, client: socket.socket):
+        """处理视频流客户端请求。"""
+        try:
+            client.settimeout(5.0)
+            request = client.recv(1024).decode('utf-8', errors='ignore')
+            
+            if "GET /frame" in request:
+                # 返回单帧JPEG
+                with self._frame_lock:
+                    jpeg_data = self._latest_jpeg_frame
+                
+                if jpeg_data:
+                    response = (
+                        "HTTP/1.1 200 OK\r\n"
+                        "Content-Type: image/jpeg\r\n"
+                        f"Content-Length: {len(jpeg_data)}\r\n"
+                        "Connection: close\r\n"
+                        "\r\n"
+                    )
+                    client.sendall(response.encode() + jpeg_data)
+                else:
+                    response = "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n"
+                    client.sendall(response.encode())
+            else:
+                response = "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n"
+                client.sendall(response.encode())
+        except Exception:
+            pass
+        finally:
+            try:
+                client.close()
+            except Exception:
+                pass
+
+    @property
+    def is_remote_source(self) -> bool:
+        """是否正在使用远程摄像头源。"""
+        return self._camera_source != "local"
+
+    @property
+    def current_source_name(self) -> str:
+        """当前摄像头源名称。"""
+        if self._camera_source == "local":
+            return "本地摄像头"
+        if self._remote_target:
+            return f"远程: {self._remote_target.get('name', 'unknown')}"
+        return "本地摄像头"
