@@ -7,14 +7,7 @@ import time
 import json
 from pathlib import Path
 
-from widgets.camera_view import CameraView
-from widgets.robot_face import RobotFace
-from widgets.gyro_panel import GyroPanel
-from widgets.debug_panel import DebugPanel
-from widgets.servo_status import ServoStatus
-from widgets.runtime_status import RuntimeStatusPanel, RuntimeStatusLogger
-from widgets.esp32_setup import Esp32SetupPopup
-from widgets.esp32_indicator import Esp32Indicator
+from widgets.runtime_status import RuntimeStatusLogger
 from widgets.connection_status import (
     is_esp32_ready, setup_connection_gate,
     poll_connection, refresh_link_indicator,
@@ -77,19 +70,47 @@ class RobotDashboardApp(App):
 
     # ================== 构建入口 ==================
     def build(self):
+        from kivy.uix.floatlayout import FloatLayout
+        self.root_container = FloatLayout()
+        
         self.ai_core = None
         bootstrap_runtime.init_android_permissions(self)
 
-        Builder.load_file('kv/style.kv')
-        self.root_widget = Builder.load_file('kv/root.kv')
-
         # 挂载配网门禁层，确保 Kivy 第一帧即可将其直接渲染，避免黑屏
+        self.root_widget = None
         self._esp32_gate = setup_connection_gate(self)
+        if self._esp32_gate:
+            self.root_container.add_widget(self._esp32_gate)
+        else:
+            from kivy.uix.label import Label
+            self._loading_lbl = Label(text="加载中...", font_name=self.theme_font)
+            self.root_container.add_widget(self._loading_lbl)
 
         # 延迟执行所有后端设备的加载和初始化，释放主线程渲染第一帧
-        Clock.schedule_once(self._delayed_init, 0.1)
+        Clock.schedule_once(self._load_heavy_ui, 0.1)
 
-        return self.root_widget
+        return self.root_container
+
+    def _load_heavy_ui(self, dt):
+        from widgets.camera_view import CameraView
+        from widgets.robot_face import RobotFace
+        from widgets.gyro_panel import GyroPanel
+        from widgets.debug_panel import DebugPanel
+        from widgets.servo_status import ServoStatus
+        from widgets.runtime_status import RuntimeStatusPanel
+        from widgets.esp32_setup import Esp32SetupPopup
+        from widgets.esp32_indicator import Esp32Indicator
+
+        Builder.load_file('kv/style.kv')
+        self.root_widget = Builder.load_file('kv/root.kv')
+        
+        # 将主界面插入到底层 (后面)
+        self.root_container.add_widget(self.root_widget, index=len(self.root_container.children))
+        
+        if hasattr(self, "_loading_lbl"):
+            self.root_container.remove_widget(self._loading_lbl)
+            
+        Clock.schedule_once(self._delayed_init, 0.1)
 
     def _delayed_init(self, dt):
         bootstrap_runtime.init_servo_bus(self)
@@ -156,6 +177,7 @@ class RobotDashboardApp(App):
     def _ensure_esp32_popup(self):
         if getattr(self, '_esp32_setup_popup', None) is None:
             try:
+                from widgets.esp32_setup import Esp32SetupPopup
                 self._esp32_setup_popup = Esp32SetupPopup()
             except Exception as e:
                 logging.warning('ESP32 popup create failed: %s', e)

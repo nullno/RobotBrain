@@ -13,12 +13,27 @@ from kivy.clock import Clock
 # 导入运行时适配模块与服务
 from app import esp32_runtime as esp32_runtime
 from widgets.runtime_status import RuntimeStatusLogger
-from services.ai_core import AICore
 from services.wifi_servo import get_controller as get_wifi_servo, load_host, init_controller
 
 
 def init_android_permissions(app):
-    """兼容接口（已弃用本地权限监控）。"""
+    """请求 Android 动态权限 (蓝牙配网和相机)"""
+    if platform == "android":
+        try:
+            from android.permissions import request_permissions, Permission
+            request_permissions([
+                Permission.CAMERA,
+                Permission.RECORD_AUDIO,
+                Permission.ACCESS_FINE_LOCATION,
+                Permission.ACCESS_COARSE_LOCATION,
+                Permission.BLUETOOTH_CONNECT,
+                Permission.BLUETOOTH_SCAN,
+                Permission.BLUETOOTH_ADVERTISE,
+                Permission.READ_EXTERNAL_STORAGE,
+                Permission.WRITE_EXTERNAL_STORAGE
+            ])
+        except Exception as e:
+            RuntimeStatusLogger.log_error(f"权限请求失败: {e}")
     return []
 
 
@@ -221,6 +236,7 @@ def init_ai_core(app):
         except Exception as e:
             RuntimeStatusLogger.log_info(f"AI 配置读取失败，使用环境变量: {e}")
 
+        from services.ai_core import AICore
         app.ai_core = AICore(api_key=api_key, profile_name=profile_name)
         app.ai_core.bind(
             on_action_command=app._on_ai_action,

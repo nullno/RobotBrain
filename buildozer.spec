@@ -14,7 +14,7 @@ version = 0.1
 # - plyer: 跨平台设备功能API
 # - requests: HTTP库
 # - opencv, numpy: 视觉处理
-requirements = python3,kivy==2.3.0,pyjnius,plyer,requests,websockets,aiohttp,bleak
+requirements = python3,kivy==2.3.0,pyjnius,plyer,requests,websockets,aiohttp,bleak,numpy,opencv,SpeechRecognition
 
 # UI配置
 fullscreen = 1
@@ -46,7 +46,7 @@ android.accept_sdk_license = True
 # WRITE/READ_EXTERNAL_STORAGE - 文件访问
 # (注意：USB_PERMISSION 是代码中的 Intent Action，不是 Manifest 权限，已移除)
 
-android.permissions = INTERNET,ACCESS_NETWORK_STATE,CAMERA,RECORD_AUDIO,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE
+android.permissions = INTERNET,ACCESS_NETWORK_STATE,CAMERA,RECORD_AUDIO,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,BLUETOOTH,BLUETOOTH_ADMIN,BLUETOOTH_CONNECT,BLUETOOTH_SCAN,ACCESS_FINE_LOCATION,ACCESS_COARSE_LOCATION
 # 使用 ESP32 网络桥接替代本地 Android USB 串口方案，已移除 device_filter/intent_filter 和 USB AAR
 android.manifest.launch_mode = singleTask
 

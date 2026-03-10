@@ -40,9 +40,14 @@ if sys.platform == "win32":
 
 try:
     from bleak import BleakScanner, BleakClient
-except Exception:
+except Exception as e:
+    import logging
+    logging.error(f"Failed to import bleak: {e}")
     BleakScanner = None
     BleakClient = None
+    _bleak_import_error = str(e)
+else:
+    _bleak_import_error = None
 
 TARGET_NAME = "ROBOT-ESP32-S3-BLE"
 SERVICE_UUID = "0000ffaa-0000-1000-8000-00805f9b34fb"
@@ -94,7 +99,7 @@ class Esp32SetupPopup(BoxLayout):
 
         # 日志框
         self.log_lbl = TextInput(
-            text="", readonly=True, size_hint_y=None, height=dp(220),
+            text="", readonly=True, size_hint_y=None, height=dp(140),
             font_name=theme.FONT, background_normal="", background_active="",
             background_color=(0.07, 0.08, 0.1, 1),
             foreground_color=(1, 1, 1, 1), padding=(dp(12), dp(10)), cursor_width=0,
@@ -156,7 +161,7 @@ class Esp32SetupPopup(BoxLayout):
         if self.popup is None:
             self.popup = Popup(
                 title="", content=self,
-                size_hint=(None, None), size=(dp(640), dp(480)),
+                size_hint=(None, None), size=(dp(640), dp(400)),
                 separator_height=0, background="", background_color=(0, 0, 0, 0),
                 auto_dismiss=False,
             )
@@ -196,7 +201,8 @@ class Esp32SetupPopup(BoxLayout):
         if self._ble_running:
             return
         if not BleakScanner or not BleakClient:
-            self._append_log("未安装 bleak，无法蓝牙配网")
+            msg = f"未安装 bleak，无法蓝牙配网 ({_bleak_import_error})"
+            self._append_log(msg)
             return
         self._ble_running = True
         self.scan_btn.disabled = True
