@@ -11,7 +11,6 @@ from kivy.metrics import dp
 import threading
 import time
 from widgets.angle_knob import AngleKnob
-from widgets.debug_actions_tab import build_actions_tab_content
 from widgets.debug_status_tab import build_status_tab_content
 from widgets.debug_ai_model_tab import build_ai_model_tab_content
 from widgets.debug_other_settings_tab import build_other_settings_tab_content
@@ -134,31 +133,6 @@ class DebugPanel(Widget):
 
     # -------------------------------------------------
 
-    def _build_actions_tab(self, tp, tab_item=None):
-        t_actions = tab_item if tab_item is not None else TabbedPanelItem(text="快捷动作", font_size="15sp")
-        if tab_item is None:
-            self._style_tab(t_actions)
-
-        def _dismiss_debug_popup():
-            try:
-                popup = getattr(self, "_debug_popup", None)
-                if popup:
-                    popup.dismiss()
-            except Exception:
-                pass
-
-        def _run_motion(action_name):
-            _dismiss_debug_popup()
-            threading.Thread(target=self._call_motion, args=(action_name,), daemon=True).start()
-        build_actions_tab_content(
-            t_actions,
-            button_cls=SquareTechButton,
-            on_demo=lambda: (_dismiss_debug_popup(), self._start_demo_thread()),
-            on_action=_run_motion,
-        )
-        if tab_item is None:
-            tp.add_widget(t_actions)
-
     def _build_status_tab(self, tp, tab_item=None):
         t_status = tab_item if tab_item is not None else TabbedPanelItem(text="连接状态", font_size="15sp")
         if tab_item is None:
@@ -262,18 +236,17 @@ class DebugPanel(Widget):
         tp.tab_height = dp(40)
 
         self._lazy_tabs = {}
-        t_actions = self._register_lazy_tab(tp, "快捷动作", self._build_actions_tab)
-        self._register_lazy_tab(tp, "连接状态", self._build_status_tab)
+        t_status = self._register_lazy_tab(tp, "连接状态", self._build_status_tab)
         t_single = self._register_lazy_tab(tp, "关节调试", self._build_single_servo_tab)
         self._register_lazy_tab(tp, "AI模型", self._build_ai_model_tab)
         self._register_lazy_tab(tp, "高级设置", self._build_other_settings_tab)
 
         try:
-            tp.switch_to(t_actions)
+            tp.switch_to(t_status)
         except Exception:
             pass
 
-        self._ensure_lazy_tab_built(tp, t_actions)
+        self._ensure_lazy_tab_built(tp, t_status)
         # 关节调试预构建改为延迟构建：避免打开弹窗时主线程被重构 UI 阻塞
         try:
             self._ensure_lazy_tab_built_deferred(tp, t_single, delay=0.08)

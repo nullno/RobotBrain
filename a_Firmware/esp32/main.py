@@ -326,7 +326,15 @@ async def handle_command(msg, addr, sock=None):
         if enable:
             servo.torque_on()
         else:
-            servo.torque_off()
+            if motion_sdk and hasattr(motion_sdk, "gradual_torque_release"):
+                # 如果是释放扭矩请求，启动渐渐卸力流程（非阻塞主线程）
+                try:
+                    import _thread
+                    _thread.start_new_thread(motion_sdk.gradual_torque_release, ())
+                except ImportError:
+                    motion_sdk.gradual_torque_release()
+            else:
+                servo.torque_off([254])
         log("cmd: torque={}".format(enable))
 
     elif mtype == "motion":

@@ -28,6 +28,29 @@ class MotionSDK:
             self.servo_ctrl.set_positions(self.base_positions, duration)
             time.sleep_ms(duration)
 
+    def gradual_torque_release(self):
+        """徐徐渐进释放扭矩，防止机器人突然摔倒"""
+        # 1. 过渡到蹲下/趴下姿态，降低重心 (1000ms)
+        pose = self.base_positions.copy()
+        for sid in (15, 21): pose[sid] = 2600
+        for sid in (17, 23): pose[sid] = 1200
+        for sid in (19, 25): pose[sid] = 2800
+        # 髋部前倾
+        pose[15] = 1800; pose[21] = 1800
+        self._execute([pose], [1000])
+
+        # 2. 广播降低所有舵机的扭矩上限 (0xFE = 254)
+        for limit in range(800, -1, -100):
+            # ESP32 这边直接利用底层方法或者现有 set_torque_limit 广播
+            self.servo_ctrl.set_torque_limit(254, max(0, limit))
+            time.sleep_ms(100)
+            
+        # 3. 广播彻底关闭扭矩
+        self.servo_ctrl.torque_off([254])
+        
+        # 4. 恢复广播默认扭矩上限以免影响下次使能后无力
+        self.servo_ctrl.set_torque_limit(254, 1000)
+
     def stand(self):
         """站立"""
         pose = {i: 2048 for i in range(1, 26)}
