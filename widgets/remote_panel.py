@@ -217,10 +217,19 @@ class RemotePanel(ModalView):
 
     # 键盘监听支持
     def on_open(self):
-        Window.bind(on_key_down=self._on_key_down, on_key_up=self._on_key_up)
+        self._keyboard = Window.request_keyboard(self._on_keyboard_closed, self)
+        if self._keyboard:
+            self._keyboard.bind(on_key_down=self._on_kb_down, on_key_up=self._on_kb_up)
+
+    def _on_keyboard_closed(self):
+        if getattr(self, '_keyboard', None):
+            self._keyboard.unbind(on_key_down=self._on_kb_down, on_key_up=self._on_kb_up)
+        self._keyboard = None
 
     def on_dismiss(self):
-        Window.unbind(on_key_down=self._on_key_down, on_key_up=self._on_key_up)
+        if getattr(self, '_keyboard', None):
+            self._keyboard.release()
+            self._keyboard = None
 
     def _simulate_button_down(self, btn_key):
         btn = self.buttons.get(btn_key)
@@ -238,14 +247,15 @@ class RemotePanel(ModalView):
                 btn._on_state()
             btn.dispatch('on_release')
 
-    def _on_key_down(self, window, keycode, scancode, codepoint, modifiers):
-        key_name = str(keycode[1]).lower() if isinstance(keycode, tuple) else str(keycode).lower()
+    def _on_kb_down(self, keyboard, keycode, text, modifiers):
+        # keycode 始终为元组: (key_int, key_str) 如 (119, 'w')
+        key_name = keycode[1].lower()
 
         if key_name == "escape":
             self.dismiss()
             return True
 
-        if "shift" in modifiers:
+        if 'shift' in modifiers:
             if key_name in self.shift_actions:
                 self._simulate_button_down(f"shift_{key_name}")
                 return True
@@ -254,19 +264,20 @@ class RemotePanel(ModalView):
                 action = self.key_actions[key_name]
                 self._simulate_button_down(action)
                 return True
-                
+
         return False
 
-    def _on_key_up(self, window, keycode, scancode):
-        key_name = str(keycode[1]).lower() if isinstance(keycode, tuple) else str(keycode).lower()
-        
-        # 释放shift情况
+    def _on_kb_up(self, keyboard, keycode):
+        key_name = keycode[1].lower()
+
         if key_name in self.shift_actions:
             self._simulate_button_up(f"shift_{key_name}")
             return True
-            
+
         if key_name in self.key_actions:
             action = self.key_actions[key_name]
             self._simulate_button_up(action)
             return True
+
+        return False
             

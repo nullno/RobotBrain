@@ -9,3 +9,4 @@ pygame>=2.5.2; platform_system != "Android"
 websockets>=10.4
 aiohttp>=3.9.0
 bleak>=0.22.2
+typing_extensions>=4.0.0
