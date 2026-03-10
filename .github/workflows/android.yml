@@ -53,14 +53,14 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install --no-cache-dir buildozer "cython<3"
 
-      - name: Preflight resource check
-        run: |
-          echo "== buildozer.spec resource config =="
-          grep -nE "android\.(add_resources|res_xml|manifest\.intent_filters|add_aars|gradle_dependencies|gradle_repositories|add_gradle_repositories)" buildozer.spec || true
-          echo "== device_filter file =="
-          ls -l android/xml/device_filter.xml
-          echo "== aar libs =="
-          ls -l android/libs/*.aar
+      # - name: Preflight resource check
+      #   run: |
+      #     echo "== buildozer.spec resource config =="
+      #     grep -nE "android\.(add_resources|res_xml|manifest\.intent_filters|add_aars|gradle_dependencies|gradle_repositories|add_gradle_repositories)" buildozer.spec || true
+      #     echo "== device_filter file =="
+      #     ls -l android/xml/device_filter.xml
+      #     echo "== aar libs =="
+      #     ls -l android/libs/*.aar
 
       - name: Build APK with buildozer
         env:
