@@ -14,7 +14,7 @@ version = 0.1
 # - plyer: 跨平台设备功能API
 # - requests: HTTP库
 # - opencv, numpy: 视觉处理
-requirements = python3,kivy==2.3.0,pyjnius,plyer,requests,websockets,aiohttp,bleak,numpy,opencv,SpeechRecognition,typing_extensions
+requirements = python3,kivy==2.3.0,pyjnius,plyer,requests,websockets,aiohttp,numpy,opencv,SpeechRecognition,typing_extensions
 
 # UI配置
 fullscreen = 1
@@ -34,7 +34,7 @@ android.window_layout_in_display_cutout_mode = short_edges
 android.wakelock = True
 
 # 打包优化
-# android.add_src = 
+android.add_src = java_src
 
 # 自动接受SDK许可
 android.accept_sdk_license = True

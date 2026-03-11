@@ -30,24 +30,35 @@ from services.wifi_servo import save_host, load_host, udp_discover, init_control
 
 logger = logging.getLogger(__name__)
 
-# Windows BLE 后端
-if sys.platform == "win32":
-    os.environ.setdefault("BLEAK_BACKEND", "winrt")
-    try:
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    except Exception:
-        pass
+from kivy.utils import platform as _kv_platform
 
-try:
-    from bleak import BleakScanner, BleakClient
-except Exception as e:
-    import logging
-    logging.error(f"Failed to import bleak: {e}")
-    BleakScanner = None
-    BleakClient = None
-    _bleak_import_error = str(e)
+_on_android = (_kv_platform == "android")
+_ble_backend = None  # "android" | "bleak" | None
+
+if _on_android:
+    try:
+        from services import ble_android
+        if ble_android.is_available():
+            _ble_backend = "android"
+        else:
+            logger.error("Android BLE 不可用")
+    except Exception as e:
+        logger.error(f"Failed to import ble_android: {e}")
 else:
-    _bleak_import_error = None
+    # 桌面平台使用 bleak
+    if sys.platform == "win32":
+        os.environ.setdefault("BLEAK_BACKEND", "winrt")
+        try:
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        except Exception:
+            pass
+    try:
+        from bleak import BleakScanner, BleakClient
+        _ble_backend = "bleak"
+    except Exception as e:
+        logger.error(f"Failed to import bleak: {e}")
+        BleakScanner = None
+        BleakClient = None
 
 TARGET_NAME = "ROBOT-ESP32-S3-BLE"
 SERVICE_UUID = "0000ffaa-0000-1000-8000-00805f9b34fb"
@@ -200,9 +211,8 @@ class Esp32SetupPopup(BoxLayout):
     def _on_scan_clicked(self):
         if self._ble_running:
             return
-        if not BleakScanner or not BleakClient:
-            msg = f"未安装 bleak，无法蓝牙配网 ({_bleak_import_error})"
-            self._append_log(msg)
+        if _ble_backend is None:
+            self._append_log("蓝牙库不可用，无法配网")
             return
         self._ble_running = True
         self.scan_btn.disabled = True
@@ -211,7 +221,10 @@ class Esp32SetupPopup(BoxLayout):
 
     def _ble_scan_thread(self):
         try:
-            asyncio.run(self._ble_scan_and_check())
+            if _ble_backend == "android":
+                self._ble_scan_android()
+            else:
+                asyncio.run(self._ble_scan_and_check())
         except Exception as e:
             self._append_log(f"BLE 异常: {e!r}")
         finally:
@@ -256,6 +269,48 @@ class Esp32SetupPopup(BoxLayout):
         except Exception as e:
             self._append_log(f"BLE 连接失败: {e!r}")
 
+    def _ble_scan_android(self):
+        """Android: BLE 扫描 → 连接 → 读 WiFi 状态。"""
+        from services import ble_android
+
+        devices = ble_android.scan_devices(timeout=6)
+        target_addr = None
+        target_name = None
+        for name, addr in devices:
+            if TARGET_NAME.lower() in name.lower():
+                target_addr = addr
+                target_name = name
+                break
+
+        if not target_addr:
+            self._append_log("未找到 ESP32 蓝牙设备")
+            return
+
+        self._append_log(f"发现 {target_name}，连接中...")
+        try:
+            raw = ble_android.connect_and_read_char(
+                target_addr, SERVICE_UUID, STATUS_CHAR_UUID, timeout=10,
+            )
+            if raw:
+                status = json.loads(raw.decode("utf-8"))
+                wifi_ok = bool(status.get("wifi_ok"))
+                ip = status.get("ip")
+                self._append_log(
+                    f"设备 WiFi: {'已连接' if wifi_ok else '未连接'} ip={ip}"
+                )
+                if wifi_ok and ip:
+                    self._append_log("ESP32 已联网，无需配网")
+                    self._on_esp32_found(ip, 5005)
+                    return
+            else:
+                self._append_log("无法读取 WiFi 状态，需要配网")
+        except Exception:
+            self._append_log("无法读取 WiFi 状态，需要配网")
+
+        self._device_address = target_addr
+        Clock.schedule_once(lambda dt: setattr(self.send_btn, "disabled", False), 0)
+        self._append_log("请输入 Wi-Fi 信息并点击发送")
+
     # -------------------- 配网发送 --------------------
 
     def _on_send_clicked(self):
@@ -273,7 +328,10 @@ class Esp32SetupPopup(BoxLayout):
 
     def _provision_thread(self, ssid: str, pwd: str):
         try:
-            asyncio.run(self._provision_async(ssid, pwd))
+            if _ble_backend == "android":
+                self._provision_android(ssid, pwd)
+            else:
+                asyncio.run(self._provision_async(ssid, pwd))
         except Exception as e:
             self._append_log(f"配网失败: {e!r}")
         finally:
@@ -309,6 +367,46 @@ class Esp32SetupPopup(BoxLayout):
         time.sleep(5.0)
 
         # UDP 广播发现
+        self._append_log("搜索 ESP32...")
+        found = udp_discover(timeout=3.0)
+        if found:
+            ip = found[0][0]
+            self._append_log(f"发现 ESP32: {ip}")
+            self._on_esp32_found(ip, 5005)
+        else:
+            self._append_log("未发现设备，请检查 WiFi 后重试")
+
+    def _provision_android(self, ssid: str, pwd: str):
+        """Android: BLE 写入 WiFi 凭据 → 等待连接 → UDP 发现。"""
+        from services import ble_android
+        import time as _time
+
+        addr = self._device_address
+        if not addr:
+            self._append_log("重新扫描蓝牙...")
+            devices = ble_android.scan_devices(timeout=6)
+            for name, a in devices:
+                if TARGET_NAME.lower() in name.lower():
+                    addr = a
+                    break
+            if not addr:
+                self._append_log("未找到 ESP32 蓝牙")
+                return
+
+        payload = f"{ssid}\n{pwd}".encode("utf-8")
+        self._append_log(f"连接 {addr}，写入 WiFi 配置...")
+
+        success = ble_android.connect_and_write_char(
+            addr, SERVICE_UUID, WIFI_CHAR_UUID, payload, timeout=10,
+        )
+        if not success:
+            self._append_log("WiFi 配置写入失败")
+            return
+
+        self._append_log("已发送，等待 ESP32 连接 WiFi (~5秒)...")
+        self._save_wifi_config(ssid, pwd)
+        _time.sleep(5.0)
+
         self._append_log("搜索 ESP32...")
         found = udp_discover(timeout=3.0)
         if found:
