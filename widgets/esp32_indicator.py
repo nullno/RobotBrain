@@ -27,6 +27,10 @@ class Esp32Indicator(ButtonBehavior, BoxLayout):
 
     def on_release(self):
         try:
+            from kivy.app import App
+            if getattr(App.get_running_app(), 'run_mode', 'phone') == 'pc':
+                return # PC模式下使用驾驶舱，不再弹出遥控手柄
+
             from widgets.remote_panel import RemotePanel
             panel = RemotePanel()
             panel.open()

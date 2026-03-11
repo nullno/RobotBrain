@@ -175,6 +175,7 @@ class OtherSettingsPanel(BoxLayout):
         Clock.schedule_once(lambda _dt: self.refresh_status(), 0)
         Clock.schedule_once(lambda _dt: self._ensure_vision_loaded(), 0.12)
         Clock.schedule_once(lambda _dt: self._refresh_camera_sources(), 0.5)
+        Clock.schedule_once(lambda _dt: self._sync_upload_btn_state(), 1.0)
 
     def _ensure_vision_loaded(self):
         if self._vision_loaded:
@@ -454,3 +455,13 @@ class OtherSettingsPanel(BoxLayout):
                 self._notify("已停止共享本地画面")
         except Exception as e:
             self._notify(f"共享切换失败: {e}")
+
+    def _sync_upload_btn_state(self):
+        """同步画面共享按钮状态（可能已被自动开启）。"""
+        try:
+            cam = self._get_camera_view()
+            if cam and getattr(cam, '_stream_sharing_enabled', False):
+                self._cam_upload_enabled = True
+                self._btn_cam_upload.text = "停止共享"
+        except Exception:
+            pass

@@ -1,7 +1,10 @@
 <MainContentContainer@FloatLayout>:
     CameraView:
         id: camera_view
-        opacity: 0
+        opacity: 1 if getattr(app, 'run_mode', 'phone') == 'pc' else 0
+        size_hint: (1, 1)
+        pos_hint: {"center_x": 0.5, "center_y": 0.5}
+        fit_mode: "cover" if getattr(app, 'run_mode', 'phone') == 'pc' else "scale-down"
 
     GyroPanel:
         id: gyro_panel
@@ -21,10 +24,17 @@
         camera_view: camera_view
         size_hint: (0.8, 0.6)
         pos_hint: {"center_x": 0.5, "center_y": 0.5}
+        opacity: 1 if getattr(app, 'run_mode', 'phone') == 'phone' else 0
+        disabled: getattr(app, 'run_mode', 'phone') != 'phone'
+
+    CockpitPanel:
+        id: cockpit_panel
+        opacity: 1 if getattr(app, 'run_mode', 'phone') == 'pc' else 0
+        disabled: getattr(app, 'run_mode', 'phone') != 'pc'
 
     DebugPanel:
         id: debug_panel
 
     RuntimeStatusPanel:
         id: runtime_status
-        pos_hint: {"x": 0.01, "y": 0.08}
+        pos_hint: {"x": 0.01, "top": 0.98}

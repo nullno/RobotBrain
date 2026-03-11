@@ -283,6 +283,9 @@ class CameraView(Image):
 
         self._event = Clock.schedule_interval(self._update_desktop, 1 / 30)
         RuntimeStatusLogger.log_info('桌面摄像头已启动，开始读取帧')
+        # --mode phone 桌面模拟手机时也自动开启画面共享
+        if getattr(App.get_running_app(), 'run_mode', 'pc') == 'phone':
+            Clock.schedule_once(lambda dt: self.enable_stream_sharing(True), 2.0)
 
     def _update_desktop(self, dt):
         ret, frame = self.capture.read()
@@ -361,7 +364,7 @@ class CameraView(Image):
                                     self.texture = tex
                                     if mode != self._last_display_mode:
                                         self._apply_android_display_transform()
-                                    # 为P2P共享准备JPEG帧（Android端）
+                                    # 为P2P共享准备JPEG帧（Android端默认开启）
                                     if self._stream_sharing_enabled:
                                         self._capture_android_texture_for_sharing(tex)
                                     if not self._android_texture_ready_logged:
@@ -378,6 +381,8 @@ class CameraView(Image):
                         self._android_camera_started = True
                         RuntimeStatusLogger.log_info(f"摄像头已启动 (index={idx})")
                         print(f"✅ 摄像头已启动 (index={idx})")
+                        if getattr(App.get_running_app(), 'run_mode', 'phone') == 'phone':
+                            self.enable_stream_sharing(True)
                         break
                     except Exception as e:
                         print(f"⚠ 尝试摄像头 index={idx} 失败: {e}")
@@ -844,31 +849,39 @@ class CameraView(Image):
                     pass
 
     def _handle_stream_client(self, client: socket.socket):
-        """处理视频流客户端请求。"""
+        """处理视频流客户端请求（支持keep-alive复用连接）。"""
         try:
-            client.settimeout(5.0)
-            request = client.recv(1024).decode('utf-8', errors='ignore')
-            
-            if "GET /frame" in request:
-                # 返回单帧JPEG
-                with self._frame_lock:
-                    jpeg_data = self._latest_jpeg_frame
-                
-                if jpeg_data:
-                    response = (
-                        "HTTP/1.1 200 OK\r\n"
-                        "Content-Type: image/jpeg\r\n"
-                        f"Content-Length: {len(jpeg_data)}\r\n"
-                        "Connection: close\r\n"
-                        "\r\n"
-                    )
-                    client.sendall(response.encode() + jpeg_data)
+            client.settimeout(2.0)
+            while not self._stream_server_stop.is_set():
+                try:
+                    request = client.recv(1024).decode('utf-8', errors='ignore')
+                except socket.timeout:
+                    break
+                if not request:
+                    break
+
+                if "GET /frame" in request:
+                    with self._frame_lock:
+                        jpeg_data = self._latest_jpeg_frame
+
+                    if jpeg_data:
+                        response = (
+                            "HTTP/1.1 200 OK\r\n"
+                            "Content-Type: image/jpeg\r\n"
+                            f"Content-Length: {len(jpeg_data)}\r\n"
+                            "Connection: keep-alive\r\n"
+                            "\r\n"
+                        )
+                        client.sendall(response.encode() + jpeg_data)
+                    else:
+                        response = "HTTP/1.1 204 No Content\r\nConnection: keep-alive\r\n\r\n"
+                        client.sendall(response.encode())
                 else:
-                    response = "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n"
+                    response = "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n"
                     client.sendall(response.encode())
-            else:
-                response = "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n"
-                client.sendall(response.encode())
+                    break
+        except socket.timeout:
+            pass
         except Exception:
             pass
         finally:

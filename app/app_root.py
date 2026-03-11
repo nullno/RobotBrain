@@ -94,6 +94,7 @@ class RobotDashboardApp(App):
     def _load_heavy_ui(self, dt):
         from widgets.camera_view import CameraView
         from widgets.robot_face import RobotFace
+        from widgets.cockpit_panel import CockpitPanel
         from widgets.gyro_panel import GyroPanel
         from widgets.debug_panel import DebugPanel
         from widgets.servo_status import ServoStatus

@@ -58,7 +58,7 @@ def run_demo_motion(owner):
     app = App.get_running_app()
 
     def show_msg(txt):
-        owner._show_info_popup(txt)
+        show_info_popup(owner, txt)
 
     try:
         from widgets.runtime_status import RuntimeStatusLogger
@@ -143,13 +143,13 @@ def run_zero_id_script(owner):
             "servo_zero_and_id.py",
         )
     if not os.path.exists(script):
-        owner._show_info_popup("未找到 servo_zero_and_id.py 脚本")
+        show_info_popup(owner, "未找到 servo_zero_and_id.py 脚本")
         return
     try:
         subprocess.Popen([sys.executable, script])
-        owner._show_info_popup("归零/写ID脚本已在后台启动")
+        show_info_popup(owner, "归零/写ID脚本已在后台启动")
     except Exception as e:
-        owner._show_info_popup(f"启动脚本失败: {e}")
+        show_info_popup(owner, f"启动脚本失败: {e}")
 
 
 def emergency_torque_release(owner):
@@ -162,20 +162,20 @@ def emergency_torque_release(owner):
 
     ctrl = getattr(app, "wifi_servo", None) or get_wifi_servo()
     if not ctrl or not ctrl.is_connected:
-        owner._show_info_popup("未连接 ESP32")
+        show_info_popup(owner, "未连接 ESP32")
         if RuntimeStatusLogger:
             RuntimeStatusLogger.log_error("未连接 ESP32 无法释放扭矩")
         return
 
     try:
         if ctrl.set_torque(False):
-            owner._show_info_popup("已发送：扭矩释放广播")
+            show_info_popup(owner, "已发送：扭矩释放广播")
             if RuntimeStatusLogger:
                 RuntimeStatusLogger.log_action("扭矩释放广播已发送")
         else:
-            owner._show_info_popup("释放扭矩失败")
+            show_info_popup(owner, "释放扭矩失败")
     except Exception as e:
-        owner._show_info_popup(f"释放扭矩失败: {e}")
+        show_info_popup(owner, f"释放扭矩失败: {e}")
         if RuntimeStatusLogger:
             RuntimeStatusLogger.log_error(f"释放扭矩失败: {e}")
 
