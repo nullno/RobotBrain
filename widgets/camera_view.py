@@ -23,6 +23,18 @@ class CameraView(Image):
         super().__init__(**kwargs)
         self.allow_stretch = True
         self.keep_ratio = True
+        
+        # 核心修复：Image为空texture时会默认渲染一个白色方块
+        # 通过修改颜色滤镜为黑色，可防止无摄像头画面时显示白屏
+        self.color = (0, 0, 0, 1)
+        self.bind(texture=self._on_texture_change)
+
+        # 确保无摄像头时背景为黑色（不依赖 kv 规则加载顺序）
+        from kivy.graphics import Color, Rectangle as _Rect
+        with self.canvas.before:
+            Color(0, 0, 0, 1)
+            self._bg_rect = _Rect(pos=self.pos, size=self.size)
+        self.bind(pos=self._sync_bg, size=self._sync_bg)
 
         self.capture = None
         # 可注册回调以获取原始 OpenCV 帧：callback(frame: numpy.ndarray)
@@ -50,6 +62,11 @@ class CameraView(Image):
         self._frame_lock = threading.Lock()
         self._registered_device_id = None
         self._stream_sharing_enabled = False
+        self._remote_fetch_thread = None
+        self._remote_fetch_stop = threading.Event()
+        self._remote_latest_frame = None  # 后台线程写入，主线程读取
+        self._remote_frame_lock = threading.Lock()
+        self._auto_discover_event = None
 
         try:
             self._load_saved_android_fix_mode()
@@ -69,6 +86,18 @@ class CameraView(Image):
             self._start_desktop()
         else:
             self._start_android()
+
+    def _sync_bg(self, *_):
+        self._bg_rect.pos = self.pos
+        self._bg_rect.size = self.size
+
+    def _on_texture_change(self, instance, value):
+        # 一旦有真正的画面纹理，就把颜色滤镜改回正常（白色滤镜即原色）
+        # 如果纹理消失，重新变回黑色
+        if value:
+            self.color = (1, 1, 1, 1)
+        else:
+            self.color = (0, 0, 0, 1)
 
     def _get_android_camera_candidates(self):
         """返回 Android 摄像头候选索引：优先前置，再补充常见索引。"""
@@ -286,6 +315,9 @@ class CameraView(Image):
         # --mode phone 桌面模拟手机时也自动开启画面共享
         if getattr(App.get_running_app(), 'run_mode', 'pc') == 'phone':
             Clock.schedule_once(lambda dt: self.enable_stream_sharing(True), 2.0)
+        # PC模式：自动注册设备并启动自动发现远程摄像头
+        if getattr(App.get_running_app(), 'run_mode', 'pc') == 'pc':
+            Clock.schedule_once(lambda dt: self._auto_register_and_discover(), 3.0)
 
     def _update_desktop(self, dt):
         ret, frame = self.capture.read()
@@ -521,17 +553,7 @@ class CameraView(Image):
             if self._event:
                 self._event.cancel()
                 self._event = None
-            if self._remote_event:
-                self._remote_event.cancel()
-                self._remote_event = None
-            # 清理远程HTTP连接
-            try:
-                conn = getattr(self, '_remote_http_conn', None)
-                if conn:
-                    conn.close()
-                self._remote_http_conn = None
-            except Exception:
-                pass
+            self._stop_remote_fetch()
             # 停止流媒体服务器
             self._stop_stream_server()
             # Android摄像头清理
@@ -577,17 +599,7 @@ class CameraView(Image):
         """切换回本地摄像头。"""
         try:
             # 停止远程帧拉取
-            if self._remote_event:
-                self._remote_event.cancel()
-                self._remote_event = None
-            # 清理远程HTTP连接
-            try:
-                conn = getattr(self, '_remote_http_conn', None)
-                if conn:
-                    conn.close()
-                self._remote_http_conn = None
-            except Exception:
-                pass
+            self._stop_remote_fetch()
             
             self._camera_source = "local"
             self._remote_target = None
@@ -624,13 +636,19 @@ class CameraView(Image):
                 self._event.cancel()
                 self._event = None
             
+            # 停止旧的远程帧拉取
+            self._stop_remote_fetch()
+            
             self._camera_source = "remote"
             self._remote_target = {"ip": ip, "port": port, "name": name}
             
-            # 启动P2P远程帧拉取
-            if self._remote_event:
-                self._remote_event.cancel()
-            self._remote_event = Clock.schedule_interval(self._update_remote_frame_p2p, 1 / 15)
+            # 启动后台线程拉取远程帧 + 主线程定时更新纹理
+            self._remote_fetch_stop.clear()
+            self._remote_fetch_thread = threading.Thread(
+                target=self._remote_fetch_loop, args=(ip, port), daemon=True
+            )
+            self._remote_fetch_thread.start()
+            self._remote_event = Clock.schedule_interval(self._apply_remote_frame, 1 / 25)
             
             RuntimeStatusLogger.log_info(f"P2P连接远程摄像头: {name} ({ip}:{port})")
             return True
@@ -638,45 +656,61 @@ class CameraView(Image):
             RuntimeStatusLogger.log_error(f"P2P连接失败: {e}")
             return False
 
-    def _update_remote_frame_p2p(self, dt):
-        """从远程设备P2P直接拉取帧（复用连接减少延迟）。"""
-        if not self._remote_target:
-            return
-        
+    def _stop_remote_fetch(self):
+        """停止后台远程帧拉取线程。"""
+        self._remote_fetch_stop.set()
+        if self._remote_event:
+            self._remote_event.cancel()
+            self._remote_event = None
         try:
-            ip = self._remote_target.get("ip")
-            port = self._remote_target.get("port", STREAM_SERVER_PORT)
-            
-            import http.client
-            # 复用持久连接，减少TCP握手开销
             conn = getattr(self, '_remote_http_conn', None)
-            conn_key = getattr(self, '_remote_http_conn_key', None)
-            target_key = (ip, port)
-            if conn is None or conn_key != target_key:
-                if conn:
-                    try:
-                        conn.close()
-                    except Exception:
-                        pass
-                conn = http.client.HTTPConnection(ip, port, timeout=1.0)
-                self._remote_http_conn = conn
-                self._remote_http_conn_key = target_key
-            
+            if conn:
+                conn.close()
+            self._remote_http_conn = None
+        except Exception:
+            pass
+
+    def _remote_fetch_loop(self, ip, port):
+        """后台线程：持续从远程设备拉取JPEG帧。"""
+        import http.client
+        conn = None
+        while not self._remote_fetch_stop.is_set():
             try:
+                if conn is None:
+                    conn = http.client.HTTPConnection(ip, port, timeout=2.0)
                 conn.request("GET", "/frame")
                 resp = conn.getresponse()
                 if resp.status == 200:
                     jpeg_bytes = resp.read()
-                    self._display_jpeg_frame(jpeg_bytes)
+                    if jpeg_bytes:
+                        with self._remote_frame_lock:
+                            self._remote_latest_frame = jpeg_bytes
+                elif resp.status == 204:
+                    time.sleep(0.03)
+                else:
+                    time.sleep(0.1)
             except Exception:
-                # 连接断开，下次重建
                 try:
-                    conn.close()
+                    if conn:
+                        conn.close()
                 except Exception:
                     pass
-                self._remote_http_conn = None
+                conn = None
+                if not self._remote_fetch_stop.is_set():
+                    time.sleep(0.3)
+        try:
+            if conn:
+                conn.close()
         except Exception:
             pass
+
+    def _apply_remote_frame(self, dt):
+        """主线程：将后台拉取的最新帧应用到纹理。"""
+        with self._remote_frame_lock:
+            jpeg_bytes = self._remote_latest_frame
+            self._remote_latest_frame = None
+        if jpeg_bytes:
+            self._display_jpeg_frame(jpeg_bytes)
 
     def _display_jpeg_frame(self, jpeg_bytes: bytes):
         """将JPEG字节解码并显示。"""
@@ -903,3 +937,37 @@ class CameraView(Image):
         if self._remote_target:
             return f"远程: {self._remote_target.get('name', 'unknown')}"
         return "本地摄像头"
+
+    # ==================== PC端自动发现远程摄像头 ====================
+
+    def _auto_register_and_discover(self):
+        """PC端自动注册设备并开始定期发现远程摄像头。"""
+        try:
+            self.register_with_esp32(name="PC")
+        except Exception:
+            pass
+        # 启动定期扫描，每5秒检查是否有新的远程摄像头可用
+        if self._auto_discover_event is None:
+            self._auto_discover_event = Clock.schedule_interval(self._auto_discover_remote, 5.0)
+            # 首次立即扫描
+            Clock.schedule_once(lambda dt: self._auto_discover_remote(0), 0.5)
+
+    def _auto_discover_remote(self, dt):
+        """自动发现并连接远程摄像头（仅在使用本地源时才自动切换）。"""
+        if self._camera_source != "local":
+            return
+        try:
+            sources = self.get_available_sources()
+            for src in sources:
+                if src.get("is_self"):
+                    continue
+                if src.get("has_camera") and src.get("ip"):
+                    RuntimeStatusLogger.log_info(f"自动发现远程摄像头: {src.get('name')} ({src.get('ip')})")
+                    self._switch_to_remote_p2p(src)
+                    # 连接成功后停止自动发现
+                    if self._auto_discover_event:
+                        self._auto_discover_event.cancel()
+                        self._auto_discover_event = None
+                    return
+        except Exception:
+            pass

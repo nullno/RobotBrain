@@ -19,6 +19,7 @@ from kivy.utils import platform
 import argparse
 
 Config.set('kivy', 'exit_on_escape', '1')
+Config.set('graphics', 'clearcolor', '0,0,0,1')
 
 if platform in ("win", "linux", "macosx"):
     Config.set("graphics", "width", "900")

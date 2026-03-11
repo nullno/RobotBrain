@@ -109,12 +109,15 @@ class Esp32SetupPopup(BoxLayout):
         )
 
         # 日志框
+        _is_android = (_kv_platform == "android")
         self.log_lbl = TextInput(
             text="", readonly=True, size_hint_y=None, height=dp(140),
             font_name=theme.FONT, background_normal="", background_active="",
             background_color=(0.07, 0.08, 0.1, 1),
             foreground_color=(1, 1, 1, 1), padding=(dp(12), dp(10)), cursor_width=0,
-            use_bubble=True,
+            use_bubble=not _is_android,
+            use_handles=not _is_android,
+            allow_copy=not _is_android,
         )
 
         # 加载上次保存的 SSID/密码

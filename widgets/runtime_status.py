@@ -96,6 +96,7 @@ class RuntimeStatusPanel(BoxLayout):
         font_kw = {}
         if emoji_font:
             font_kw['font_name'] = emoji_font
+        _is_android = _kivy_platform == 'android'
         self.log_label = TextInput(
             text='[等待信息...]',
             readonly=True,
@@ -103,7 +104,9 @@ class RuntimeStatusPanel(BoxLayout):
             foreground_color=(0.85, 0.9, 0.98, 1.0),
             background_color=(0, 0, 0, 0),
             font_size='10sp',
-            use_bubble=True,
+            use_bubble=not _is_android,
+            use_handles=not _is_android,
+            allow_copy=not _is_android,
             padding=(dp(4), dp(2)),
             background_normal='',
             background_active='',
