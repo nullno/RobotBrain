@@ -1,15 +1,12 @@
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.metrics import dp
-from kivy.uix.anchorlayout import AnchorLayout
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.label import Label
 from kivy.uix.spinner import Spinner
-from kivy.uix.textinput import TextInput
 from kivy.graphics import Color, RoundedRectangle, Line
 
-from widgets.bubble_level import BubbleLevel
 from widgets.vision_settings_panel import VisionSettingsPanel
 
 try:
@@ -19,7 +16,7 @@ except Exception:
 
 
 class OtherSettingsPanel(BoxLayout):
-    """高级设置面板：整合性能、平衡与视觉设置。"""
+    """高级设置面板：整合性能与视觉设置。"""
 
     PRESETS = {
         "省电": {
@@ -74,9 +71,7 @@ class OtherSettingsPanel(BoxLayout):
         self._show_message = show_message
         self._debug_panel = debug_panel
         self._button_factory = button_factory
-        self._balance_level = None
         self._vision_panel = None
-        self._level_loaded = False
         self._vision_loaded = False
 
         perf_box, perf_body = self._create_section_box("性能模式")
@@ -105,69 +100,6 @@ class OtherSettingsPanel(BoxLayout):
         self._status.bind(size=self._status.setter("text_size"))
         perf_body.add_widget(self._status)
         self.add_widget(perf_box)
-
-        bal_box, bal_body = self._create_section_box("平衡参数")
-
-        row_balance = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(8))
-        self._gain_p_input = TextInput(
-            text="5.50",
-            multiline=False,
-            input_filter="float",
-            size_hint=(None, 1),
-            width=dp(88),
-        )
-        self._gain_r_input = TextInput(
-            text="4.20",
-            multiline=False,
-            input_filter="float",
-            size_hint=(None, 1),
-            width=dp(88),
-        )
-        self._btn_bal_apply = self._make_button("应用", width=dp(84))
-        self._btn_bal_refresh = self._make_button("读取", width=dp(84))
-        self._btn_bal_reset = self._make_button("默认", width=dp(84))
-        row_balance.add_widget(Label(text="P", size_hint=(None, 1), width=dp(18), color=(0.75, 0.85, 0.95, 1)))
-        row_balance.add_widget(self._gain_p_input)
-        row_balance.add_widget(Label(text="R", size_hint=(None, 1), width=dp(18), color=(0.75, 0.85, 0.95, 1)))
-        row_balance.add_widget(self._gain_r_input)
-        row_balance.add_widget(self._btn_bal_apply)
-        row_balance.add_widget(self._btn_bal_refresh)
-        row_balance.add_widget(self._btn_bal_reset)
-        bal_body.add_widget(row_balance)
-
-        row_axis = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(8))
-        self._btn_axis_auto = self._make_button("轴:Auto", width=dp(96))
-        self._btn_axis_normal = self._make_button("Normal", width=dp(96))
-        self._btn_axis_swapped = self._make_button("Swapped", width=dp(96))
-        self._axis_status = Label(
-            text="",
-            size_hint_y=None,
-            height=dp(24),
-            color=(0.72, 0.82, 0.92, 1),
-            halign="left",
-            valign="middle",
-        )
-        self._axis_status.bind(size=self._axis_status.setter("text_size"))
-        row_axis.add_widget(self._btn_axis_auto)
-        row_axis.add_widget(self._btn_axis_normal)
-        row_axis.add_widget(self._btn_axis_swapped)
-        bal_body.add_widget(row_axis)
-        bal_body.add_widget(self._axis_status)
-        self.add_widget(bal_box)
-
-        level_box, level_body = self._create_section_box("姿态指示")
-        self._level_body = level_body
-        self._level_loading = Label(
-            text="姿态指示加载中...",
-            size_hint_y=None,
-            height=dp(36),
-            color=(0.72, 0.82, 0.92, 1),
-            halign="left",
-            valign="middle",
-        )
-        self._level_loading.bind(size=self._level_loading.setter("text_size"))
-        level_body.add_widget(self._level_loading)
-        self.add_widget(level_box)
 
         vis_box, vis_body = self._create_section_box("视觉设置")
         self._vision_body = vis_body
@@ -233,12 +165,6 @@ class OtherSettingsPanel(BoxLayout):
 
         self._btn_apply.bind(on_release=self._apply_preset)
         self._btn_refresh.bind(on_release=lambda *_: self.refresh_status())
-        self._btn_bal_apply.bind(on_release=self._apply_balance)
-        self._btn_bal_refresh.bind(on_release=lambda *_: self._refresh_balance())
-        self._btn_bal_reset.bind(on_release=self._reset_balance)
-        self._btn_axis_auto.bind(on_release=lambda *_: self._set_axis_mode("auto"))
-        self._btn_axis_normal.bind(on_release=lambda *_: self._set_axis_mode("normal"))
-        self._btn_axis_swapped.bind(on_release=lambda *_: self._set_axis_mode("swapped"))
 
         # 摄像头切换事件绑定
         self._btn_cam_refresh.bind(on_release=lambda *_: self._refresh_camera_sources())
@@ -247,29 +173,8 @@ class OtherSettingsPanel(BoxLayout):
         self._btn_cam_upload.bind(on_release=lambda *_: self._toggle_frame_upload())
 
         Clock.schedule_once(lambda _dt: self.refresh_status(), 0)
-        Clock.schedule_once(lambda _dt: self._refresh_balance(), 0)
-        Clock.schedule_once(lambda _dt: self._ensure_level_loaded(), 0)
         Clock.schedule_once(lambda _dt: self._ensure_vision_loaded(), 0.12)
         Clock.schedule_once(lambda _dt: self._refresh_camera_sources(), 0.5)
-
-    def _ensure_level_loaded(self):
-        if self._level_loaded:
-            return
-        try:
-            self._level_body.remove_widget(self._level_loading)
-        except Exception:
-            pass
-        bubble_anchor = AnchorLayout(
-            anchor_x="center",
-            anchor_y="center",
-            size_hint_y=None,
-            height=dp(170),
-        )
-        self._balance_level = BubbleLevel(size_hint=(None, None), size=(dp(140), dp(140)))
-        bubble_anchor.add_widget(self._balance_level)
-        self._level_body.add_widget(bubble_anchor)
-        self._level_loaded = True
-        self._start_balance_level()
 
     def _ensure_vision_loaded(self):
         if self._vision_loaded:
@@ -284,20 +189,6 @@ class OtherSettingsPanel(BoxLayout):
         self._vision_panel = panel
         self._vision_body.add_widget(panel)
         self._vision_loaded = True
-
-    def _start_balance_level(self):
-        try:
-            if self._balance_level:
-                self._balance_level.start_tracking()
-        except Exception:
-            pass
-
-    def on_panel_closed(self):
-        try:
-            if self._balance_level:
-                self._balance_level.stop_tracking()
-        except Exception:
-            pass
 
     def _section_title(self, text):
         lbl = Label(
@@ -400,76 +291,6 @@ class OtherSettingsPanel(BoxLayout):
 
         self._notify(f"已应用性能预设：{name}")
         self.refresh_status()
-
-    def _set_axis_mode(self, mode):
-        app = App.get_running_app()
-        if mode not in ("auto", "normal", "swapped"):
-            return
-        try:
-            app._gyro_axis_mode = mode
-            if mode == "auto":
-                app._gyro_axis_samples = 0
-            if hasattr(app, "save_balance_tuning"):
-                app.save_balance_tuning()
-            self._axis_status.text = f"轴映射: {mode}"
-            self._notify(f"轴映射已设置: {mode}")
-        except Exception:
-            pass
-
-    def _refresh_balance(self):
-        app = App.get_running_app()
-        bc = getattr(app, "balance_ctrl", None)
-        if not bc:
-            self._axis_status.text = "轴映射: -"
-            return
-        try:
-            gp = float(getattr(bc, "gain_p", 5.5))
-            gr = float(getattr(bc, "gain_r", 4.2))
-            self._gain_p_input.text = f"{gp:.2f}"
-            self._gain_r_input.text = f"{gr:.2f}"
-            mode = str(getattr(app, "_gyro_axis_mode", "auto") or "auto")
-            if mode not in ("auto", "normal", "swapped"):
-                mode = "auto"
-            self._axis_status.text = f"轴映射: {mode}"
-        except Exception:
-            self._axis_status.text = "轴映射: -"
-
-    def _apply_balance(self, *_args):
-        app = App.get_running_app()
-        bc = getattr(app, "balance_ctrl", None)
-        if not bc:
-            self._notify("BalanceController 不存在")
-            return
-        try:
-            gp = max(0.0, min(20.0, float(self._gain_p_input.text)))
-            gr = max(0.0, min(20.0, float(self._gain_r_input.text)))
-            bc.gain_p = gp
-            bc.gain_r = gr
-            if hasattr(app, "save_balance_tuning"):
-                app.save_balance_tuning()
-            self._gain_p_input.text = f"{gp:.2f}"
-            self._gain_r_input.text = f"{gr:.2f}"
-            self._notify(f"平衡参数已应用: P={gp:.2f}, R={gr:.2f}")
-        except Exception:
-            self._notify("平衡参数输入无效")
-
-    def _reset_balance(self, *_args):
-        app = App.get_running_app()
-        bc = getattr(app, "balance_ctrl", None)
-        if not bc:
-            self._notify("BalanceController 不存在")
-            return
-        try:
-            bc.gain_p = 5.5
-            bc.gain_r = 4.2
-            app._gyro_axis_mode = "auto"
-            app._gyro_axis_samples = 0
-            if hasattr(app, "save_balance_tuning"):
-                app.save_balance_tuning()
-            self._refresh_balance()
-            self._notify("平衡参数已恢复默认")
-        except Exception:
-            pass
 
     def refresh_status(self):
         app = App.get_running_app()

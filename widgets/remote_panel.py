@@ -217,6 +217,10 @@ class RemotePanel(ModalView):
 
     # 键盘监听支持
     def on_open(self):
+        # Android 不绑定键盘，避免弹出软键盘
+        from kivy.utils import platform as _kv_platform
+        if _kv_platform == 'android':
+            return
         self._keyboard = Window.request_keyboard(self._on_keyboard_closed, self)
         if self._keyboard:
             self._keyboard.bind(on_key_down=self._on_kb_down, on_key_up=self._on_kb_up)

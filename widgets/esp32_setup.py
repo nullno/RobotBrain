@@ -114,6 +114,7 @@ class Esp32SetupPopup(BoxLayout):
             font_name=theme.FONT, background_normal="", background_active="",
             background_color=(0.07, 0.08, 0.1, 1),
             foreground_color=(1, 1, 1, 1), padding=(dp(12), dp(10)), cursor_width=0,
+            use_bubble=True,
         )
 
         # 加载上次保存的 SSID/密码
@@ -152,6 +153,15 @@ class Esp32SetupPopup(BoxLayout):
 
         self.scan_btn.bind(on_release=lambda *_: self._on_scan_clicked())
         self.send_btn.bind(on_release=lambda *_: self._on_send_clicked())
+
+    def on_touch_down(self, touch):
+        # 点击日志区域外时清除选中状态
+        try:
+            if not self.log_lbl.collide_point(*touch.pos):
+                self.log_lbl.cancel_selection()
+        except Exception:
+            pass
+        return super().on_touch_down(touch)
 
     # -------------------- UI 辅助 --------------------
 

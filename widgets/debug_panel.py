@@ -140,6 +140,11 @@ class DebugPanel(Widget):
         self._status_grid = build_status_tab_content(t_status)
         if tab_item is None:
             tp.add_widget(t_status)
+        # 立即填充全部25张离线占位卡，避免空白等待
+        placeholder_cards = [(sid, None, False) for sid in range(1, 26)]
+        debug_panel_runtime.render_status_cards(self, placeholder_cards)
+        # 异步刷新在线状态
+        threading.Thread(target=self.refresh_servo_status, daemon=True).start()
 
     def _on_status_card_click(self, sid):
         self._jump_to_single_servo_tab(sid)

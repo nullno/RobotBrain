@@ -361,6 +361,9 @@ class CameraView(Image):
                                     self.texture = tex
                                     if mode != self._last_display_mode:
                                         self._apply_android_display_transform()
+                                    # 为P2P共享准备JPEG帧（Android端）
+                                    if self._stream_sharing_enabled:
+                                        self._capture_android_texture_for_sharing(tex)
                                     if not self._android_texture_ready_logged:
                                         RuntimeStatusLogger.log_info(
                                             f'Android 摄像头 texture 就绪 (index={camera_idx}, front={is_front}, mode={mode})'
@@ -516,6 +519,14 @@ class CameraView(Image):
             if self._remote_event:
                 self._remote_event.cancel()
                 self._remote_event = None
+            # 清理远程HTTP连接
+            try:
+                conn = getattr(self, '_remote_http_conn', None)
+                if conn:
+                    conn.close()
+                self._remote_http_conn = None
+            except Exception:
+                pass
             # 停止流媒体服务器
             self._stop_stream_server()
             # Android摄像头清理
@@ -564,6 +575,14 @@ class CameraView(Image):
             if self._remote_event:
                 self._remote_event.cancel()
                 self._remote_event = None
+            # 清理远程HTTP连接
+            try:
+                conn = getattr(self, '_remote_http_conn', None)
+                if conn:
+                    conn.close()
+                self._remote_http_conn = None
+            except Exception:
+                pass
             
             self._camera_source = "local"
             self._remote_target = None
@@ -615,7 +634,7 @@ class CameraView(Image):
             return False
 
     def _update_remote_frame_p2p(self, dt):
-        """从远程设备P2P直接拉取帧。"""
+        """从远程设备P2P直接拉取帧（复用连接减少延迟）。"""
         if not self._remote_target:
             return
         
@@ -623,9 +642,21 @@ class CameraView(Image):
             ip = self._remote_target.get("ip")
             port = self._remote_target.get("port", STREAM_SERVER_PORT)
             
-            # HTTP请求获取JPEG帧
             import http.client
-            conn = http.client.HTTPConnection(ip, port, timeout=0.5)
+            # 复用持久连接，减少TCP握手开销
+            conn = getattr(self, '_remote_http_conn', None)
+            conn_key = getattr(self, '_remote_http_conn_key', None)
+            target_key = (ip, port)
+            if conn is None or conn_key != target_key:
+                if conn:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                conn = http.client.HTTPConnection(ip, port, timeout=1.0)
+                self._remote_http_conn = conn
+                self._remote_http_conn_key = target_key
+            
             try:
                 conn.request("GET", "/frame")
                 resp = conn.getresponse()
@@ -633,9 +664,12 @@ class CameraView(Image):
                     jpeg_bytes = resp.read()
                     self._display_jpeg_frame(jpeg_bytes)
             except Exception:
-                pass
-            finally:
-                conn.close()
+                # 连接断开，下次重建
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                self._remote_http_conn = None
         except Exception:
             pass
 
@@ -671,6 +705,36 @@ class CameraView(Image):
             return get_controller()
         except Exception:
             return None
+
+    def _capture_android_texture_for_sharing(self, tex):
+        """从Android摄像头纹理中提取像素并编码为JPEG，供P2P共享。"""
+        try:
+            if not tex or not self._stream_sharing_enabled:
+                return
+            # 限制共享帧率，避免占用过多CPU
+            now = time.time()
+            if (now - getattr(self, '_last_android_share_time', 0.0)) < 0.1:
+                return
+            self._last_android_share_time = now
+            
+            pixels = tex.pixels
+            if not pixels:
+                return
+            w, h = tex.size
+            import numpy as np
+            import cv2
+            arr = np.frombuffer(pixels, dtype=np.uint8).reshape(h, w, 4)
+            # RGBA -> BGR
+            bgr = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
+            # 缩小分辨率
+            if w > 480:
+                scale = 480 / w
+                bgr = cv2.resize(bgr, (480, int(h * scale)))
+            _, buffer = cv2.imencode('.jpg', bgr, [cv2.IMWRITE_JPEG_QUALITY, 55])
+            with self._frame_lock:
+                self._latest_jpeg_frame = buffer.tobytes()
+        except Exception:
+            pass
 
     def register_with_esp32(self, name: str = None) -> bool:
         """向ESP32注册本设备（仅用于设备发现）。"""

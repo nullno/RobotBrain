@@ -122,6 +122,12 @@ class RuntimeStatusPanel(BoxLayout):
                 return True
         except Exception:
             pass
+        # 点击日志区域外时清除选中状态
+        try:
+            if not self.log_label.collide_point(*touch.pos):
+                self.log_label.cancel_selection()
+        except Exception:
+            pass
         return super().on_touch_down(touch)
 
     def toggle_visible(self):
