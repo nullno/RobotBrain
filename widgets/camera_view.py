@@ -69,6 +69,8 @@ class CameraView(Image):
         self._auto_discover_event = None
         self._remote_stream_active = False   # 远程流服务正在推送画面时为 True
         self._camera_stream_service = None   # PC 端远程摄像头服务引用
+        self._android_share_clock = None     # Android 独立帧捕获定时器
+        self._esp32_heartbeat_clock = None   # ESP32 心跳注册定时器
 
         try:
             self._load_saved_android_fix_mode()
@@ -562,6 +564,11 @@ class CameraView(Image):
             self._stop_remote_fetch()
             # 停止流媒体服务器
             self._stop_stream_server()
+            self._stop_android_share_clock()
+            # 停止心跳注册
+            if self._esp32_heartbeat_clock:
+                self._esp32_heartbeat_clock.cancel()
+                self._esp32_heartbeat_clock = None
             # 停止 PC 端远程摄像头服务
             if self._camera_stream_service:
                 try:
@@ -778,21 +785,39 @@ class CameraView(Image):
         except Exception:
             return None
 
+    # ──────── Android 独立帧捕获定时器 ────────
+
+    def _start_android_share_clock(self):
+        """启动 Android 独立帧捕获定时器（~15fps）。"""
+        if self._android_share_clock:
+            return
+        self._android_share_clock = Clock.schedule_interval(self._android_share_tick, 1 / 15)
+
+    def _stop_android_share_clock(self):
+        """停止 Android 独立帧捕获定时器。"""
+        if self._android_share_clock:
+            self._android_share_clock.cancel()
+            self._android_share_clock = None
+
+    def _android_share_tick(self, dt):
+        """定时从当前纹理捕获帧用于 MJPEG 共享（不依赖 texture 属性回调）。"""
+        if not self._stream_sharing_enabled:
+            return
+        tex = self.texture
+        if tex:
+            self._capture_android_texture_for_sharing(tex)
+
     def _capture_android_texture_for_sharing(self, tex):
         """从Android摄像头纹理中提取像素并编码为JPEG，供MJPEG共享。"""
         try:
             if not tex or not self._stream_sharing_enabled:
                 return
-            # 限制共享帧率 ~15fps，平衡流畅度与CPU占用
-            now = time.time()
-            if (now - getattr(self, '_last_android_share_time', 0.0)) < 0.066:
-                return
-            self._last_android_share_time = now
-            
             pixels = tex.pixels
             if not pixels:
                 return
             w, h = tex.size
+            if w <= 0 or h <= 0:
+                return
             import numpy as np
             import cv2
             arr = np.frombuffer(pixels, dtype=np.uint8).reshape(h, w, 4)
@@ -869,10 +894,15 @@ class CameraView(Image):
                 self.register_with_esp32()
             self._start_stream_server()
             self._stream_sharing_enabled = True
+            # Android: 启动独立的帧捕获定时器
+            # texture 属性回调在某些设备上不每帧触发，需要独立 Clock 保证持续捕获
+            if platform not in ("win", "linux", "macosx"):
+                self._start_android_share_clock()
             RuntimeStatusLogger.log_info(f"视频流共享已启用 (端口 {STREAM_SERVER_PORT})")
         else:
             self._stop_stream_server()
             self._stream_sharing_enabled = False
+            self._stop_android_share_clock()
             RuntimeStatusLogger.log_info("视频流共享已停止")
 
     def _start_stream_server(self):
@@ -1024,14 +1054,16 @@ class CameraView(Image):
     # ==================== 手机端自动注册 + 启用共享 ====================
 
     def _auto_enable_sharing_and_register(self):
-        """手机端/桌面模拟手机：启用 MJPEG 共享并向 ESP32 注册设备。"""
+        """手机端/桌面模拟手机：启用 MJPEG 共享并向 ESP32 持续心跳注册。"""
         self.enable_stream_sharing(True)
-        # 延迟注册，确保 ESP32 连接就绪
-        def _try_register(dt):
+        # 持续心跳注册（每 10 秒），ESP32 设备池 30 秒过期，不能注册一次就停
+        def _heartbeat(dt):
             try:
-                if self.register_with_esp32():
-                    return False  # 成功，停止重试
+                self.register_with_esp32()
             except Exception:
                 pass
-            return True  # 继续重试
-        Clock.schedule_interval(_try_register, 3.0)
+        if self._esp32_heartbeat_clock:
+            self._esp32_heartbeat_clock.cancel()
+        self._esp32_heartbeat_clock = Clock.schedule_interval(_heartbeat, 10.0)
+        # 首次立即尝试
+        Clock.schedule_once(lambda dt: _heartbeat(0), 1.0)

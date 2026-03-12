@@ -35,6 +35,7 @@ class CameraStreamService:
     - 自动连接手机的 MJPEG 视频流
     - 解码帧并推送给 CameraView 显示
     - 断线自动重连 + 定时重新扫描
+    - PC 持续向 ESP32 心跳注册保持在线
     """
 
     def __init__(self):
@@ -47,7 +48,7 @@ class CameraStreamService:
         self._latest_frame: Optional[bytes] = None
         self._frame_lock = threading.Lock()
         self._running = False
-        self._display_event = None    # Kivy Clock event
+        self._display_event = None
 
     def start(self, camera_view):
         """启动服务，绑定 CameraView 用于显示。"""
@@ -78,14 +79,25 @@ class CameraStreamService:
             return self._connected_target.get("name")
         return None
 
-    # ──────────────── 设备扫描 ────────────────
+    # ──────────────── 设备扫描 + 心跳 ────────────────
 
     def _scan_loop(self):
-        """后台线程：定时扫描 ESP32 设备池。"""
+        """后台线程：定时心跳注册 + 扫描 ESP32 设备池。"""
         while not self._stop_event.is_set():
+            # 每轮都向 ESP32 心跳注册，保持 PC 在设备池中在线
+            self._heartbeat_register()
             if not self.is_connected:
                 self._try_discover_and_connect()
             self._stop_event.wait(SCAN_INTERVAL)
+
+    def _heartbeat_register(self):
+        """向 ESP32 心跳注册 PC 设备（保持在线）。"""
+        try:
+            ctrl = get_controller()
+            if ctrl and ctrl.is_connected:
+                ctrl.device_register("PC", has_camera=True, stream_port=STREAM_PORT)
+        except Exception:
+            pass
 
     def _try_discover_and_connect(self):
         """尝试从设备池发现手机摄像头并连接。"""
@@ -94,17 +106,12 @@ class CameraStreamService:
             if not ctrl or not ctrl.is_connected:
                 return
 
-            # 先确保 PC 已注册到设备池
-            if not getattr(ctrl, "_device_id", None):
-                try:
-                    ctrl.device_register("PC", has_camera=True, stream_port=STREAM_PORT)
-                except Exception:
-                    pass
-
             devices = ctrl.device_list()
             my_id = getattr(ctrl, "_device_id", None)
 
             for dev in devices:
+                if dev.get("is_self"):
+                    continue
                 if dev.get("id") == my_id:
                     continue
                 if not dev.get("has_camera"):
@@ -132,7 +139,7 @@ class CameraStreamService:
         """快速测试目标 MJPEG 端口是否可达。"""
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(1.0)
+            s.settimeout(1.5)
             s.connect((ip, port))
             s.close()
             return True
@@ -145,11 +152,12 @@ class CameraStreamService:
         """建立 MJPEG 视频流连接。"""
         self._disconnect_stream()
 
-        self._stream_stop.clear()
+        self._stream_stop = threading.Event()
         self._connected_target = {"ip": ip, "port": port, "name": name}
 
+        stop_ref = self._stream_stop
         self._stream_thread = threading.Thread(
-            target=self._mjpeg_stream_loop, args=(ip, port), daemon=True
+            target=self._mjpeg_stream_loop, args=(ip, port, stop_ref), daemon=True
         )
         self._stream_thread.start()
 
@@ -162,6 +170,9 @@ class CameraStreamService:
     def _disconnect_stream(self):
         """断开当前流连接。"""
         self._stream_stop.set()
+        if self._stream_thread:
+            self._stream_thread.join(timeout=3.0)
+        self._stream_thread = None
         self._connected_target = None
 
         if self._display_event:
@@ -174,16 +185,15 @@ class CameraStreamService:
         if self._camera_view:
             self._camera_view._remote_stream_active = False
 
-    def _mjpeg_stream_loop(self, ip: str, port: int):
+    def _mjpeg_stream_loop(self, ip: str, port: int, stop_event: threading.Event):
         """后台线程：持续读取 MJPEG multipart 流。"""
-        while not self._stream_stop.is_set():
+        while not stop_event.is_set():
             sock = None
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.settimeout(CONNECT_TIMEOUT)
                 sock.connect((ip, port))
 
-                # 发送 HTTP 请求
                 request = (
                     f"GET /stream HTTP/1.1\r\n"
                     f"Host: {ip}:{port}\r\n"
@@ -206,12 +216,9 @@ class CameraStreamService:
                 header_end = buf.index(b"\r\n\r\n") + 4
                 remaining = buf[header_end:]
 
-                RuntimeStatusLogger.log_info(
-                    f"MJPEG 流已连接: {ip}:{port}"
-                )
+                RuntimeStatusLogger.log_info(f"MJPEG 流已连接: {ip}:{port}")
 
-                # 持续解析 MJPEG 帧
-                self._read_mjpeg_frames(sock, remaining)
+                self._read_mjpeg_frames(sock, remaining, stop_event)
 
             except Exception as e:
                 logger.debug("MJPEG 流断开: %s", e)
@@ -222,72 +229,103 @@ class CameraStreamService:
                     except Exception:
                         pass
 
-            # 断线后等待重连
-            if not self._stream_stop.is_set():
+            if not stop_event.is_set():
                 RuntimeStatusLogger.log_info("远程摄像头断开，等待重连...")
-                self._connected_target = None
-                if self._camera_view:
-                    self._camera_view._remote_stream_active = False
-                self._stream_stop.wait(RECONNECT_DELAY)
+                stop_event.wait(RECONNECT_DELAY)
 
-        # 线程退出时清理
-        self._connected_target = None
-        if self._camera_view:
-            self._camera_view._remote_stream_active = False
-
-    def _read_mjpeg_frames(self, sock: socket.socket, initial_buf: bytes):
-        """从 socket 解析 MJPEG multipart 帧。
-
-        协议格式:
-          --frame\\r\\n
-          Content-Type: image/jpeg\\r\\n
-          Content-Length: NNN\\r\\n
-          \\r\\n
-          <JPEG bytes>\\r\\n
-        """
+    def _read_mjpeg_frames(self, sock: socket.socket, initial_buf: bytes,
+                           stop_event: threading.Event):
+        """从 socket 解析 MJPEG multipart 帧（基于 Content-Length）。"""
         buf = initial_buf
-        boundary = b"--frame"
+        BOUNDARY = b"--frame"
 
-        while not self._stream_stop.is_set():
-            # 读取更多数据
-            try:
-                chunk = sock.recv(65536)
-                if not chunk:
-                    break
-                buf += chunk
-            except socket.timeout:
-                continue
-            except Exception:
-                break
-
-            # 解析所有完整帧
-            while True:
-                idx = buf.find(boundary)
-                if idx < 0:
-                    # 防止 buffer 无限增长
-                    if len(buf) > 500000:
-                        buf = buf[-200000:]
-                    break
-
-                next_idx = buf.find(boundary, idx + len(boundary))
-                if next_idx < 0:
-                    break
-
-                # 提取本帧数据
-                frame_section = buf[idx + len(boundary):next_idx]
-                buf = buf[next_idx:]
-
-                # 找到 header 和 body 的分隔
-                header_end = frame_section.find(b"\r\n\r\n")
-                if header_end < 0:
+        def _recv_until(need_bytes: int):
+            """确保 buf 中至少有 need_bytes 字节。"""
+            nonlocal buf
+            while len(buf) < need_bytes:
+                try:
+                    chunk = sock.recv(65536)
+                    if not chunk:
+                        raise ConnectionError("EOF")
+                    buf += chunk
+                except socket.timeout:
+                    if stop_event.is_set():
+                        raise ConnectionError("stopped")
                     continue
 
-                jpeg_data = frame_section[header_end + 4:].rstrip(b"\r\n")
+        while not stop_event.is_set():
+            # 1. 找到 boundary
+            while True:
+                idx = buf.find(BOUNDARY)
+                if idx >= 0:
+                    buf = buf[idx + len(BOUNDARY):]
+                    break
+                # 需要更多数据
+                try:
+                    chunk = sock.recv(65536)
+                    if not chunk:
+                        return
+                    buf += chunk
+                except socket.timeout:
+                    if stop_event.is_set():
+                        return
+                    continue
+                except Exception:
+                    return
+                if len(buf) > 1000000:
+                    return
 
-                # 验证 JPEG 魔数
-                if jpeg_data and len(jpeg_data) > 2 and jpeg_data[:2] == b"\xff\xd8":
-                    with self._frame_lock:
-                        self._latest_frame = jpeg_data
+            # 跳过 boundary 后可能的 \r\n
+            if buf.startswith(b"\r\n"):
+                buf = buf[2:]
+
+            # 2. 读取 part headers 直到 \r\n\r\n
+            while b"\r\n\r\n" not in buf:
+                try:
+                    chunk = sock.recv(4096)
+                    if not chunk:
+                        return
+                    buf += chunk
+                except socket.timeout:
+                    if stop_event.is_set():
+                        return
+                    continue
+                except Exception:
+                    return
+
+            header_end = buf.index(b"\r\n\r\n")
+            header_text = buf[:header_end].decode("ascii", errors="ignore")
+            buf = buf[header_end + 4:]
+
+            # 3. 从 header 解析 Content-Length
+            content_length = 0
+            for line in header_text.split("\r\n"):
+                if line.lower().strip().startswith("content-length:"):
+                    try:
+                        content_length = int(line.split(":", 1)[1].strip())
+                    except (ValueError, IndexError):
+                        pass
+
+            if content_length <= 0:
+                continue
+
+            # 4. 读取恰好 content_length 字节的 JPEG 数据
+            try:
+                _recv_until(content_length)
+            except ConnectionError:
+                return
+
+            jpeg_data = buf[:content_length]
+            buf = buf[content_length:]
+
+            # 跳过尾部 \r\n
+            if buf.startswith(b"\r\n"):
+                buf = buf[2:]
+
+            # 5. 验证 JPEG 并存储
+            if len(jpeg_data) > 2 and jpeg_data[:2] == b"\xff\xd8":
+                with self._frame_lock:
+                    self._latest_frame = jpeg_data
 
     def _push_frame_to_view(self, dt):
         """主线程回调：将最新帧推送给 CameraView 显示。"""
