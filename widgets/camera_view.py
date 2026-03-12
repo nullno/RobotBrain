@@ -67,6 +67,8 @@ class CameraView(Image):
         self._remote_latest_frame = None  # 后台线程写入，主线程读取
         self._remote_frame_lock = threading.Lock()
         self._auto_discover_event = None
+        self._remote_stream_active = False   # 远程流服务正在推送画面时为 True
+        self._camera_stream_service = None   # PC 端远程摄像头服务引用
 
         try:
             self._load_saved_android_fix_mode()
@@ -312,12 +314,12 @@ class CameraView(Image):
 
         self._event = Clock.schedule_interval(self._update_desktop, 1 / 30)
         RuntimeStatusLogger.log_info('桌面摄像头已启动，开始读取帧')
-        # --mode phone 桌面模拟手机时也自动开启画面共享
+        # --mode phone 桌面模拟手机时也自动开启画面共享并注册设备
         if getattr(App.get_running_app(), 'run_mode', 'pc') == 'phone':
-            Clock.schedule_once(lambda dt: self.enable_stream_sharing(True), 2.0)
-        # PC模式：自动注册设备并启动自动发现远程摄像头
+            Clock.schedule_once(lambda dt: self._auto_enable_sharing_and_register(), 2.0)
+        # PC模式：启动远程摄像头视频流服务（自动扫描设备池、连接手机画面）
         if getattr(App.get_running_app(), 'run_mode', 'pc') == 'pc':
-            Clock.schedule_once(lambda dt: self._auto_register_and_discover(), 3.0)
+            Clock.schedule_once(lambda dt: self._start_camera_stream_service(), 3.0)
 
     def _update_desktop(self, dt):
         ret, frame = self.capture.read()
@@ -338,14 +340,14 @@ class CameraView(Image):
         except Exception:
             pass
 
-        # 为P2P共享准备JPEG帧
+        # 为MJPEG共享准备JPEG帧（应用方向修正后再编码，保证PC看到正确方向）
         if self._stream_sharing_enabled:
             try:
-                h, w = frame.shape[:2]
-                share_frame = frame
+                share_frame = self._apply_fix_mode_to_desktop_frame(frame.copy())
+                h, w = share_frame.shape[:2]
                 if w > 480:
                     scale = 480 / w
-                    share_frame = self.cv2.resize(frame, (480, int(h * scale)))
+                    share_frame = self.cv2.resize(share_frame, (480, int(h * scale)))
                 _, buffer = self.cv2.imencode('.jpg', share_frame, [self.cv2.IMWRITE_JPEG_QUALITY, 60])
                 with self._frame_lock:
                     self._latest_jpeg_frame = buffer.tobytes()
@@ -356,6 +358,10 @@ class CameraView(Image):
             frame = self._apply_fix_mode_to_desktop_frame(frame)
         except Exception:
             pass
+
+        # 如果远程流服务正在推送画面，跳过本地纹理更新
+        if self._remote_stream_active:
+            return
 
         # OpenCV -> Kivy Texture
         frame = self.cv2.cvtColor(frame, self.cv2.COLOR_BGR2RGB)
@@ -414,7 +420,7 @@ class CameraView(Image):
                         RuntimeStatusLogger.log_info(f"摄像头已启动 (index={idx})")
                         print(f"✅ 摄像头已启动 (index={idx})")
                         if getattr(App.get_running_app(), 'run_mode', 'phone') == 'phone':
-                            self.enable_stream_sharing(True)
+                            self._auto_enable_sharing_and_register()
                         break
                     except Exception as e:
                         print(f"⚠ 尝试摄像头 index={idx} 失败: {e}")
@@ -556,6 +562,12 @@ class CameraView(Image):
             self._stop_remote_fetch()
             # 停止流媒体服务器
             self._stop_stream_server()
+            # 停止 PC 端远程摄像头服务
+            if self._camera_stream_service:
+                try:
+                    self._camera_stream_service.stop()
+                except Exception:
+                    pass
             # Android摄像头清理
             try:
                 if hasattr(self, 'camera') and self.camera:
@@ -713,7 +725,7 @@ class CameraView(Image):
             self._display_jpeg_frame(jpeg_bytes)
 
     def _display_jpeg_frame(self, jpeg_bytes: bytes):
-        """将JPEG字节解码并显示。"""
+        """将JPEG字节解码并显示（应用本地视觉修正）。"""
         try:
             import numpy as np
             import cv2
@@ -737,6 +749,27 @@ class CameraView(Image):
         except Exception as e:
             RuntimeStatusLogger.log_error(f"解码远程帧失败: {e}")
 
+    def _display_remote_jpeg(self, jpeg_bytes: bytes):
+        """将远程MJPEG帧解码并显示（不应用本地修正，因为发送端已修正）。"""
+        try:
+            import numpy as np
+            import cv2
+            nparr = np.frombuffer(jpeg_bytes, np.uint8)
+            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            if frame is None:
+                return
+            # 远程帧已经由发送端应用了方向修正，此处直接显示
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            h, w, _ = frame.shape
+            texture = Texture.create(size=(w, h), colorfmt="rgb")
+            texture.blit_buffer(frame.tobytes(), colorfmt="rgb", bufferfmt="ubyte")
+            texture.flip_vertical()
+            self.texture = texture
+        except ImportError:
+            RuntimeStatusLogger.log_error("远程摄像头需要cv2和numpy")
+        except Exception as e:
+            RuntimeStatusLogger.log_error(f"解码远程帧失败: {e}")
+
     def _get_wifi_servo(self):
         """获取WiFi舵机控制器（ESP32连接）。"""
         try:
@@ -746,13 +779,13 @@ class CameraView(Image):
             return None
 
     def _capture_android_texture_for_sharing(self, tex):
-        """从Android摄像头纹理中提取像素并编码为JPEG，供P2P共享。"""
+        """从Android摄像头纹理中提取像素并编码为JPEG，供MJPEG共享。"""
         try:
             if not tex or not self._stream_sharing_enabled:
                 return
-            # 限制共享帧率，避免占用过多CPU
+            # 限制共享帧率 ~15fps，平衡流畅度与CPU占用
             now = time.time()
-            if (now - getattr(self, '_last_android_share_time', 0.0)) < 0.1:
+            if (now - getattr(self, '_last_android_share_time', 0.0)) < 0.066:
                 return
             self._last_android_share_time = now
             
@@ -765,11 +798,20 @@ class CameraView(Image):
             arr = np.frombuffer(pixels, dtype=np.uint8).reshape(h, w, 4)
             # RGBA -> BGR
             bgr = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
+            # 应用与显示一致的方向修正，确保PC看到的画面和手机一致
+            mode = self.get_android_front_fix_mode()
+            if mode in ("rotate180", "180", "default"):
+                bgr = cv2.rotate(bgr, cv2.ROTATE_180)
+            elif mode in ("vflip", "vertical"):
+                bgr = cv2.flip(bgr, 0)
+            elif mode in ("hflip", "horizontal"):
+                bgr = cv2.flip(bgr, 1)
             # 缩小分辨率
-            if w > 480:
-                scale = 480 / w
-                bgr = cv2.resize(bgr, (480, int(h * scale)))
-            _, buffer = cv2.imencode('.jpg', bgr, [cv2.IMWRITE_JPEG_QUALITY, 55])
+            oh, ow = bgr.shape[:2]
+            if ow > 480:
+                scale = 480 / ow
+                bgr = cv2.resize(bgr, (480, int(oh * scale)))
+            _, buffer = cv2.imencode('.jpg', bgr, [cv2.IMWRITE_JPEG_QUALITY, 60])
             with self._frame_lock:
                 self._latest_jpeg_frame = buffer.tobytes()
         except Exception:
@@ -883,37 +925,67 @@ class CameraView(Image):
                     pass
 
     def _handle_stream_client(self, client: socket.socket):
-        """处理视频流客户端请求（支持keep-alive复用连接）。"""
+        """处理MJPEG视频流客户端请求。"""
         try:
-            client.settimeout(2.0)
-            while not self._stream_server_stop.is_set():
-                try:
-                    request = client.recv(1024).decode('utf-8', errors='ignore')
-                except socket.timeout:
-                    break
-                if not request:
-                    break
+            client.settimeout(5.0)
+            try:
+                request = client.recv(1024).decode('utf-8', errors='ignore')
+            except socket.timeout:
+                return
+            if not request:
+                return
 
-                if "GET /frame" in request:
+            if "GET /stream" in request:
+                # MJPEG multipart 持续推流
+                header = (
+                    "HTTP/1.1 200 OK\r\n"
+                    "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n"
+                    "Cache-Control: no-cache, no-store\r\n"
+                    "Pragma: no-cache\r\n"
+                    "Connection: close\r\n"
+                    "\r\n"
+                )
+                client.sendall(header.encode())
+
+                last_frame_id = None
+                while not self._stream_server_stop.is_set():
                     with self._frame_lock:
                         jpeg_data = self._latest_jpeg_frame
 
-                    if jpeg_data:
-                        response = (
-                            "HTTP/1.1 200 OK\r\n"
+                    if jpeg_data and jpeg_data is not last_frame_id:
+                        last_frame_id = jpeg_data
+                        frame_part = (
+                            "--frame\r\n"
                             "Content-Type: image/jpeg\r\n"
                             f"Content-Length: {len(jpeg_data)}\r\n"
-                            "Connection: keep-alive\r\n"
                             "\r\n"
                         )
-                        client.sendall(response.encode() + jpeg_data)
+                        try:
+                            client.sendall(frame_part.encode() + jpeg_data + b"\r\n")
+                        except (BrokenPipeError, ConnectionResetError, OSError):
+                            break
                     else:
-                        response = "HTTP/1.1 204 No Content\r\nConnection: keep-alive\r\n\r\n"
-                        client.sendall(response.encode())
+                        time.sleep(0.03)
+
+            elif "GET /frame" in request:
+                # 兼容旧协议：单帧请求
+                with self._frame_lock:
+                    jpeg_data = self._latest_jpeg_frame
+                if jpeg_data:
+                    response = (
+                        "HTTP/1.1 200 OK\r\n"
+                        "Content-Type: image/jpeg\r\n"
+                        f"Content-Length: {len(jpeg_data)}\r\n"
+                        "Connection: close\r\n"
+                        "\r\n"
+                    )
+                    client.sendall(response.encode() + jpeg_data)
                 else:
-                    response = "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n"
+                    response = "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n"
                     client.sendall(response.encode())
-                    break
+            else:
+                response = "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n"
+                client.sendall(response.encode())
         except socket.timeout:
             pass
         except Exception:
@@ -938,36 +1010,28 @@ class CameraView(Image):
             return f"远程: {self._remote_target.get('name', 'unknown')}"
         return "本地摄像头"
 
-    # ==================== PC端自动发现远程摄像头 ====================
+    # ==================== PC 端远程摄像头视频流服务 ====================
 
-    def _auto_register_and_discover(self):
-        """PC端自动注册设备并开始定期发现远程摄像头。"""
+    def _start_camera_stream_service(self):
+        """PC 端启动远程摄像头 MJPEG 视频流服务（自动扫描设备池 + 连接手机画面）。"""
         try:
-            self.register_with_esp32(name="PC")
-        except Exception:
-            pass
-        # 启动定期扫描，每5秒检查是否有新的远程摄像头可用
-        if self._auto_discover_event is None:
-            self._auto_discover_event = Clock.schedule_interval(self._auto_discover_remote, 5.0)
-            # 首次立即扫描
-            Clock.schedule_once(lambda dt: self._auto_discover_remote(0), 0.5)
+            from services.camera_stream import get_camera_stream_service
+            self._camera_stream_service = get_camera_stream_service()
+            self._camera_stream_service.start(self)
+        except Exception as e:
+            RuntimeStatusLogger.log_error(f"启动远程摄像头服务失败: {e}")
 
-    def _auto_discover_remote(self, dt):
-        """自动发现并连接远程摄像头（仅在使用本地源时才自动切换）。"""
-        if self._camera_source != "local":
-            return
-        try:
-            sources = self.get_available_sources()
-            for src in sources:
-                if src.get("is_self"):
-                    continue
-                if src.get("has_camera") and src.get("ip"):
-                    RuntimeStatusLogger.log_info(f"自动发现远程摄像头: {src.get('name')} ({src.get('ip')})")
-                    self._switch_to_remote_p2p(src)
-                    # 连接成功后停止自动发现
-                    if self._auto_discover_event:
-                        self._auto_discover_event.cancel()
-                        self._auto_discover_event = None
-                    return
-        except Exception:
-            pass
+    # ==================== 手机端自动注册 + 启用共享 ====================
+
+    def _auto_enable_sharing_and_register(self):
+        """手机端/桌面模拟手机：启用 MJPEG 共享并向 ESP32 注册设备。"""
+        self.enable_stream_sharing(True)
+        # 延迟注册，确保 ESP32 连接就绪
+        def _try_register(dt):
+            try:
+                if self.register_with_esp32():
+                    return False  # 成功，停止重试
+            except Exception:
+                pass
+            return True  # 继续重试
+        Clock.schedule_interval(_try_register, 3.0)
