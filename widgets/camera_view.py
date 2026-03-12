@@ -347,10 +347,10 @@ class CameraView(Image):
             try:
                 share_frame = self._apply_fix_mode_to_desktop_frame(frame.copy())
                 h, w = share_frame.shape[:2]
-                if w > 480:
-                    scale = 480 / w
-                    share_frame = self.cv2.resize(share_frame, (480, int(h * scale)))
-                _, buffer = self.cv2.imencode('.jpg', share_frame, [self.cv2.IMWRITE_JPEG_QUALITY, 60])
+                if w > 640:
+                    scale = 640 / w
+                    share_frame = self.cv2.resize(share_frame, (640, int(h * scale)))
+                _, buffer = self.cv2.imencode('.jpg', share_frame, [self.cv2.IMWRITE_JPEG_QUALITY, 75])
                 with self._frame_lock:
                     self._latest_jpeg_frame = buffer.tobytes()
             except Exception:
@@ -833,10 +833,10 @@ class CameraView(Image):
                 bgr = cv2.flip(bgr, 1)
             # 缩小分辨率
             oh, ow = bgr.shape[:2]
-            if ow > 480:
-                scale = 480 / ow
-                bgr = cv2.resize(bgr, (480, int(oh * scale)))
-            _, buffer = cv2.imencode('.jpg', bgr, [cv2.IMWRITE_JPEG_QUALITY, 60])
+            if ow > 640:
+                scale = 640 / ow
+                bgr = cv2.resize(bgr, (640, int(oh * scale)))
+            _, buffer = cv2.imencode('.jpg', bgr, [cv2.IMWRITE_JPEG_QUALITY, 75])
             with self._frame_lock:
                 self._latest_jpeg_frame = buffer.tobytes()
         except Exception:

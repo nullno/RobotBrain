@@ -24,6 +24,10 @@ import math
 logger = logging.getLogger(__name__)
 
 
+# 方向键集合（按住走、松手停）
+_NAV_KEYS = frozenset(("w", "a", "s", "d", "up", "down", "left", "right"))
+
+
 # ==================== HUD 长条按钮 ====================
 class HudButton(Button):
     """赛博朋克风格的细长条按钮"""
@@ -251,6 +255,7 @@ class CockpitPanel(FloatLayout):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._keyboard_bound = False
+        self._kb = None
         self.key_actions = {}
         self.buttons = {}
 
@@ -292,33 +297,33 @@ class CockpitPanel(FloatLayout):
         danger_color = (1, 0.25, 0.2, 0.7)
 
         row1_actions = [
-            ("前进", "walk", "W", nav_color),
-            ("后退", "backward", "S", nav_color),
-            ("左转", "turn_left", "A", nav_color),
-            ("右转", "turn_right", "D", nav_color),
+            ("前进", "walk", "W/↑", nav_color),
+            ("后退", "backward", "S/↓", nav_color),
+            ("左转", "turn_left", "A/←", nav_color),
+            ("右转", "turn_right", "D/→", nav_color),
             ("站立", "stand", "Space", core_color),
-            ("蹲下", "crouch", "Z", (0, 0.85, 1, 0.7)),
-            ("小跑", "trot", "Y", (0, 0.85, 1, 0.7)),
-            ("爬行", "crawl", "F", (0, 0.85, 1, 0.7)),
-            ("上楼", "climb_stairs", "T", (0, 0.85, 1, 0.7)),
-            ("坐下", "sit", "G", (0, 0.85, 1, 0.7)),
-            ("弯腰", "bend_over", "N", (0, 0.85, 1, 0.7)),
+            ("蹲下", "crouch", "sh+Z", (0, 0.85, 1, 0.7)),
+            ("小跑", "trot", "sh+Y", (0, 0.85, 1, 0.7)),
+            ("爬行", "crawl", "sh+F", (0, 0.85, 1, 0.7)),
+            ("上楼", "climb_stairs", "sh+T", (0, 0.85, 1, 0.7)),
+            ("坐下", "sit", "sh+G", (0, 0.85, 1, 0.7)),
+            ("弯腰", "bend_over", "sh+N", (0, 0.85, 1, 0.7)),
             ("卸力", "emergency", "E", danger_color),
         ]
 
         row2_actions = [
-            ("晃动", "swagger", "X", (0.6, 0.3, 0.9, 0.7)),
-            ("叉腰", "akimbo", "C", (0.6, 0.3, 0.9, 0.7)),
-            ("点头", "nod", "V", (0.6, 0.3, 0.9, 0.7)),
-            ("摇头", "shake_head", "B", (0.6, 0.3, 0.9, 0.7)),
-            ("扎马步", "horse_stance", "M", (0.6, 0.3, 0.9, 0.7)),
-            ("独立", "golden_rooster", "J", (0.6, 0.3, 0.9, 0.7)),
-            ("手倒立", "handstand", "K", (0.6, 0.3, 0.9, 0.7)),
-            ("单手", "one_hand_handstand", "L", (0.6, 0.3, 0.9, 0.7)),
-            ("思考", "think", "U", (0.6, 0.3, 0.9, 0.7)),
-            ("比心", "make_heart", "I", (0.6, 0.3, 0.9, 0.7)),
-            ("挥手", "wave", "O", (0.6, 0.3, 0.9, 0.7)),
-            ("坐凳", "sit_chair", "H", (0.6, 0.3, 0.9, 0.7)),
+            ("晃动", "swagger", "sh+X", (0.6, 0.3, 0.9, 0.7)),
+            ("叉腰", "akimbo", "sh+C", (0.6, 0.3, 0.9, 0.7)),
+            ("点头", "nod", "sh+V", (0.6, 0.3, 0.9, 0.7)),
+            ("摇头", "shake_head", "sh+B", (0.6, 0.3, 0.9, 0.7)),
+            ("扎马步", "horse_stance", "sh+M", (0.6, 0.3, 0.9, 0.7)),
+            ("独立", "golden_rooster", "sh+J", (0.6, 0.3, 0.9, 0.7)),
+            ("手倒立", "handstand", "sh+K", (0.6, 0.3, 0.9, 0.7)),
+            ("单手", "one_hand_handstand", "sh+L", (0.6, 0.3, 0.9, 0.7)),
+            ("思考", "think", "sh+U", (0.6, 0.3, 0.9, 0.7)),
+            ("比心", "make_heart", "sh+I", (0.6, 0.3, 0.9, 0.7)),
+            ("挥手", "wave", "sh+O", (0.6, 0.3, 0.9, 0.7)),
+            ("坐凳", "sit_chair", "sh+H", (0.6, 0.3, 0.9, 0.7)),
         ]
 
         for text, action, key, color in row1_actions:
@@ -334,7 +339,7 @@ class CockpitPanel(FloatLayout):
             self.buttons[action] = btn
 
         # 加一个"拒绝"（第13个，放row1的空位或单独处理）
-        refuse_btn = HudButton(text="拒绝", action_name="refuse", key_hint="P",
+        refuse_btn = HudButton(text="拒绝", action_name="refuse", key_hint="sh+P",
                                on_action=self._send_action,
                                accent_color=(0.6, 0.3, 0.9, 0.7))
         self.buttons["refuse"] = refuse_btn
@@ -380,13 +385,26 @@ class CockpitPanel(FloatLayout):
 
     def bind_keyboard(self):
         if not self._keyboard_bound:
-            Window.bind(on_key_down=self._on_key_down, on_key_up=self._on_key_up)
-            self._keyboard_bound = True
+            self._kb = Window.request_keyboard(self._kb_closed, self, 'text')
+            if self._kb:
+                self._kb.bind(on_key_down=self._on_kb_down,
+                              on_key_up=self._on_kb_up)
+                self._keyboard_bound = True
 
     def unbind_keyboard(self):
-        if self._keyboard_bound:
-            Window.unbind(on_key_down=self._on_key_down, on_key_up=self._on_key_up)
-            self._keyboard_bound = False
+        if self._keyboard_bound and self._kb:
+            self._kb.unbind(on_key_down=self._on_kb_down,
+                            on_key_up=self._on_kb_up)
+            self._kb.release()
+        self._kb = None
+        self._keyboard_bound = False
+
+    def _kb_closed(self):
+        """键盘被其他控件抢占时自动重新请求"""
+        self._keyboard_bound = False
+        self._kb = None
+        if not self.disabled:
+            Clock.schedule_once(lambda dt: self.bind_keyboard(), 0.15)
 
     def _simulate_btn_down(self, action):
         btn = self.buttons.get(action)
@@ -395,32 +413,66 @@ class CockpitPanel(FloatLayout):
             if hasattr(btn, '_on_state'):
                 btn._on_state()
 
-    def _simulate_btn_up(self, action):
+    def _simulate_btn_up_visual(self, action):
+        """恢复按钮视觉状态"""
         btn = self.buttons.get(action)
         if btn and btn.state == "down":
             btn.state = "normal"
             if hasattr(btn, '_on_state'):
                 btn._on_state()
-            btn.dispatch("on_release")
 
-    def _on_key_down(self, window, key, scancode, codepoint, modifiers):
-        key_name = key_name_from_code(key, scancode)
-        if key_name in self.key_actions:
-            unfocus_text_inputs()
-            action = self.key_actions[key_name]
-            self._simulate_btn_down(action)
+    def _on_kb_down(self, keyboard, keycode, text, modifiers):
+        """键盘按下：导航键直接触发，动作键需 Shift"""
+        _, key_name = keycode
+        if not key_name:
+            return False
+        key_name = key_name.lower()
+        if key_name == ' ':
+            key_name = 'spacebar'
+
+        # codepoint 兜底（适配不同平台 / 输入法）
+        if key_name not in self.key_actions and text:
+            t = text.lower()
+            if t == ' ':
+                t = 'spacebar'
+            if t in self.key_actions:
+                key_name = t
+
+        if key_name not in self.key_actions:
+            return False
+
+        action = self.key_actions[key_name]
+
+        # 动作键需要 Shift
+        if key_name not in _NAV_KEYS and key_name not in ('spacebar', 'e'):
+            if 'shift' not in modifiers:
+                return False
+
+        unfocus_text_inputs()
+        btn = self.buttons.get(action)
+        if btn and btn.state == "down":
             return True
-        return False
+        self._simulate_btn_down(action)
+        self._send_action(action)
+        return True
 
-    def _on_key_up(self, window, key, scancode):
-        key_name = key_name_from_code(key, scancode)
-        handled = False
-        if key_name in self.key_actions:
-            action = self.key_actions[key_name]
-            self._simulate_btn_up(action)
-            handled = True
-        # 方向键松开发 stand
-        if key_name in ("w", "a", "s", "d", "up", "down", "left", "right"):
+    def _on_kb_up(self, keyboard, keycode):
+        """键盘松开：恢复按钮视觉，方向键松开发 stand"""
+        _, key_name = keycode
+        if not key_name:
+            return False
+        key_name = key_name.lower()
+        if key_name == ' ':
+            key_name = 'spacebar'
+
+        if key_name not in self.key_actions:
+            return False
+
+        action = self.key_actions[key_name]
+        self._simulate_btn_up_visual(action)
+
+        # 方向键松开 → stand
+        if key_name in _NAV_KEYS:
             opp = {"w": "s", "s": "w", "up": "down", "down": "up",
                     "a": "d", "d": "a", "left": "right", "right": "left"}
             req_stop = True
@@ -433,4 +485,4 @@ class CockpitPanel(FloatLayout):
                         req_stop = False
             if req_stop:
                 self._send_action("stand")
-        return handled
+        return True
