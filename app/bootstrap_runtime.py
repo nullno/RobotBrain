@@ -259,3 +259,16 @@ def start_permission_and_otg_watchers(app):
         RuntimeStatusLogger.log_info("已弃用本地 OTG/串口监测")
     except Exception:
         pass
+
+
+def init_voice_service_phone(app):
+    """手机端自动启动语音服务（监听模式），等待 PC 连接。"""
+    if platform != "android":
+        return
+    try:
+        from services.voice_chat import get_voice_service
+        svc = get_voice_service()
+        svc.start()
+        RuntimeStatusLogger.log_info("手机端语音服务已就绪")
+    except Exception as e:
+        RuntimeStatusLogger.log_info(f"手机端语音服务启动跳过: {e}")

@@ -144,6 +144,7 @@ class RobotDashboardApp(App):
                     import app.bootstrap_runtime as bootstrap_runtime
                     bootstrap_runtime.init_runtime_status_panel(self)
                     bootstrap_runtime.init_ai_core(self)
+                    bootstrap_runtime.init_voice_service_phone(self)
                 
                 main.opacity = 1
                 main.disabled = False

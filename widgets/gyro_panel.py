@@ -168,7 +168,7 @@ class GyroPanel(ButtonBehavior, Widget):
             Color(CYAN[0], CYAN[1], CYAN[2], 0.8)
             lbl_text = "P{} R{}".format(int(self.pitch), int(self.roll))
             tex = self._get_text_tex(lbl_text)
-            GRect(texture=tex, pos=(cx - tex.size[0] / 2, self.y + dp(2)), size=tex.size)
+            GRect(texture=tex, pos=(cx - tex.size[0] / 2, self.y + dp(-2)), size=tex.size)
 
     def _get_text_tex(self, text):
         if text in self._text_cache:

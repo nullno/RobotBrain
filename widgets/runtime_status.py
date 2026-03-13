@@ -61,6 +61,9 @@ class RuntimeStatusPanel(BoxLayout):
         self._lock = threading.Lock()
         self._dirty = True
         self._last_render_text = None
+        # 用户交互标记：选中文本时暂停自动滚动
+        self._user_interacting = False
+        self._interaction_timer = None
         
         # 绘制背景
         with self.canvas.before:
@@ -80,42 +83,53 @@ class RuntimeStatusPanel(BoxLayout):
         
         self.bind(pos=_update_bg, size=_update_bg)
         
-        # 标题
-        # title_label = Label(
-        #     text='[b]运行状态[/b]',
-        #     markup=True,
-        #     size_hint_y=None,
-        #     height=dp(24),
-        #     color=(0.0, 0.9, 1.0, 1.0),
-        #     font_size='11sp'
-        # )
-        # self.add_widget(title_label)
-        
         # 日志文本区域（自由选择复制 + 支持滚动）
+        _is_android = _kivy_platform == 'android'
+
         emoji_font = _pick_emoji_font()
         font_kw = {}
         if emoji_font:
             font_kw['font_name'] = emoji_font
-        _is_android = _kivy_platform == 'android'
+
         self.log_label = TextInput(
             text='[等待信息...]',
             readonly=True,
-            size_hint=(1, 1),
             foreground_color=(0.85, 0.9, 0.98, 1.0),
             background_color=(0, 0, 0, 0),
             font_size='10sp',
-            use_bubble=not _is_android,
-            use_handles=not _is_android,
-            allow_copy=not _is_android,
+            use_bubble=True,
+            use_handles=_is_android,
+            allow_copy=True,
             padding=(dp(4), dp(2)),
             background_normal='',
             background_active='',
             **font_kw,
         )
-        self.add_widget(self.log_label)
+
+        # 手机端：使用 ScrollView 包裹实现触摸滚动
+        if _is_android:
+            self.log_label.size_hint_y = None
+            self.log_label.bind(minimum_height=self.log_label.setter('height'))
+            
+            self._scroll_view = ScrollView(
+                size_hint=(1, 1),
+                do_scroll_x=False,
+                do_scroll_y=True,
+                bar_width=dp(2),
+                bar_color=(0, 0.9, 1, 0.3),
+                bar_inactive_color=(0, 0.9, 1, 0.1),
+                scroll_type=['bars', 'content'],
+            )
+            self._scroll_view.add_widget(self.log_label)
+            self.add_widget(self._scroll_view)
+        else:
+            # PC端：完全不使用 ScrollView，TextInput直接原生完全支持滚轮和完美的随动选中高亮
+            self.log_label.size_hint_y = 1
+            self._scroll_view = None
+            self.add_widget(self.log_label)
         
         # 启动日志刷新定时器（仅在内容变化时刷新）
-        refresh_interval = 0.45 if _kivy_platform == 'android' else 0.25
+        refresh_interval = 0.45 if _is_android else 0.25
         Clock.schedule_interval(self._refresh_display, refresh_interval)
 
     def on_touch_down(self, touch):
@@ -125,28 +139,76 @@ class RuntimeStatusPanel(BoxLayout):
                 return True
         except Exception:
             pass
-        # 点击日志区域外时清除选中状态
+        # 点击日志区域外时清除选中状态和焦点
         try:
-            if not self.log_label.collide_point(*touch.pos):
+            if not self.collide_point(*touch.pos):
                 self.log_label.cancel_selection()
+                self.log_label.focus = False
+                self._user_interacting = False
+        except Exception:
+            pass
+        # 点击在日志区域内时标记用户交互（暂停自动滚动）
+        try:
+            if self.log_label.collide_point(*touch.pos):
+                self._user_interacting = True
+                # 暂停自动滚动和UI文本更新，延长交互时间以方便复制
+                if self._interaction_timer:
+                    self._interaction_timer.cancel()
+                self._interaction_timer = Clock.schedule_once(
+                    self._reset_interaction, 5.0
+                )
         except Exception:
             pass
         return super().on_touch_down(touch)
+
+    def on_touch_move(self, touch):
+        # 拖拽选中文本时持续续期
+        try:
+            if self.log_label.collide_point(*touch.pos):
+                self._user_interacting = True
+                if self._interaction_timer:
+                    self._interaction_timer.cancel()
+                self._interaction_timer = Clock.schedule_once(
+                    self._reset_interaction, 5.0
+                )
+        except Exception:
+            pass
+        return super().on_touch_move(touch)
+
+    def _reset_interaction(self, dt=None):
+        """恢复自动滚动"""
+        self._user_interacting = False
+        # 如果没有选中文本，取消焦点
+        try:
+            sel_from = getattr(self.log_label, 'selection_from', None)
+            sel_to = getattr(self.log_label, 'selection_to', None)
+            if sel_from is not None and sel_to is not None and sel_from == sel_to:
+                self.log_label.focus = False
+        except Exception:
+            pass
 
     def toggle_visible(self):
         self._expanded = not self._expanded
         if self._expanded:
             self.width = self._expanded_width
             self.height = self._expanded_height
-            self.log_label.opacity = 1.0
-            self.log_label.disabled = False
+            if getattr(self, '_scroll_view', None):
+                self._scroll_view.opacity = 1.0
+                self._scroll_view.disabled = False
+            else:
+                self.log_label.opacity = 1.0
+                self.log_label.disabled = False
             self._dirty = True
             RuntimeStatusLogger.log_info('日志面板已展开（双击可隐藏）')
         else:
             self.width = self._collapsed_width
             self.height = self._collapsed_height
-            self.log_label.opacity = 0.0
-            self.log_label.disabled = True
+            if getattr(self, '_scroll_view', None):
+                self._scroll_view.opacity = 0.0
+                self._scroll_view.disabled = True
+            else:
+                self.log_label.opacity = 0.0
+                self.log_label.disabled = True
     
     def add_log(self, message: str, category: str = 'info'):
         """
@@ -198,10 +260,23 @@ class RuntimeStatusPanel(BoxLayout):
                 all_logs = '[等待信息...]'
 
             if all_logs != self._last_render_text:
+                if self._user_interacting:
+                    return  # 暂停UI文本更新，保留当前的选中高亮态
                 self.log_label.text = all_logs
-                self.log_label.cursor = (0, len(all_logs.split('\n')))
                 self._last_render_text = all_logs
+                # 用户未交互时自动滚动到底部
+                Clock.schedule_once(self._scroll_to_bottom, 0.05)
             self._dirty = False
+
+    def _scroll_to_bottom(self, dt=None):
+        """滚动到底部"""
+        try:
+            if getattr(self, '_scroll_view', None):
+                self._scroll_view.scroll_y = 0
+            else:
+                self.log_label.cursor = (0, max(0, len(self.log_label._lines) - 1))
+        except Exception:
+            pass
 
 
 class RuntimeStatusLogger:

@@ -305,9 +305,9 @@ class WiFiServoController:
         resp = self._send_and_recv(payload, timeout)
         if resp and resp.get("type") == "device_register_resp":
             self._device_id = resp.get("client_id")
-            logger.info("device_register → id=%s, devices=%d", self._device_id, len(resp.get("devices", [])))
+            logger.debug("device_register → id=%s, devices=%d", self._device_id, len(resp.get("devices", [])))
             return resp
-        logger.warning("device_register failed")
+        logger.debug("device_register failed")
         return None
 
     def device_list(self, timeout: float = 1.0) -> List[Dict[str, Any]]:
@@ -409,7 +409,7 @@ class WiFiServoController:
                 self._sock.sendto(data, (self._host, self._port))
                 self._connected = True
                 cmd_type = payload.get("type", "?")
-                if cmd_type not in ("status", "servo_targets"):
+                if cmd_type not in ("status", "servo_targets", "device_register", "device_list"):
                     RuntimeStatusLogger.log(f"UDP 发送 [{cmd_type}]: {data.decode('utf-8')}", "servo")
                 if UDP_DEBUG:
                     logger.debug("UDP → %s:%d  %s", self._host, self._port, payload.get("type", "?"))
@@ -443,7 +443,7 @@ class WiFiServoController:
                 cmd_type = payload.get("type", "?")
                 expected_resp_type = cmd_type + "_resp" if cmd_type != "status" else "telemetry"
                 
-                if cmd_type != "status":
+                if cmd_type not in ("status", "device_register", "device_list"):
                     RuntimeStatusLogger.log(f"UDP 发送 [{cmd_type}]: {data.decode('utf-8')}", "servo")
                 if UDP_DEBUG:
                     logger.debug("UDP → %s:%d  %s", self._host, self._port, payload.get("type", "?"))
@@ -463,7 +463,7 @@ class WiFiServoController:
 
                     # 识别到所期望的反馈类型，或者是通用错误信息等即返回
                     if obj.get("type") in (expected_resp_type, "error"):
-                        if cmd_type != "status":
+                        if cmd_type not in ("status", "device_register", "device_list"):
                             RuntimeStatusLogger.log(f"UDP 接收 [{cmd_type}]: {resp_data.decode('utf-8')}", "info")
                         if UDP_DEBUG:
                             logger.debug("UDP ← %s", obj.get("type", "?"))

@@ -4,7 +4,9 @@ from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.widget import Widget
 from kivy.uix.button import Button
+from kivy.uix.image import Image
 from kivy.uix.label import Label
+from kivy.uix.behaviors import ButtonBehavior
 from kivy.lang import Builder
 from kivy.clock import Clock
 from kivy.graphics import Color, Line, Rectangle, RoundedRectangle, Canvas, Ellipse
@@ -20,6 +22,8 @@ from widgets.robot_actions import (
 import logging
 import random
 import math
+
+from widgets.runtime_status import RuntimeStatusLogger
 
 logger = logging.getLogger(__name__)
 
@@ -229,6 +233,33 @@ class HudOverlay(Widget):
                 Line(points=[x + w - dp(8), ty, x + w - dp(1), ty], width=0.6)
 
 
+# ==================== 语音按钮 ====================
+class VoiceButton(ButtonBehavior, Image):
+    """语音通话切换按钮（图标按钮）"""
+    def __init__(self, on_toggle=None, **kwargs):
+        kwargs.setdefault("size_hint", (None, None))
+        kwargs.setdefault("size", (dp(44), dp(44)))
+        kwargs.setdefault("allow_stretch", True)
+        kwargs.setdefault("keep_ratio", True)
+        super().__init__(**kwargs)
+        self._voice_active = False
+        self._on_toggle = on_toggle
+        self.source = "assets/icon_voice_off.png"
+        self.bind(on_release=self._on_press)
+
+    def _on_press(self, *_):
+        self._voice_active = not self._voice_active
+        self.source = ("assets/icon_voice_on.png" if self._voice_active
+                       else "assets/icon_voice_off.png")
+        if self._on_toggle:
+            self._on_toggle(self._voice_active)
+
+    def set_state(self, active: bool):
+        self._voice_active = active
+        self.source = ("assets/icon_voice_on.png" if active
+                       else "assets/icon_voice_off.png")
+
+
 # ==================== PC 驾驶舱主面板 ====================
 class CockpitPanel(FloatLayout):
     def on_touch_down(self, touch):
@@ -278,7 +309,10 @@ class CockpitPanel(FloatLayout):
         Clock.schedule_once(lambda dt: self._on_disabled_change(self, self.disabled), 0)
 
     def _build_hud_buttons(self):
-        """构建底部两排 HUD 操作按钮"""
+        """构建底部两排 HUD 操作按钮 + 语音按钮"""
+        # --- 语音按钮实例（稍后放置到操作面板上方） ---
+        self._voice_btn = VoiceButton(on_toggle=self._on_voice_toggle)
+
         bottom = AnchorLayout(anchor_x='center', anchor_y='bottom',
                               size_hint=(1, None), height=dp(80),
                               pos_hint={"x": 0, "y": 0})
@@ -366,6 +400,15 @@ class CockpitPanel(FloatLayout):
         bottom.add_widget(container)
         self.add_widget(bottom)
 
+        # 语音按钮：固定在底部操作面板正上方，使用 Widget 直接定位
+        self.add_widget(self._voice_btn)
+        def _sync_voice_pos(*_):
+            self._voice_btn.center_x = bottom.center_x
+            self._voice_btn.y = bottom.y + bottom.height + dp(6)
+        bottom.bind(pos=_sync_voice_pos, size=_sync_voice_pos)
+        self.bind(size=_sync_voice_pos)
+        Clock.schedule_once(lambda dt: _sync_voice_pos(), 0)
+
         # === 键盘映射 (来自共享 robot_actions) ===
         self.key_actions = dict(KEY_MAP)
 
@@ -375,6 +418,29 @@ class CockpitPanel(FloatLayout):
             emergency_action(self)
             return
         _send_motion(action_name)
+
+    def _on_voice_toggle(self, active):
+        """语音按钮切换回调（异步启动，防止阻塞主线程）"""
+        import threading
+        def _do():
+            try:
+                from services.voice_chat import get_voice_service
+                svc = get_voice_service()
+                if active:
+                    svc.start(on_state_change=self._on_voice_state_change)
+                else:
+                    svc.stop()
+            except Exception as e:
+                RuntimeStatusLogger.log_error(f"语音服务切换失败: {e}")
+                Clock.schedule_once(lambda dt: self._voice_btn.set_state(False), 0)
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _on_voice_state_change(self, active):
+        """语音服务状态变更回调（确保 UI 同步）"""
+        try:
+            self._voice_btn.set_state(active)
+        except Exception:
+            pass
 
     # ==================== 键盘 ====================
     def _on_disabled_change(self, instance, value):
