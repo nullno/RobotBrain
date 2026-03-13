@@ -21,8 +21,7 @@ class CameraView(Image):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.allow_stretch = True
-        self.keep_ratio = True
+        self.fit_mode = "contain"
         
         # 核心修复：Image为空texture时会默认渲染一个白色方块
         # 通过修改颜色滤镜为黑色，可防止无摄像头画面时显示白屏
@@ -1064,6 +1063,6 @@ class CameraView(Image):
                 pass
         if self._esp32_heartbeat_clock:
             self._esp32_heartbeat_clock.cancel()
-        self._esp32_heartbeat_clock = Clock.schedule_interval(_heartbeat, 10.0)
+        self._esp32_heartbeat_clock = Clock.schedule_interval(_heartbeat, 15.0)
         # 首次立即尝试
         Clock.schedule_once(lambda dt: _heartbeat(0), 1.0)

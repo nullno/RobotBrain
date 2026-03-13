@@ -79,11 +79,25 @@ class WiFiServoController:
         self._sock: Optional[socket.socket] = None
         self._lock = threading.Lock()
         self._connected = False
+        self._timeout_count = 0
         # 最新 telemetry 缓存
         self._last_status: Dict[str, Any] = {}
         self._last_status_ts: float = 0.0
         if host:
             self._ensure_socket()
+            
+        # 启动轻量级后台连接守护与 IMU 刷新
+        self._stop_bg = False
+        self._bg_thread = threading.Thread(target=self._bg_ping_loop, daemon=True)
+        self._bg_thread.start()
+
+    def _bg_ping_loop(self):
+        """轻量级后台守护：维持 is_connected 状态和抓取最新 telemetry。"""
+        while not self._stop_bg:
+            time.sleep(3.0)
+            if self._host:
+                # 只用极小 timeout，保证哪怕离线了也不会长久阻塞主控指令
+                self.request_status(timeout=0.3)
 
     # -------------------- 连接管理 --------------------
 
@@ -110,6 +124,7 @@ class WiFiServoController:
         return self._connected and bool(self._host)
 
     def close(self):
+        self._stop_bg = True
         with self._lock:
             self._connected = False
             try:
@@ -305,9 +320,8 @@ class WiFiServoController:
         resp = self._send_and_recv(payload, timeout)
         if resp and resp.get("type") == "device_register_resp":
             self._device_id = resp.get("client_id")
-            logger.debug("device_register → id=%s, devices=%d", self._device_id, len(resp.get("devices", [])))
+            # logger.debug("device_register → id=%s, devices=%d", self._device_id, len(resp.get("devices", [])))
             return resp
-        logger.debug("device_register failed")
         return None
 
     def device_list(self, timeout: float = 1.0) -> List[Dict[str, Any]]:
@@ -468,10 +482,18 @@ class WiFiServoController:
                         if UDP_DEBUG:
                             logger.debug("UDP ← %s", obj.get("type", "?"))
                         self._connected = True
+                        self._timeout_count = 0
                         return obj
                         
+                # 循环结束未收到期望包，算作超时
+                self._timeout_count += 1
+                if self._timeout_count >= 3:
+                    self._connected = False
                 return None
             except socket.timeout:
+                self._timeout_count += 1
+                if self._timeout_count >= 3:
+                    self._connected = False
                 cmd_type = payload.get("type", "?")
                 if cmd_type != "status":
                     RuntimeStatusLogger.log(f"UDP 接收超时 [{cmd_type}]", "error")
@@ -537,8 +559,9 @@ def udp_discover(timeout: float = 2.0, port: int = DEFAULT_UDP_PORT) -> List[Tup
                         obj = json.loads(data.decode("utf-8"))
                     except Exception:
                         obj = {"raw": data.hex()}
+                    if ip not in results:
+                        logger.info("发现 ESP32: %s", ip)
                     results[ip] = obj
-                    logger.info("发现 ESP32: %s", ip)
                 except Exception:
                     break
         sock.close()

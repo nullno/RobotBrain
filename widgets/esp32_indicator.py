@@ -19,8 +19,7 @@ class Esp32Indicator(ButtonBehavior, BoxLayout):
             source="assets/icon_offline.png",
             size_hint=(None, None),
             size=(dp(18), dp(18)),
-            allow_stretch=True,
-            keep_ratio=True,
+            fit_mode="contain",
         )
 
         self.add_widget(self._icon)

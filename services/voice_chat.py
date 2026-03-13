@@ -36,10 +36,11 @@ VOICE_PORT = 5020           # 音频 TCP 端口
 SAMPLE_RATE = 16000         # 采样率
 CHANNELS = 1                # 单声道
 SAMPLE_WIDTH = 2            # 16-bit
-CHUNK_FRAMES = 1024         # 每次采集帧数
-SCAN_INTERVAL = 3.0         # 设备扫描间隔
+CHUNK_FRAMES = 320          # 每次采集帧数（320帧 = 20ms @16kHz，低延迟）
+SCAN_INTERVAL = 15.0        # 设备扫描/心跳间隔（放宽以减少 UDP 轮询）
 RECONNECT_DELAY = 2.0       # 重连延迟
 CONNECT_TIMEOUT = 3.0       # TCP 连接超时
+MAX_PLAY_BUFFER = 15        # 播放缓冲上限（超过则丢弃旧帧，防止延迟累积）
 # Android AudioRecord 每次读取的字节数 = CHUNK_FRAMES * CHANNELS * SAMPLE_WIDTH
 ANDROID_CHUNK_BYTES = CHUNK_FRAMES * CHANNELS * SAMPLE_WIDTH
 
@@ -295,7 +296,7 @@ class VoiceChatService:
 
         # 播放
         self._playback_thread: Optional[threading.Thread] = None
-        self._play_buffer: deque = deque(maxlen=200)
+        self._play_buffer: deque = deque(maxlen=MAX_PLAY_BUFFER)
         self._play_lock = threading.Lock()
 
         # TCP 发送（本端录音推送给远端）
@@ -333,12 +334,20 @@ class VoiceChatService:
         if platform != "android":
             try:
                 ctrl = get_controller()
-                devices = ctrl.device_list(timeout=0.6) if (ctrl and ctrl.is_connected) else []
-                my_id = getattr(ctrl, "_device_id", None)
-                has_phone = any(
-                    str(dev.get("ip")) and not dev.get("is_self") and dev.get("id") != my_id
-                    for dev in devices
-                )
+                has_phone = False
+                if ctrl and ctrl.is_connected:
+                    # 尝试最多 2 次获取设备列表（UDP 偶发超时）
+                    for attempt in range(2):
+                        devices = ctrl.device_list(timeout=1.0)
+                        my_id = getattr(ctrl, "_device_id", None)
+                        has_phone = any(
+                            dev.get("ip") and not dev.get("is_self") and dev.get("id") != my_id
+                            for dev in devices
+                        )
+                        if has_phone:
+                            break
+                        if attempt == 0:
+                            time.sleep(0.3)
                 if not has_phone:
                     def _show_tip(dt):
                         try:
@@ -482,7 +491,7 @@ class VoiceChatService:
                     if self._stop_event.is_set():
                         break
             else:
-                time.sleep(0.02)
+                time.sleep(0.005)
 
     # ──────────────── TCP 音频发送（服务端） ────────────────
 
@@ -491,6 +500,7 @@ class VoiceChatService:
         try:
             self._send_server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self._send_server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self._send_server_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             self._send_server_sock.settimeout(1.0)
             self._send_server_sock.bind(("0.0.0.0", VOICE_PORT))
             self._send_server_sock.listen(1)
@@ -507,6 +517,7 @@ class VoiceChatService:
             try:
                 client, addr = self._send_server_sock.accept()
                 logger.info("语音发送: 远端已连接 %s", addr)
+                client.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 with self._send_lock:
                     if self._send_client:
                         try:
@@ -561,6 +572,7 @@ class VoiceChatService:
             sock = None
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 sock.settimeout(CONNECT_TIMEOUT)
                 sock.connect((ip, port))
                 sock.settimeout(5.0)
@@ -583,6 +595,7 @@ class VoiceChatService:
                         audio_data = buf[4:4 + pkt_len]
                         buf = buf[4 + pkt_len:]
                         with self._play_lock:
+                            # 缓冲区满时自动丢弃最旧帧（deque maxlen 保证）
                             self._play_buffer.append(audio_data)
 
             except Exception as e:

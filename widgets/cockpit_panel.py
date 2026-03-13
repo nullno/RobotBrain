@@ -239,8 +239,7 @@ class VoiceButton(ButtonBehavior, Image):
     def __init__(self, on_toggle=None, **kwargs):
         kwargs.setdefault("size_hint", (None, None))
         kwargs.setdefault("size", (dp(44), dp(44)))
-        kwargs.setdefault("allow_stretch", True)
-        kwargs.setdefault("keep_ratio", True)
+        kwargs.setdefault("fit_mode", "contain")
         super().__init__(**kwargs)
         self._voice_active = False
         self._on_toggle = on_toggle

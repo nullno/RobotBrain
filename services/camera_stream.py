@@ -21,7 +21,7 @@ from widgets.runtime_status import RuntimeStatusLogger
 logger = logging.getLogger(__name__)
 
 STREAM_PORT = 5010
-SCAN_INTERVAL = 4.0       # 设备扫描间隔（秒）
+SCAN_INTERVAL = 15.0      # 设备扫描/心跳间隔（放宽以减少 UDP 轮询）
 RECONNECT_DELAY = 2.0     # 断线重连延迟（秒）
 CONNECT_TIMEOUT = 3.0     # TCP 连接超时（秒）
 READ_TIMEOUT = 5.0        # 流读取超时（秒）
