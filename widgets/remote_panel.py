@@ -15,6 +15,7 @@ from kivy.uix.label import Label
 from kivy.graphics import Color, RoundedRectangle, Line
 from kivy.metrics import dp
 from kivy.core.window import Window
+from kivy.clock import Clock
 from app.theme import FONT
 from widgets.robot_actions import (
     ActionTechButton, MOTION_ACTIONS,
@@ -24,6 +25,18 @@ from widgets.robot_actions import (
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _send_balance_toggle(enable):
+    """切换 ESP32 平衡算法开关。"""
+    try:
+        from services.wifi_servo import get_controller
+        ctrl = get_controller()
+        if ctrl and ctrl.is_connected:
+            ctrl._send({"type": "balance_enable", "enable": bool(enable)})
+            logger.info("Balance toggle: %s", "ON" if enable else "OFF")
+    except Exception as e:
+        logger.warning("Balance toggle error: %s", e)
 
 
 class GamepadLayout(BoxLayout):
@@ -141,6 +154,15 @@ class GamepadLayout(BoxLayout):
             self._keyboard = None
 
     def send_motion(self, action_name):
+        if action_name == "balance_toggle":
+            # 查找 RemotePanel 父级来调用 _toggle_balance
+            parent = self.parent
+            while parent:
+                if isinstance(parent, RemotePanel):
+                    parent._toggle_balance()
+                    return
+                parent = parent.parent
+            return
         _send_motion(action_name)
 
     def _simulate_button_down(self, btn_key):
@@ -177,9 +199,12 @@ class GamepadLayout(BoxLayout):
         handled = False
         if key_name in self.key_actions:
             action = self.key_actions[key_name]
-            self._simulate_button_up(action)
+            # balance_toggle 不需要 button up 处理（它是 toggle 开关）
+            if action != "balance_toggle":
+                self._simulate_button_up(action)
             handled = True
 
+        # 仅方向键释放时发送 stand（停止运动）
         if key_name in ("w", "a", "s", "d", "up", "down", "left", "right"):
             opp_map = {
                 "w": "s", "s": "w", "up": "down", "down": "up",
@@ -262,6 +287,17 @@ class RemotePanel(ModalView):
             border_color=(1, 0.2, 0.2, 0.5),
             func=lambda *a: emergency_action(self),
         )
+
+        # 平衡开关按钮
+        self._balance_enabled = True
+        self._balance_btn = ActionTechButton(
+            text="平衡\nON", action_name="balance_toggle", key_label="(Q)",
+            size=(dp(60), dp(60)),
+            fill_color=(0.1, 0.5, 0.2, 0.3),
+            border_color=(0.2, 0.8, 0.3, 0.5),
+            func=lambda *a: self._toggle_balance(),
+        )
+
         close_btn = ActionTechButton(
             text="关闭\n手柄", key_label="(Esc)",
             size=(dp(60), dp(60)),
@@ -271,6 +307,7 @@ class RemotePanel(ModalView):
         )
 
         mid_box.add_widget(emergency_btn)
+        mid_box.add_widget(self._balance_btn)
         mid_box.add_widget(close_btn)
         mid_container.add_widget(mid_box)
 
@@ -281,9 +318,26 @@ class RemotePanel(ModalView):
 
         self.gamepad.buttons["emergency"] = emergency_btn
         self.gamepad.key_actions['e'] = "emergency"
+        self.gamepad.key_actions['q'] = "balance_toggle"
+        self.gamepad.buttons["balance_toggle"] = self._balance_btn
 
         self.main_layout.add_widget(self.gamepad)
         self.add_widget(self.main_layout)
+
+    def _toggle_balance(self):
+        """切换平衡算法开关。"""
+        self._balance_enabled = not self._balance_enabled
+        _send_balance_toggle(self._balance_enabled)
+        if self._balance_enabled:
+            self._balance_btn.text = "平衡\nON\n(Q)"
+            self._balance_btn.fill_color = (0.1, 0.5, 0.2, 0.3)
+            self._balance_btn.border_color = (0.2, 0.8, 0.3, 0.5)
+        else:
+            self._balance_btn.text = "平衡\nOFF\n(Q)"
+            self._balance_btn.fill_color = (0.5, 0.3, 0.1, 0.3)
+            self._balance_btn.border_color = (0.8, 0.5, 0.2, 0.5)
+        if hasattr(self._balance_btn, '_on_state'):
+            self._balance_btn._on_state()
 
     def _update_bg(self, instance, value):
         self.bg_rect.pos = instance.pos

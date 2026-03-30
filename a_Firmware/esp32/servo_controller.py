@@ -103,36 +103,140 @@ class ServoController:
 
     # ─────────────── Ping / Scan ───────────────
 
-    def ping(self, servo_id):
+    def _clear_uart_buffer(self):
+        """清空 UART 接收缓冲区，防止残留数据干扰下一次通信。"""
+        if not self._uart:
+            return
+        try:
+            for _ in range(8):
+                leftover = self._uart.read(256)
+                if not leftover:
+                    break
+        except Exception:
+            pass
+
+    def ping(self, servo_id, retries=2, delay_ms=6):
+        """Ping 单个舵机，支持多次重试。
+
+        Args:
+            servo_id: 舵机 ID
+            retries: 失败后重试次数
+            delay_ms: 每次 ping 前的缓冲延迟(ms)
+
+        Returns:
+            0 = 在线, -1 = 离线
+        """
         if not self._manager:
             return -1
-        try:
-            result = self._manager.ping(int(servo_id))
-            if result == 0:
-                self._online.add(int(servo_id))
-            else:
-                self._online.discard(int(servo_id))
-            return result
-        except Exception as e:
-            log("ping id={} err: {}".format(servo_id, e))
-            return -1
+        sid = int(servo_id)
+        for attempt in range(1 + retries):
+            try:
+                if attempt > 0:
+                    time.sleep_ms(delay_ms * 2)
+                    self._clear_uart_buffer()
+                else:
+                    time.sleep_ms(delay_ms)
+                result = self._manager.ping(sid)
+                if result == 0:
+                    self._online.add(sid)
+                    return 0
+            except Exception as e:
+                if attempt == retries:
+                    log("ping id={} err: {}".format(sid, e))
+        self._online.discard(sid)
+        return -1
 
-    def scan(self, id_range=None):
+    def scan(self, id_range=None, max_passes=3):
+        """可靠扫描在线舵机（多轮扫描 + 自动重试未响应的 ID）。
+
+        25 个舵机串联在同一 UART 总线上，受信号质量、供电波动影响，
+        单次 ping 可能漏检。此方法执行多轮扫描：
+          - 第 1 轮：快速全量扫描
+          - 第 2~N 轮：仅对「未检测到」的 ID 进行重试
+                      每轮增加 ping 间隔和超时时间
+        最终仍离线的 ID 会额外用 read_position 验证一次。
+
+        Args:
+            id_range: 要扫描的 ID 范围（默认 1~servo_count）
+            max_passes: 最大扫描轮数（默认 3）
+
+        Returns:
+            sorted list of online servo IDs
+        """
         if not self._manager:
             return []
-        ids = id_range or range(1, self.servo_count + 1)
-        online = []
+
+        ids = list(id_range or range(1, self.servo_count + 1))
+        detected = set()
+        remaining = list(ids)
+
+        for pass_idx in range(max_passes):
+            if not remaining:
+                break
+
+            # 每轮递增延迟，让总线更稳定
+            base_delay = 5 + pass_idx * 5  # 5ms / 10ms / 15ms ...
+            newly_found = []
+
+            # 清空缓冲区（消除上一轮残留）
+            self._clear_uart_buffer()
+            time.sleep_ms(10)
+
+            for sid in remaining:
+                try:
+                    self._clear_uart_buffer()
+                    time.sleep_ms(base_delay)
+                    result = self._manager.ping(int(sid))
+                    if result == 0:
+                        detected.add(int(sid))
+                        self._online.add(int(sid))
+                        newly_found.append(int(sid))
+                except Exception:
+                    pass
+
+            # 移除已找到的，下一轮只重试失败的
+            remaining = [sid for sid in remaining if sid not in detected]
+
+            if pass_idx == 0:
+                log("scan pass 1: found {}, missing {}".format(
+                    len(detected), remaining))
+            elif newly_found:
+                log("scan pass {}: recovered {} → {}".format(
+                    pass_idx + 1, newly_found, len(detected)))
+
+        # ── 最终验证：对仍离线的 ID 尝试 read_position 确认 ──
+        if remaining:
+            self._clear_uart_buffer()
+            time.sleep_ms(20)
+            final_recovered = []
+            for sid in remaining:
+                try:
+                    self._clear_uart_buffer()
+                    time.sleep_ms(10)
+                    pos = self._manager.read_servo_position(int(sid))
+                    if pos is not None:
+                        detected.add(int(sid))
+                        self._online.add(int(sid))
+                        final_recovered.append(int(sid))
+                except Exception:
+                    pass
+            if final_recovered:
+                log("scan verify: recovered {} via read_position".format(
+                    final_recovered))
+
+        # 清理确认离线的 ID
         for sid in ids:
-            try:
-                if self._manager.ping(int(sid)) == 0:
-                    online.append(int(sid))
-                    self._online.add(int(sid))
-                else:
-                    self._online.discard(int(sid))
-            except Exception:
-                pass
-        log("scan: {} online".format(len(online)))
-        return online
+            if sid not in detected:
+                self._online.discard(sid)
+
+        result = sorted(list(detected))
+        missing = sorted([sid for sid in ids if sid not in detected])
+        if missing:
+            log("scan done: {}/{} online, MISSING={}".format(
+                len(result), len(ids), missing))
+        else:
+            log("scan done: {}/{} ALL online".format(len(result), len(ids)))
+        return result
 
     # ─────────────── 位置控制（直接下发）───────────────
 

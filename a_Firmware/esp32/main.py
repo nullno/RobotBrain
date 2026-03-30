@@ -19,6 +19,7 @@ from servo_controller import ServoController
 from imu_controller import IMUController
 from balance_controller import BalanceController
 from motion_sdk import MotionSDK
+from startup_standup import StartupStandup
 
 try:
     import network
@@ -86,6 +87,9 @@ except Exception as e:
 balance_ctrl = BalanceController()
 global motion_sdk
 motion_sdk = MotionSDK(servo, balance_ctrl)
+
+# 起立控制器
+startup = StartupStandup(servo, imu_ctrl, balance_ctrl, motion_sdk)
 
 # 全局状态
 state = {
@@ -386,7 +390,9 @@ async def handle_command(msg, addr, sock=None):
 
     elif mtype == "scan":
         online = servo.scan()
-        resp = {"type": "scan_resp", "online": online, "count": len(online)}
+        missing = sorted([i for i in range(1, SERVO_COUNT + 1) if i not in online])
+        resp = {"type": "scan_resp", "online": online, "count": len(online),
+                "missing": missing}
 
     elif mtype == "set_single":
         sid = int(msg.get("servo_id", 1))
@@ -645,22 +651,54 @@ async def imu_task():
 
 
 async def balance_task():
-    """平衡控制任务 —— 50ms 周期读取 IMU 姿态，计算补偿并驱动舵机。"""
+    """平衡控制任务 —— 50ms 周期读取 IMU 姿态，PID 计算补偿并驱动舵机。
+
+    安全策略：
+    - 倾倒检测：超过阈值自动触发渐进卸力
+    - 动作执行中暂停平衡输出（由 motion_sdk 自行管理 base_pose）
+    - 仅对有变化的关节发送指令（减少总线负载）
+    """
     await asyncio.sleep_ms(5000)  # 等待系统初始化
+    _fall_count = 0
     while True:
         if balance_ctrl.enabled:
             try:
+                # 动作执行中不叠加平衡（motion_sdk 内部已处理）
+                if motion_sdk and motion_sdk.is_running():
+                    await asyncio.sleep_ms(50)
+                    continue
+
                 p = imu_ctrl.pitch
                 r = imu_ctrl.roll
                 y = imu_ctrl.yaw
-                targets = balance_ctrl.compute(p, r, y)
+
+                # 倾倒检测：连续多帧超阈值才触发（防误判）
+                if balance_ctrl.is_falling():
+                    _fall_count += 1
+                    if _fall_count > 10:  # 连续 500ms 倾倒
+                        log("balance: FALL detected! Emergency release")
+                        balance_ctrl.enabled = False
+                        try:
+                            motion_sdk.gradual_torque_release()
+                        except Exception:
+                            servo.torque_off([254])
+                        _fall_count = 0
+                        await asyncio.sleep_ms(2000)
+                        continue
+                else:
+                    _fall_count = 0
+
+                # 增量模式计算：仅输出有变化的关节
+                current_pos = servo.get_cached_positions()
+                targets = balance_ctrl.compute_incremental(p, r, y, current_pos)
+
                 if targets:
                     servo.set_positions(
                         {str(sid): pos for sid, pos in targets.items()},
-                        duration=80,
+                        duration_ms=60,
                     )
-            except Exception:
-                pass
+            except Exception as e:
+                log("balance err: {}".format(e))
         await asyncio.sleep_ms(50)
 
 
@@ -852,6 +890,14 @@ def ble_setup():
 async def main():
     log("system: main loop starting")
     wifi_state = await wifi_connect()
+
+    # 起立流程（联网后、启动服务前执行）
+    log("system: starting standup sequence")
+    try:
+        import _thread
+        _thread.start_new_thread(startup.execute, ())
+    except ImportError:
+        startup.execute()
 
     asyncio.create_task(udp_server())
     asyncio.create_task(telemetry_task())

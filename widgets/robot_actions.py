@@ -46,6 +46,12 @@ MOTION_ACTIONS = [
     ("坐凳", "sit_chair", "H"),
     ("小跑", "trot", "Y"),
     ("上楼", "climb_stairs", "T"),
+    ("左踢", "kick_left", "1"),
+    ("右踢", "kick_right", "2"),
+    ("左移", "side_left", "3"),
+    ("右移", "side_right", "4"),
+    ("跳舞", "dance", "5"),
+    ("鞠躬", "bow", "6"),
 ]
 
 # 键盘→动作 映射
