@@ -40,10 +40,16 @@ JOINT_LIMITS = {
     20: (1700, 2400), 21: (1200, 2900), 22: (1700, 2400), 23: (1200, 2900), 24: (1600, 2500), 25: (1500, 2600),
 }
 
-# 站立基准姿态
+# 站立基准姿态（微屈膝站姿 - 降低重心、增大平衡裕度）
 STAND_POSE = {i: 2048 for i in range(1, 26)}
 STAND_POSE[6] = 1800   # 左肘微屈
 STAND_POSE[11] = 1800  # 右肘微屈
+STAND_POSE[15] = 2100  # 左髋微前屈
+STAND_POSE[21] = 2100  # 右髋微前屈
+STAND_POSE[17] = 1996  # 左膝微屈
+STAND_POSE[23] = 1996  # 右膝微屈
+STAND_POSE[19] = 2070  # 左踝微背屈（配合屈膝）
+STAND_POSE[25] = 2070  # 右踝微背屈
 
 
 def _safe_pos(sid, val):
@@ -115,13 +121,17 @@ class MotionSDK:
 
         安全措施：
         - 所有位置值经过关节限幅
-        - 通知平衡控制器更新基准姿态
+        - 通知平衡控制器更新基准姿态 + 运动状态
         - 支持中止机制
         """
         self._running = True
         self._abort = False
 
         try:
+            # 通知平衡器正在执行动作
+            if self.balance_ctrl and hasattr(self.balance_ctrl, 'set_motion_state'):
+                self.balance_ctrl.set_motion_state('action')
+
             for i in range(len(keyframes)):
                 if self._abort:
                     break
@@ -147,6 +157,9 @@ class MotionSDK:
         finally:
             self._running = False
             self._abort = False
+            # 恢复平衡器为站立模式
+            if self.balance_ctrl and hasattr(self.balance_ctrl, 'set_motion_state'):
+                self.balance_ctrl.set_motion_state('stand')
 
     def _execute_smooth(self, keyframes, durations, steps_per_frame=4):
         """平滑插值执行：将每帧拆分为多个子步骤，实现更顺滑的运动。
@@ -157,6 +170,10 @@ class MotionSDK:
         self._abort = False
 
         try:
+            # 通知平衡器正在执行动作
+            if self.balance_ctrl and hasattr(self.balance_ctrl, 'set_motion_state'):
+                self.balance_ctrl.set_motion_state('action')
+
             prev_frame = dict(self.base_positions)
 
             for i in range(len(keyframes)):
@@ -198,6 +215,9 @@ class MotionSDK:
         finally:
             self._running = False
             self._abort = False
+            # 恢复平衡器为站立模式
+            if self.balance_ctrl and hasattr(self.balance_ctrl, 'set_motion_state'):
+                self.balance_ctrl.set_motion_state('stand')
 
     # =================================================================
     #  安全功能
@@ -240,6 +260,8 @@ class MotionSDK:
 
     def crouch(self):
         """蹲下"""
+        if self.balance_ctrl and hasattr(self.balance_ctrl, 'set_motion_state'):
+            self.balance_ctrl.set_motion_state('crouch')
         pose = dict(self.base_positions)
         for sid in (15, 21):
             pose[sid] = 2550  # 髋前屈
@@ -247,6 +269,9 @@ class MotionSDK:
             pose[sid] = 1550  # 屈膝
         for sid in (19, 25):
             pose[sid] = 2450  # 踝背屈
+        # 手臂微前伸辅助平衡
+        pose[3] = 2200
+        pose[8] = 2200
         self._execute_smooth([pose], [800], steps_per_frame=5)
 
     def sit(self):
@@ -302,6 +327,7 @@ class MotionSDK:
           - 增大侧移量确保重心转移到支撑脚
           - 降低抬脚高度减少单脚支撑时的不稳定
           - 手臂大幅反摆产生角动量
+          - 基于微屈膝站姿，更低的重心提供更大稳定裕度
 
         Args:
             left_first: True=左脚先迈
@@ -321,19 +347,23 @@ class MotionSDK:
         base = dict(self.base_positions)
         half_dur = step_duration // 2
 
+        # 通知平衡器进入行走模式
+        if self.balance_ctrl and hasattr(self.balance_ctrl, 'set_motion_state'):
+            self.balance_ctrl.set_motion_state('walk')
+
         # 阶段 1: 重心侧移到支撑脚（增大侧移量应对高重心）
         p1 = dict(base)
-        side_shift = 80 if left_first else -80  # 增大侧移（原60→80）
+        side_shift = 90 if left_first else -90  # 加大侧移（应对高重心）
         p1[18] = _safe_pos(18, base.get(18, 2048) + side_shift)
         p1[24] = _safe_pos(24, base.get(24, 2048) + side_shift)
         # 髋侧摆辅助重心转移
-        hip_side = 30 if left_first else -30
+        hip_side = 35 if left_first else -35
         p1[16] = _safe_pos(16, base.get(16, 2048) + hip_side)
         p1[22] = _safe_pos(22, base.get(22, 2048) + hip_side)
-        # 微屈膝降低重心，增加稳定性
-        p1[stance_knee] = _safe_pos(stance_knee, base.get(stance_knee, 2048) - 40)
-        p1[stance_hip] = _safe_pos(stance_hip, base.get(stance_hip, 2048) + 30)
-        p1[stance_ankle_fb] = _safe_pos(stance_ankle_fb, base.get(stance_ankle_fb, 2048) + 20)
+        # 支撑腿深弯膝降低重心，增加稳定性
+        p1[stance_knee] = _safe_pos(stance_knee, base.get(stance_knee, 2048) - 60)
+        p1[stance_hip] = _safe_pos(stance_hip, base.get(stance_hip, 2048) + 40)
+        p1[stance_ankle_fb] = _safe_pos(stance_ankle_fb, base.get(stance_ankle_fb, 2048) + 30)
 
         # 通知平衡控制器进入单脚支撑阶段
         if self.balance_ctrl:
@@ -370,7 +400,7 @@ class MotionSDK:
         p5[22] = base.get(22, 2048)
 
         # 手臂自然摆动（与腿反相，增大摆幅助稳定）
-        arm_swing = step_length // 2  # 增大手臂摆幅（原 //3 → //2）
+        arm_swing = step_length * 2 // 3  # 进一步增大手臂摆幅
         if left_first:
             for p in [p2, p3, p4]:
                 p[3] = _safe_pos(3, base.get(3, 2048) - arm_swing)
@@ -389,14 +419,16 @@ class MotionSDK:
         # 恢复双脚支撑
         if self.balance_ctrl:
             self.balance_ctrl.set_single_support(0)
+            if hasattr(self.balance_ctrl, 'set_motion_state'):
+                self.balance_ctrl.set_motion_state('stand')
 
     def walk(self):
         """前进一步（左右交替步态）"""
-        self._gait_step(left_first=True, step_length=100, step_duration=350)
+        self._gait_step(left_first=True, step_length=90, step_duration=400)
 
     def backward(self):
         """后退一步"""
-        self._gait_step(left_first=True, step_length=-80, step_duration=400)
+        self._gait_step(left_first=True, step_length=-70, step_duration=450)
 
     def turn_left(self):
         """左转（原地转向）"""
@@ -634,13 +666,17 @@ class MotionSDK:
         """金鸡独立（左脚站立，右腿抬起）"""
         base = dict(self.base_positions)
 
-        # 重心先移到左脚
+        # 重心先移到左脚（加大侧移）
         p1 = dict(base)
-        p1[18] = 2200
-        p1[24] = 2200
+        p1[18] = 2250
+        p1[24] = 2250
         # 双臂展开保持平衡
         p1[4] = 2600
         p1[9] = 1400
+        # 支撑腿微弯膝增加稳定性
+        p1[17] = _safe_pos(17, base.get(17, 2048) - 50)
+        p1[15] = _safe_pos(15, base.get(15, 2048) + 30)
+        p1[19] = _safe_pos(19, base.get(19, 2048) + 20)
 
         # 抬起右腿
         p2 = dict(p1)
@@ -648,7 +684,7 @@ class MotionSDK:
         p2[23] = 1400   # 右膝弯曲
         p2[25] = 2400   # 右踝
 
-        self._execute_smooth([p1, p2], [500, 700], steps_per_frame=5)
+        self._execute_smooth([p1, p2], [600, 800], steps_per_frame=5)
 
     def handstand(self):
         """倒立（安全演示：双手张开上举 + 身体前倾）"""

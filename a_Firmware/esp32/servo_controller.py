@@ -104,18 +104,28 @@ class ServoController:
     # ─────────────── Ping / Scan ───────────────
 
     def _clear_uart_buffer(self):
-        """清空 UART 接收缓冲区，防止残留数据干扰下一次通信。"""
+        """清空 UART 接收缓冲区 + 协议解析器缓存，防止残留数据干扰下一次通信。"""
         if not self._uart:
             return
         try:
-            for _ in range(8):
-                leftover = self._uart.read(256)
-                if not leftover:
+            # 同时清空解析器缓存
+            if self._manager and hasattr(self._manager, 'parser'):
+                self._manager.parser.buf = bytearray()
+            # 多次读取确保缓冲区彻底清空
+            for _ in range(20):
+                try:
+                    n = self._uart.any()
+                except Exception:
+                    n = 0
+                if n > 0:
+                    self._uart.read(n)
+                    time.sleep_ms(1)
+                else:
                     break
         except Exception:
             pass
 
-    def ping(self, servo_id, retries=2, delay_ms=6):
+    def ping(self, servo_id, retries=3, delay_ms=15):
         """Ping 单个舵机，支持多次重试。
 
         Args:
@@ -131,13 +141,15 @@ class ServoController:
         sid = int(servo_id)
         for attempt in range(1 + retries):
             try:
+                self._clear_uart_buffer()
                 if attempt > 0:
-                    time.sleep_ms(delay_ms * 2)
-                    self._clear_uart_buffer()
+                    time.sleep_ms(delay_ms * 2 + attempt * 10)
                 else:
                     time.sleep_ms(delay_ms)
-                result = self._manager.ping(sid)
-                if result == 0:
+                # 逐步增加超时，让信号质量差的舵机有更多响应时间
+                timeout = 150 + attempt * 60
+                result = self._manager.ping(sid, timeout=timeout)
+                if result is not None and result == 0:
                     self._online.add(sid)
                     return 0
             except Exception as e:
@@ -146,19 +158,19 @@ class ServoController:
         self._online.discard(sid)
         return -1
 
-    def scan(self, id_range=None, max_passes=3):
-        """可靠扫描在线舵机（多轮扫描 + 自动重试未响应的 ID）。
+    def scan(self, id_range=None, max_passes=5):
+        """可靠扫描在线舵机（多轮逐个扫描 + 自适应延迟 + 多种检测手段）。
 
         25 个舵机串联在同一 UART 总线上，受信号质量、供电波动影响，
-        单次 ping 可能漏检。此方法执行多轮扫描：
-          - 第 1 轮：快速全量扫描
-          - 第 2~N 轮：仅对「未检测到」的 ID 进行重试
-                      每轮增加 ping 间隔和超时时间
-        最终仍离线的 ID 会额外用 read_position 验证一次。
+        单次 ping 极易漏检。此方法使用以下策略确保可靠检测：
+          - 逐个扫描（每个舵机之间充分清空缓冲区）
+          - 多轮扫描：每轮递增延迟和超时时间
+          - 未检测到的 ID 额外用 read_position 验证
+          - 最终尝试用更长超时的逐个 ping 兜底
 
         Args:
             id_range: 要扫描的 ID 范围（默认 1~servo_count）
-            max_passes: 最大扫描轮数（默认 3）
+            max_passes: 最大扫描轮数（默认 5）
 
         Returns:
             sorted list of online servo IDs
@@ -174,20 +186,22 @@ class ServoController:
             if not remaining:
                 break
 
-            # 每轮递增延迟，让总线更稳定
-            base_delay = 5 + pass_idx * 5  # 5ms / 10ms / 15ms ...
+            # 每轮递增延迟和超时，让信号质量差的舵机也能被检测到
+            base_delay = 20 + pass_idx * 15   # 20ms / 35ms / 50ms / 65ms / 80ms
+            ping_timeout = 200 + pass_idx * 80  # 200ms / 280ms / 360ms / 440ms / 520ms
             newly_found = []
 
-            # 清空缓冲区（消除上一轮残留）
+            # 彻底清空缓冲区 + 充分等待总线空闲
             self._clear_uart_buffer()
-            time.sleep_ms(10)
+            time.sleep_ms(50 + pass_idx * 30)
 
+            # 逐个扫描：每个舵机之间清空缓冲区，避免残留数据干扰
             for sid in remaining:
                 try:
                     self._clear_uart_buffer()
                     time.sleep_ms(base_delay)
-                    result = self._manager.ping(int(sid))
-                    if result == 0:
+                    result = self._manager.ping(int(sid), timeout=ping_timeout)
+                    if result is not None and result == 0:
                         detected.add(int(sid))
                         self._online.add(int(sid))
                         newly_found.append(int(sid))
@@ -201,27 +215,48 @@ class ServoController:
                 log("scan pass 1: found {}, missing {}".format(
                     len(detected), remaining))
             elif newly_found:
-                log("scan pass {}: recovered {} → {}".format(
+                log("scan pass {}: recovered {} → total={}".format(
                     pass_idx + 1, newly_found, len(detected)))
 
-        # ── 最终验证：对仍离线的 ID 尝试 read_position 确认 ──
+        # ── 备用验证：对仍离线的 ID 用 read_position 确认 ──
         if remaining:
             self._clear_uart_buffer()
-            time.sleep_ms(20)
-            final_recovered = []
-            for sid in remaining:
+            time.sleep_ms(80)
+            read_recovered = []
+            for sid in list(remaining):
                 try:
                     self._clear_uart_buffer()
-                    time.sleep_ms(10)
+                    time.sleep_ms(30)
                     pos = self._manager.read_servo_position(int(sid))
                     if pos is not None:
                         detected.add(int(sid))
                         self._online.add(int(sid))
+                        read_recovered.append(int(sid))
+                except Exception:
+                    pass
+            if read_recovered:
+                log("scan verify: recovered {} via read_position".format(
+                    read_recovered))
+                remaining = [sid for sid in remaining if sid not in detected]
+
+        # ── 最终兜底：对仍离线的用长超时逐个重试 ping ──
+        if remaining:
+            self._clear_uart_buffer()
+            time.sleep_ms(100)
+            final_recovered = []
+            for sid in list(remaining):
+                try:
+                    self._clear_uart_buffer()
+                    time.sleep_ms(40)
+                    # 使用最长超时、带 4 次重试的 ping
+                    result = self.ping(int(sid), retries=4, delay_ms=30)
+                    if result == 0:
+                        detected.add(int(sid))
                         final_recovered.append(int(sid))
                 except Exception:
                     pass
             if final_recovered:
-                log("scan verify: recovered {} via read_position".format(
+                log("scan final: recovered {} via retry-ping".format(
                     final_recovered))
 
         # 清理确认离线的 ID

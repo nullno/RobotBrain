@@ -288,6 +288,7 @@ class CockpitPanel(FloatLayout):
         self._kb = None
         self.key_actions = {}
         self.buttons = {}
+        self._balance_enabled = True
 
         # --- HUD 装饰层 ---
         self._hud_overlay = HudOverlay()
@@ -340,7 +341,7 @@ class CockpitPanel(FloatLayout):
             ("爬行", "crawl", "sh+F", (0, 0.85, 1, 0.7)),
             ("上楼", "climb_stairs", "sh+T", (0, 0.85, 1, 0.7)),
             ("坐下", "sit", "sh+G", (0, 0.85, 1, 0.7)),
-            ("弯腰", "bend_over", "sh+N", (0, 0.85, 1, 0.7)),
+            ("平衡", "balance_toggle", "Q", (0.1, 0.8, 0.3, 0.7)),
             ("卸力", "emergency", "E", danger_color),
         ]
 
@@ -351,12 +352,12 @@ class CockpitPanel(FloatLayout):
             ("摇头", "shake_head", "sh+B", (0.6, 0.3, 0.9, 0.7)),
             ("扎马步", "horse_stance", "sh+M", (0.6, 0.3, 0.9, 0.7)),
             ("独立", "golden_rooster", "sh+J", (0.6, 0.3, 0.9, 0.7)),
-            ("手倒立", "handstand", "sh+K", (0.6, 0.3, 0.9, 0.7)),
-            ("单手", "one_hand_handstand", "sh+L", (0.6, 0.3, 0.9, 0.7)),
+            ("弯腰", "bend_over", "sh+N", (0.6, 0.3, 0.9, 0.7)),
             ("思考", "think", "sh+U", (0.6, 0.3, 0.9, 0.7)),
             ("比心", "make_heart", "sh+I", (0.6, 0.3, 0.9, 0.7)),
             ("挥手", "wave", "sh+O", (0.6, 0.3, 0.9, 0.7)),
             ("坐凳", "sit_chair", "sh+H", (0.6, 0.3, 0.9, 0.7)),
+            ("拒绝", "refuse", "sh+P", (0.6, 0.3, 0.9, 0.7)),
         ]
 
         for text, action, key, color in row1_actions:
@@ -370,13 +371,6 @@ class CockpitPanel(FloatLayout):
                             on_action=self._send_action, accent_color=color)
             row2.add_widget(btn)
             self.buttons[action] = btn
-
-        # 加一个"拒绝"（第13个，放row1的空位或单独处理）
-        refuse_btn = HudButton(text="拒绝", action_name="refuse", key_hint="sh+P",
-                               on_action=self._send_action,
-                               accent_color=(0.6, 0.3, 0.9, 0.7))
-        self.buttons["refuse"] = refuse_btn
-        # 不加到网格避免超出12列，但注册键盘映射
 
         container.add_widget(row1)
         container.add_widget(row2)
@@ -410,13 +404,36 @@ class CockpitPanel(FloatLayout):
 
         # === 键盘映射 (来自共享 robot_actions) ===
         self.key_actions = dict(KEY_MAP)
+        self.key_actions['q'] = 'balance_toggle'
 
     def _send_action(self, action_name):
         """发送动作到 ESP32"""
         if action_name == "emergency":
             emergency_action(self)
             return
+        if action_name == "balance_toggle":
+            self._toggle_balance()
+            return
         _send_motion(action_name)
+
+    def _toggle_balance(self):
+        """切换 ESP32 平衡算法开关。"""
+        self._balance_enabled = not self._balance_enabled
+        try:
+            from services.wifi_servo import get_controller
+            ctrl = get_controller()
+            if ctrl and ctrl.is_connected:
+                ctrl._send({"type": "balance_enable", "enable": bool(self._balance_enabled)})
+                logger.info("Balance toggle: %s", "ON" if self._balance_enabled else "OFF")
+        except Exception as e:
+            logger.warning("Balance toggle error: %s", e)
+        # 更新按钮视觉
+        btn = self.buttons.get("balance_toggle")
+        if btn:
+            if self._balance_enabled:
+                btn.accent_color = (0.1, 0.8, 0.3, 0.7)
+            else:
+                btn.accent_color = (0.8, 0.5, 0.1, 0.7)
 
     def _on_voice_toggle(self, active):
         """语音按钮切换回调（异步启动，防止阻塞主线程）"""
@@ -508,8 +525,8 @@ class CockpitPanel(FloatLayout):
 
         action = self.key_actions[key_name]
 
-        # 动作键需要 Shift
-        if key_name not in _NAV_KEYS and key_name not in ('spacebar', 'e'):
+        # 动作键需要 Shift（方向键、空格、E卸力、Q平衡除外）
+        if key_name not in _NAV_KEYS and key_name not in ('spacebar', 'e', 'q'):
             if 'shift' not in modifiers:
                 return False
 

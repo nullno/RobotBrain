@@ -34,6 +34,15 @@ class IMUController:
         self.accel = (0.0, 0.0, 0.0)
         self.gyro = (0.0, 0.0, 0.0)
 
+        # 角速度（度/秒），由陀螺仪直接提供，用于平衡算法前馈
+        self.gyro_pitch = 0.0
+        self.gyro_roll = 0.0
+        self.gyro_yaw = 0.0
+
+        # 连续读取失败计数（用于自动重连）
+        self._fail_count = 0
+        self._max_fail = 20
+
         self._initialized = False
         self.imu_dev = None
 
@@ -101,11 +110,25 @@ class IMUController:
             gyro_raw = self.imu_dev.get_gyroscope_data()
             if gyro_raw:
                 self.gyro = tuple(gyro_raw)
+                # 陀螺仪输出的是角速度(deg/s)，直接映射到 pitch/roll/yaw
+                # YbImu gyro 顺序: [gx, gy, gz] 对应 [roll_rate, pitch_rate, yaw_rate]
+                self.gyro_roll = gyro_raw[0]
+                self.gyro_pitch = gyro_raw[1]
+                self.gyro_yaw = gyro_raw[2]
 
+            self._fail_count = 0
             return (self.pitch, self.roll, self.yaw)
             
         except OSError as e:
-            # i2c 总线脱落等问题
+            # i2c 总线脱落等问题，尝试自动恢复
+            self._fail_count += 1
+            if self._fail_count >= self._max_fail:
+                print(">> [IMUController] Too many failures ({}), reinit...".format(self._fail_count))
+                self._fail_count = 0
+                try:
+                    self.init()
+                except Exception:
+                    pass
             return None
 
     def get_orientation(self):
@@ -120,4 +143,6 @@ class IMUController:
             "yaw": round(self.yaw, 2),
             "accel": tuple(round(v, 3) for v in self.accel),
             "gyro": tuple(round(v, 2) for v in self.gyro),
+            "gyro_pitch": round(self.gyro_pitch, 2),
+            "gyro_roll": round(self.gyro_roll, 2),
         }

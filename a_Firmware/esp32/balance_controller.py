@@ -97,6 +97,15 @@ class BalanceController:
         base = {}
         for sid in range(1, 26):
             base[sid] = 2048
+        # 微屈膝站姿默认值（降低重心，增大稳定裕度）
+        base[6] = 1800    # 左肘微屈
+        base[11] = 1800   # 右肘微屈
+        base[15] = 2100   # 左髋微前屈
+        base[21] = 2100   # 右髋微前屈
+        base[17] = 1996   # 左膝微屈
+        base[23] = 1996   # 右膝微屈
+        base[19] = 2070   # 左踝微背屈
+        base[25] = 2070   # 右踝微背屈
         if neutral_positions:
             for sid, pos in neutral_positions.items():
                 try:
@@ -113,47 +122,51 @@ class BalanceController:
 
         # ======== PID 控制器 ========
         # Pitch 通道（前后平衡，最关键 — 高重心+小脚需要更强响应）
-        self.pid_pitch = _PID(kp=8.0, ki=1.0, kd=3.5, i_limit=350.0)
+        self.pid_pitch = _PID(kp=10.0, ki=1.5, kd=4.5, i_limit=400.0)
         # Roll 通道（左右平衡 — 行走时单脚支撑需要更强侧向稳定）
-        self.pid_roll = _PID(kp=6.5, ki=0.8, kd=2.8, i_limit=300.0)
+        self.pid_roll = _PID(kp=8.0, ki=1.2, kd=3.5, i_limit=350.0)
         # Yaw 通道（旋转修正，增益较小）
-        self.pid_yaw = _PID(kp=1.2, ki=0.0, kd=0.4, i_limit=100.0)
+        self.pid_yaw = _PID(kp=1.5, ki=0.0, kd=0.5, i_limit=100.0)
 
         # ======== 角速度前馈增益（陀螺仪反馈，加速响应动态扰动）========
-        self.gyro_pitch_gain = 3.0   # pitch 角速度前馈（deg/s → 位置值）
-        self.gyro_roll_gain = 2.5    # roll 角速度前馈
+        self.gyro_pitch_gain = 4.0   # pitch 角速度前馈（deg/s → 位置值）
+        self.gyro_roll_gain = 3.5    # roll 角速度前馈
         self._prev_pitch = 0.0       # 用于估算角速度（若 IMU 不直接提供）
         self._prev_roll = 0.0
 
         # ======== 关节策略增益 ========
         # 踝关节策略（主要平衡手段 — 35kg 脚部舵机扭矩充足）
-        self.ankle_pitch_ratio = 1.5    # 踝前后对 pitch 的响应比（增强）
-        self.ankle_roll_ratio = 1.3     # 踝左右对 roll 的响应比（增强）
+        self.ankle_pitch_ratio = 1.8    # 踝前后对 pitch 的响应比（增强）
+        self.ankle_roll_ratio = 1.5     # 踝左右对 roll 的响应比（增强）
 
         # 髋关节策略（中等扰动辅助）
-        self.hip_pitch_ratio = 0.8      # 大腿弯曲对 pitch 的响应比
-        self.knee_ratio = 1.0           # 膝盖对 pitch 的联动比（与髋反向）
+        self.hip_pitch_ratio = 1.0      # 大腿弯曲对 pitch 的响应比
+        self.knee_ratio = 1.2           # 膝盖对 pitch 的联动比（与髋反向）
 
         # 手臂反摆（大扰动时的角动量补偿 — 高重心机器人有效）
-        self.arm_swing_ratio = 0.6
+        self.arm_swing_ratio = 0.7
 
         # 头部稳定（视觉稳定，反向补偿躯干运动）
         self.head_pitch_scale = 0.3
         self.head_yaw_scale = 0.3
 
         # ======== 策略切换阈值（度）— 降低阈值使策略更早介入 ========
-        self.ankle_threshold = 5.0      # 仅踝关节响应的最大角度（降低）
-        self.hip_threshold = 15.0       # 髋膝启动的角度（降低）
+        self.ankle_threshold = 3.5      # 仅踝关节响应的最大角度（降低）
+        self.hip_threshold = 12.0       # 髋膝启动的角度（降低）
         self.fall_threshold = 25.0      # 倾倒警告阈值
 
         # ======== 输出安全限制 ========
-        self.max_offset = 550           # 单次最大偏移（适当增大以应对更大补偿需求）
-        self.max_rate = 100             # 每周期最大变化量（提高响应速度）
-        self.deadzone = 2.0             # 姿态死区（度），减小以提高灵敏度
+        self.max_offset = 600           # 单次最大偏移（适当增大以应对更大补偿需求）
+        self.max_rate = 120             # 每周期最大变化量（提高响应速度）
+        self.deadzone = 1.5             # 姿态死区（度），减小以提高灵敏度
 
         # ======== 行走感知 ========
         self._single_support = False    # 单脚支撑标志（行走中）
         self._support_side = 0          # 0=双脚, 1=左脚支撑, -1=右脚支撑
+
+        # ======== 自适应增益 ========
+        self._motion_state = 'stand'    # 'stand', 'walk', 'crouch', 'action'
+        self._adaptive_gain = 1.0       # 根据运动状态自适应缩放
 
         self.enabled = True
         self.falling = False            # 倾倒标志
@@ -179,6 +192,24 @@ class BalanceController:
         self._single_support = (side != 0)
         self._support_side = side
 
+    def set_motion_state(self, state_name):
+        """设置当前运动状态，自动调整平衡增益。
+
+        Args:
+            state_name: 'stand' | 'walk' | 'crouch' | 'action'
+        """
+        self._motion_state = state_name
+        if state_name == 'stand':
+            self._adaptive_gain = 1.0
+        elif state_name == 'walk':
+            self._adaptive_gain = 1.4   # 行走时增强平衡响应
+        elif state_name == 'crouch':
+            self._adaptive_gain = 0.6   # 蹲下时重心低，减弱响应
+        elif state_name == 'action':
+            self._adaptive_gain = 0.4   # 执行动作时减弱避免干扰
+        else:
+            self._adaptive_gain = 1.0
+
     def reset_base_pose(self):
         """恢复到站立基准。"""
         self.base_pose = dict(self.neutral)
@@ -191,6 +222,8 @@ class BalanceController:
         self._support_side = 0
         self._prev_pitch = 0.0
         self._prev_roll = 0.0
+        self._motion_state = 'stand'
+        self._adaptive_gain = 1.0
 
     def set_gains(self, gain_p=None, gain_r=None, gain_y=None):
         """调整 PID Kp 增益（兼容旧接口）。"""
@@ -271,9 +304,9 @@ class BalanceController:
         r_in = r if abs_r > self.deadzone else 0.0
 
         # ======== PID 计算 ========
-        p_out = self.pid_pitch.update(p_in, now_ms)
-        r_out = self.pid_roll.update(r_in, now_ms)
-        y_out = self.pid_yaw.update(y, now_ms)
+        p_out = self.pid_pitch.update(p_in, now_ms) * self._adaptive_gain
+        r_out = self.pid_roll.update(r_in, now_ms) * self._adaptive_gain
+        y_out = self.pid_yaw.update(y, now_ms) * self._adaptive_gain
 
         # ======== 角速度前馈补偿（加速响应快速扰动）========
         # 角速度方向即将发生的趋势，提前施加补偿
@@ -289,7 +322,7 @@ class BalanceController:
         # 行走中单脚着地时，支撑脚踝关节需承担全部平衡工作
         ankle_boost = 1.0
         if self._single_support:
-            ankle_boost = 1.4  # 单脚时增大 40% 踝关节响应
+            ankle_boost = 1.6  # 单脚时增大 60% 踝关节响应
 
         # ================================================================
         # 1. 踝关节策略（始终激活，快速响应小扰动）
@@ -337,13 +370,19 @@ class BalanceController:
             targets[17] -= knee_comp
             targets[23] -= knee_comp
 
+            # 踝关节联动补偿：膝盖弯曲时踝关节需配合调整保持脚底平
+            # 用正运动学原理：膝屈角度变化需要踝关节等量反向补偿
+            ankle_knee_comp = int(knee_comp * 0.65)
+            targets[19] += ankle_knee_comp
+            targets[25] += ankle_knee_comp
+
             # 侧向：左右大腿旋转微调（ID 16, 22）
-            side_comp = int(r_offset * 0.4 * activation)
+            side_comp = int(r_offset * 0.5 * activation)
             targets[16] += side_comp
             targets[22] -= side_comp
 
             # 胯旋转微调（ID 14, 20）：对抗侧倾时身体扭转
-            hip_yaw_comp = int(r_offset * 0.15 * activation)
+            hip_yaw_comp = int(r_offset * 0.2 * activation)
             targets[14] += hip_yaw_comp
             targets[20] -= hip_yaw_comp
 

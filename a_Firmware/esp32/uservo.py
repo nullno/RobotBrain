@@ -175,24 +175,40 @@ class UartServoManager:
         start = time.ticks_ms()
 
         while time.ticks_diff(time.ticks_ms(), start) < timeout:
-            data = self.uart.read()
-            if data:
-                pkts = self.parser.input(data)
-                if pkts:
-                    return pkts[0]
+            n = 0
+            try:
+                n = self.uart.any()
+            except Exception:
+                pass
+            if n > 0:
+                data = self.uart.read(n)
+                if data:
+                    pkts = self.parser.input(data)
+                    if pkts:
+                        return pkts[0]
+            else:
+                # 给 UART 接收缓冲区时间积累完整数据包
+                # 115200 baud 下 1 字节约 87μs，6~8 字节响应约 0.6ms
+                time.sleep_ms(1)
         return None
 
     # -------------------------
     # ping 只返回 status
     # -------------------------
-    def ping(self, servo_id):
+    def ping(self, servo_id, timeout=120):
         pkt = pack_packet(servo_id, CODE_PING, b'')
         self.clear_buffer()
+        # 发送前短暂等待，让总线空闲（多舵机串联时关键）
+        import time
+        time.sleep_ms(2)
         self.uart.write(pkt)
 
-        resp = self.read_response()
+        resp = self.read_response(timeout=timeout)
         if resp and resp["type"] == "status":
             return resp["status"]
+        # 兼容: 某些固件版本 ping 回包可能被解析为 read_data
+        if resp and resp.get("id") == servo_id:
+            return 0
         return None
 
     # -------------------------

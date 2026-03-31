@@ -60,7 +60,8 @@ BLE_WIFI_STATUS_UUID = "0000ffac-0000-1000-8000-00805f9b34fb"
 
 #  硬件初始化 
 try:
-    uart = UART(UART_ID, baudrate=UART_BAUD, tx=UART_TX_PIN, rx=UART_RX_PIN, timeout=0)
+    uart = UART(UART_ID, baudrate=UART_BAUD, tx=UART_TX_PIN, rx=UART_RX_PIN,
+                timeout=20, rxbuf=2048)
 except Exception as e:
     uart = None
     print("uart init failed: {}".format(e))
@@ -651,12 +652,13 @@ async def imu_task():
 
 
 async def balance_task():
-    """平衡控制任务 —— 50ms 周期读取 IMU 姿态，PID 计算补偿并驱动舵机。
+    """平衡控制任务 —— 40ms 周期读取 IMU 姿态，PID 计算补偿并驱动舵机。
 
     安全策略：
     - 倾倒检测：超过阈值自动触发渐进卸力
     - 动作执行中暂停平衡输出（由 motion_sdk 自行管理 base_pose）
     - 仅对有变化的关节发送指令（减少总线负载）
+    - 始终传递陀螺仪角速度用于前馈补偿
     """
     await asyncio.sleep_ms(5000)  # 等待系统初始化
     _fall_count = 0
@@ -665,7 +667,7 @@ async def balance_task():
             try:
                 # 动作执行中不叠加平衡（motion_sdk 内部已处理）
                 if motion_sdk and motion_sdk.is_running():
-                    await asyncio.sleep_ms(50)
+                    await asyncio.sleep_ms(40)
                     continue
 
                 p = imu_ctrl.pitch
@@ -675,7 +677,7 @@ async def balance_task():
                 # 倾倒检测：连续多帧超阈值才触发（防误判）
                 if balance_ctrl.is_falling():
                     _fall_count += 1
-                    if _fall_count > 10:  # 连续 500ms 倾倒
+                    if _fall_count > 12:  # 连续 480ms 倾倒
                         log("balance: FALL detected! Emergency release")
                         balance_ctrl.enabled = False
                         try:
@@ -688,18 +690,30 @@ async def balance_task():
                 else:
                     _fall_count = 0
 
-                # 增量模式计算：仅输出有变化的关节
+                # 获取陀螺仪角速度用于前馈补偿
+                gyro_p = getattr(imu_ctrl, 'gyro_pitch', None)
+                gyro_r = getattr(imu_ctrl, 'gyro_roll', None)
+
+                # 始终使用完整 compute（含角速度前馈），然后做增量过滤
                 current_pos = servo.get_cached_positions()
-                targets = balance_ctrl.compute_incremental(p, r, y, current_pos)
+                full_targets = balance_ctrl.compute(p, r, y, gyro_p, gyro_r)
+                targets = {}
+                for sid, target in full_targets.items():
+                    cur = current_pos.get(sid)
+                    if cur is None:
+                        continue
+                    diff = target - int(cur)
+                    if abs(diff) > 6:  # 降低死区阈值提高灵敏度
+                        targets[sid] = target
 
                 if targets:
                     servo.set_positions(
                         {str(sid): pos for sid, pos in targets.items()},
-                        duration_ms=60,
+                        duration_ms=50,
                     )
             except Exception as e:
                 log("balance err: {}".format(e))
-        await asyncio.sleep_ms(50)
+        await asyncio.sleep_ms(40)
 
 
 last_cmd_ticks = 0

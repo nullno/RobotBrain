@@ -48,10 +48,16 @@ def _log(msg):
         print("[startup] " + str(msg))
 
 
-# 站立基准
+# 站立基准（微屈膝站姿）
 _STAND = {i: 2048 for i in range(1, 26)}
 _STAND[6] = 1800   # 左肘微屈
 _STAND[11] = 1800  # 右肘微屈
+_STAND[15] = 2100  # 左髋微前屈
+_STAND[21] = 2100  # 右髋微前屈
+_STAND[17] = 1996  # 左膝微屈
+_STAND[23] = 1996  # 右膝微屈
+_STAND[19] = 2070  # 左踝微背屈
+_STAND[25] = 2070  # 右踝微背屈
 
 
 class StartupStandup:
@@ -129,15 +135,28 @@ class StartupStandup:
 
         try:
             # ============================================================
-            #  Phase 0: 舵机检测 + 上扭矩
+            #  Phase 0: 舵机检测 + 上扭矩（含多次重试扫描）
             # ============================================================
             _log("Phase 0: 舵机检测 + 上扭矩")
-            online = self.servo.scan()
+
+            # 多次扫描尝试，每次间隔让总线恢复
+            online = []
+            for scan_attempt in range(5):
+                online = self.servo.scan()
+                _log("扫描第{}次: 在线舵机 {}/25  IDs={}".format(
+                    scan_attempt + 1, len(online), online))
+                if len(online) >= 20:
+                    break
+                # 等待后重试（供电可能不稳定、总线需要恢复）
+                time.sleep_ms(1500 + scan_attempt * 500)
+
             _log("在线舵机: {}/25  IDs={}".format(len(online), online))
 
-            # 即使部分缺失也尝试起立（仅警告）
-            if len(online) < 20:
-                _log("WARNING: 在线舵机过少 ({}/25), 取消起立".format(len(online)))
+            # 至少需要 8 个腿部舵机（ID 14-25 中至少 8 个）才能尝试起立
+            leg_ids = set(range(14, 26))
+            leg_online = len(leg_ids.intersection(set(online)))
+            if leg_online < 8:
+                _log("WARNING: 腿部在线舵机过少 ({}/12), 取消起立".format(leg_online))
                 return False
 
             self.servo.torque_on()
@@ -226,7 +245,7 @@ class StartupStandup:
             _log("Phase 4: 逐步站起")
 
             # 4a: 半站 — 膝盖仍微屈，重心稳定过渡
-            p4a = {i: 2048 for i in range(1, 26)}
+            p4a = dict(_STAND)
             p4a[15] = 2350   # 髋开始伸展
             p4a[21] = 2350
             p4a[17] = 1650   # 膝半伸
@@ -240,13 +259,13 @@ class StartupStandup:
             self._smooth([p4a], [1500], steps=6)
 
             # 4b: 接近直立 — 膝盖微屈保持弹性
-            p4b = dict(p4a)
-            p4b[15] = 2150
-            p4b[21] = 2150
-            p4b[17] = 1850
-            p4b[23] = 1850
-            p4b[19] = 2100
-            p4b[25] = 2100
+            p4b = dict(_STAND)
+            p4b[15] = 2200
+            p4b[21] = 2200
+            p4b[17] = 1900
+            p4b[23] = 1900
+            p4b[19] = 2150
+            p4b[25] = 2150
             p4b[3] = 2048
             p4b[8] = 2048
             self._smooth([p4b], [1200], steps=5)
@@ -266,31 +285,36 @@ class StartupStandup:
             for iteration in range(15):
                 pitch, roll = self._read_imu()
 
-                if abs(pitch) < 2.5 and abs(roll) < 2.5:
+                if abs(pitch) < 2.0 and abs(roll) < 2.0:
                     _log("平衡达标: pitch={:.1f} roll={:.1f}".format(pitch, roll))
                     break
 
                 adjust = dict(stand)
 
                 # 踝前后补偿 pitch（前倾→踝背屈推回）
-                if abs(pitch) > 2.5:
-                    comp_p = int(pitch * 10)
-                    comp_p = _clamp(comp_p, -200, 200)
-                    adjust[19] = _safe(19, 2048 + comp_p)
-                    adjust[25] = _safe(25, 2048 + comp_p)
+                if abs(pitch) > 2.0:
+                    comp_p = int(pitch * 12)
+                    comp_p = _clamp(comp_p, -250, 250)
+                    adjust[19] = _safe(19, stand[19] + comp_p)
+                    adjust[25] = _safe(25, stand[25] + comp_p)
                     # 髋关节辅助（大幅倾斜时）
-                    if abs(pitch) > 6.0:
-                        hip_c = int(pitch * 5)
-                        hip_c = _clamp(hip_c, -120, 120)
-                        adjust[15] = _safe(15, 2048 + hip_c)
-                        adjust[21] = _safe(21, 2048 + hip_c)
+                    if abs(pitch) > 5.0:
+                        hip_c = int(pitch * 6)
+                        hip_c = _clamp(hip_c, -150, 150)
+                        adjust[15] = _safe(15, stand[15] + hip_c)
+                        adjust[21] = _safe(21, stand[21] + hip_c)
+                        # 膝关节联动
+                        knee_c = int(pitch * 4)
+                        knee_c = _clamp(knee_c, -100, 100)
+                        adjust[17] = _safe(17, stand[17] - knee_c)
+                        adjust[23] = _safe(23, stand[23] - knee_c)
 
                 # 踝左右补偿 roll
-                if abs(roll) > 2.5:
-                    comp_r = int(roll * 8)
-                    comp_r = _clamp(comp_r, -160, 160)
-                    adjust[18] = _safe(18, 2048 + comp_r)
-                    adjust[24] = _safe(24, 2048 + comp_r)
+                if abs(roll) > 2.0:
+                    comp_r = int(roll * 10)
+                    comp_r = _clamp(comp_r, -200, 200)
+                    adjust[18] = _safe(18, stand[18] + comp_r)
+                    adjust[24] = _safe(24, stand[24] + comp_r)
 
                 self._send(adjust, 250)
                 _log("调整中[{}]: pitch={:.1f} roll={:.1f}".format(iteration, pitch, roll))
