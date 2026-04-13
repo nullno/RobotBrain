@@ -395,7 +395,7 @@ class UartServoManager:
 	
 	def set_torque_upperb(self, servo_id, torque_upperb):
 		'''设置最大扭力
-		@torque_upperb: 取值范围[0, 1000]
+		@torque_upperb: 取值范围[0, 3000]
   		'''
 		self.write_data_by_name(servo_id, "TORQUE_UPPERB", torque_upperb)
   
