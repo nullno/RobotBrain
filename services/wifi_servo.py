@@ -83,21 +83,67 @@ class WiFiServoController:
         # 最新 telemetry 缓存
         self._last_status: Dict[str, Any] = {}
         self._last_status_ts: float = 0.0
+        # V2 固件新增的角速度数据缓存
+        self._imu_gyro_rates: Tuple[float, float, float] = (0.0, 0.0, 0.0)
         if host:
             self._ensure_socket()
-            
-        # 启动轻量级后台连接守护与 IMU 刷新
+
+        # 启动后台异步遥测监听线程（V2：接收固件推送的遥测广播 + 定时心跳）
         self._stop_bg = False
-        self._bg_thread = threading.Thread(target=self._bg_ping_loop, daemon=True)
+        self._telemetry_sock: Optional[socket.socket] = None
+        self._bg_thread = threading.Thread(target=self._bg_telemetry_loop, daemon=True)
         self._bg_thread.start()
 
-    def _bg_ping_loop(self):
-        """轻量级后台守护：维持 is_connected 状态和抓取最新 telemetry。"""
+    def _bg_telemetry_loop(self):
+        """V2 后台遥测监听：
+        - 被动接收固件推送的 telemetry 广播（每 400ms）
+        - 当无推送数据时主动请求（降级保活）
+        """
+        _idle_count = 0
         while not self._stop_bg:
-            time.sleep(3.0)
-            if self._host:
-                # 只用极小 timeout，保证哪怕离线了也不会长久阻塞主控指令
-                self.request_status(timeout=0.3)
+            if not self._host:
+                time.sleep(2.0)
+                continue
+            try:
+                # 尝试接收固件主动推送的 telemetry（非阻塞）
+                with self._lock:
+                    self._ensure_socket()
+                    sock = self._sock
+                if sock:
+                    sock.settimeout(1.5)
+                    try:
+                        data, _ = sock.recvfrom(4096)
+                        obj = json.loads(data.decode("utf-8"))
+                        if obj.get("type") == "telemetry":
+                            self._update_telemetry_cache(obj)
+                            _idle_count = 0
+                            continue
+                    except socket.timeout:
+                        pass
+                    except Exception:
+                        pass
+                # 无推送数据，主动心跳请求（每 3s 一次）
+                _idle_count += 1
+                if _idle_count >= 2:
+                    self.request_status(timeout=0.4)
+                    _idle_count = 0
+            except Exception:
+                time.sleep(2.0)
+
+    def _update_telemetry_cache(self, obj: dict):
+        """更新遥测缓存（包含 V2 固件新增的角速度数据）。"""
+        self._last_status = obj
+        self._last_status_ts = time.time()
+        self._connected = True
+        self._timeout_count = 0
+        # 提取固件 V2 新增的角速度数据
+        imu = obj.get("imu") or {}
+        if isinstance(imu, dict):
+            self._imu_gyro_rates = (
+                float(imu.get("gyro_pitch", 0.0)),
+                float(imu.get("gyro_roll", 0.0)),
+                float(imu.get("gyro_yaw", 0.0)),
+            )
 
     # -------------------- 连接管理 --------------------
 
@@ -380,7 +426,7 @@ class WiFiServoController:
         return result
 
     def get_imu(self) -> Tuple[float, float, float]:
-        """从缓存 status 中提取 IMU 数据 (pitch, roll, yaw)。"""
+        """从缓存 status 中提取 IMU 数据 (pitch, roll, yaw)。非阻塞。"""
         imu = self._last_status.get("imu") or {}
         if isinstance(imu, dict):
             return (
@@ -389,6 +435,21 @@ class WiFiServoController:
                 float(imu.get("yaw", 0.0)),
             )
         return (0.0, 0.0, 0.0)
+
+    def get_gyro_rates(self) -> Tuple[float, float, float]:
+        """获取固件 V2 角速度 (gyro_pitch, gyro_roll, gyro_yaw) deg/s。"""
+        return self._imu_gyro_rates
+
+    def get_imu_extended(self) -> Dict[str, Any]:
+        """获取完整 IMU 数据（含角速度、采样间隔等 V2 固件新增字段）。"""
+        imu = self._last_status.get("imu") or {}
+        return dict(imu) if isinstance(imu, dict) else {}
+
+    def get_telemetry_age_ms(self) -> float:
+        """返回最近一次遥测数据的新鲜度（毫秒），用于 UI 判断数据有效性。"""
+        if self._last_status_ts <= 0:
+            return 999999.0
+        return (time.time() - self._last_status_ts) * 1000.0
 
     # -------------------- 发现 --------------------
 

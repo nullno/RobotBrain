@@ -157,22 +157,13 @@ class RobotDashboardApp(App):
         ui_runtime.safe_refresh_ui(self, dt=dt)
 
     def _get_gyro_data(self):
-        """从 ESP32 WiFi telemetry 获取 IMU 数据。"""
+        """V2: 直接读取缓存遥测数据（零阻塞），不发送 UDP 请求。"""
         try:
             ctrl = getattr(self, 'wifi_servo', None) or get_wifi_servo()
             if ctrl and ctrl.is_connected:
-                imu_data = ctrl.get_imu()
-                if imu_data and isinstance(imu_data, tuple):
-                    return imu_data
-                if imu_data and isinstance(imu_data, dict):
-                    return (
-                        float(imu_data.get('pitch', 0)),
-                        float(imu_data.get('roll', 0)),
-                        float(imu_data.get('yaw', 0)),
-                    )
+                return ctrl.get_imu()
         except Exception:
             pass
-        # 无连接时返回零姿态
         return (0.0, 0.0, 0.0)
 
     # ================== ESP32 引导弹窗 ==================
@@ -208,7 +199,7 @@ class RobotDashboardApp(App):
 
     # ================== 主循环 ==================
     def _update_loop(self, dt):
-        """主循环：仅更新 UI 显示（IMU 姿态面板），平衡算法已迁移至固件。"""
+        """V2 主循环：零阻塞读缓存 + 传递角速度给 UI。"""
         try:
             p, r, y = self._get_gyro_data()
             now = time.time()
@@ -216,11 +207,23 @@ class RobotDashboardApp(App):
             self._latest_roll = float(r)
             self._latest_yaw = float(y)
 
-            gyro_ui_period = float(getattr(self, '_gyro_ui_period', 0.12) or 0.12)
+            gyro_ui_period = float(getattr(self, '_gyro_ui_period', 0.08) or 0.08)
             last_gyro_ui_t = float(getattr(self, '_last_gyro_ui_update_time', 0.0) or 0.0)
             if (now - last_gyro_ui_t) >= max(0.02, gyro_ui_period):
                 if 'gyro_panel' in self.root_widget.ids:
-                    self.root_widget.ids.gyro_panel.update(p, r, y)
+                    gp = self.root_widget.ids.gyro_panel
+                    gp.update(p, r, y)
+                    # V2: 传递角速度和数据新鲜度（固件新增字段）
+                    try:
+                        ctrl = getattr(self, 'wifi_servo', None) or get_wifi_servo()
+                        if ctrl and hasattr(ctrl, 'get_gyro_rates'):
+                            rates = ctrl.get_gyro_rates()
+                            if hasattr(gp, 'update_gyro_rates'):
+                                gp.update_gyro_rates(*rates)
+                            if hasattr(gp, 'set_data_age'):
+                                gp.set_data_age(ctrl.get_telemetry_age_ms())
+                    except Exception:
+                        pass
                 self._last_gyro_ui_update_time = now
         except Exception as e:
             try:

@@ -89,7 +89,7 @@ class ConnectionGate(FloatLayout):
 
 
 def is_esp32_ready(app=None):
-    """检查 ESP32 是否已在线；若仅有 host 未标记 connected，则主动探测一次。"""
+    """检查 ESP32 是否已在线；优先使用遥测缓存判断，避免阻塞 UDP 请求。"""
     try:
         ctrl = getattr(app, "wifi_servo", None) if app else None
         ctrl = ctrl or get_wifi_servo()
@@ -97,10 +97,17 @@ def is_esp32_ready(app=None):
             return False
         if ctrl.is_connected:
             return True
-        # 尚未标记 connected，但已经知道 host，则尝试一次快速 status 以拉起连接标记
+        # 尚未标记 connected，但已知 host → 检查遥测缓存是否新鲜（<5s）
         if getattr(ctrl, "host", None):
             try:
-                st = ctrl.request_status(timeout=0.5)
+                age = ctrl.get_telemetry_age_ms()
+                if 0 < age < 5000:
+                    return True
+            except Exception:
+                pass
+            # 缓存不新鲜，尝试一次快速 status 拉起连接标记
+            try:
+                st = ctrl.request_status(timeout=0.3)
                 if st:
                     return True
             except Exception:
@@ -194,16 +201,23 @@ def _enter_main_ui(app, gate):
 
 
 def refresh_link_indicator(app, dt=0):
-    """10 秒周期心跳检测，带失败重试（最多 2 次快速重试）。"""
+    """心跳检测 — V2: 直接读取遥测缓存判断连接健康度，无阻塞。"""
     try:
         indicator = None
         root = getattr(app, "root_widget", None)
         if root and getattr(root, "ids", None):
             indicator = root.ids.get("esp32_indicator")
         ctrl = getattr(app, "wifi_servo", None) or get_wifi_servo()
-       
+
         host = getattr(ctrl, "host", "") if ctrl else ""
-        connected = bool(ctrl and ctrl.is_connected)
+        # 利用遥测年龄判断连接健康：<3s 视为在线
+        connected = False
+        if ctrl and ctrl.is_connected:
+            try:
+                age = ctrl.get_telemetry_age_ms()
+                connected = age < 3000
+            except Exception:
+                connected = True
         state = {"connected": connected, "host": host}
         if indicator:
             indicator.update_state(state)

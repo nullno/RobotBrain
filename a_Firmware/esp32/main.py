@@ -1,9 +1,8 @@
 """
-RobotBrain ESP32 MicroPython 固件
-- Wi-Fi + BLE 配网（BLE 名称 ROBOT-ESP32-S3-BLE，UUID 与主控一致）
-- UDP(5005) / HTTP(8080) / WebSocket(8765) 控制通道
-- I2C IMU 采样（MPU6050/BNO055，可扩展），简单互补滤波占位
-- 舵机控制通过 servo_controller 模块
+RobotBrain ESP32 MicroPython 固件 V2
+- 核心架构：IMU + 平衡 + 舵机 = 本地实时控制环（无需网络）
+- 网络层（WiFi/BLE/UDP/HTTP/WS）= 遥控 + 监控通道（可选）
+- 启动顺序：硬件初始化 → IMU 启动 → 舵机检测 → 站立 → 平衡 → [网络]
 """
 
 import uasyncio as asyncio
@@ -58,6 +57,11 @@ SERVO_COUNT = 25
 TELEMETRY_MS = 400
 BLE_WIFI_STATUS_UUID = "0000ffac-0000-1000-8000-00805f9b34fb"
 
+# ======== 控制环频率配置 ========
+IMU_PERIOD_MS = 8       # IMU 采样周期（125Hz）
+BALANCE_PERIOD_MS = 20  # 平衡控制周期（50Hz）— 匹配舵机响应极限
+BALANCE_SERVO_DUR = 30  # 平衡指令舵机运行时间（ms）
+
 #  硬件初始化 
 try:
     uart = UART(UART_ID, baudrate=UART_BAUD, tx=UART_TX_PIN, rx=UART_RX_PIN,
@@ -72,10 +76,10 @@ except Exception as e:
     i2c = None
     print("i2c init failed: {}".format(e))
 
-# 舵机控制器（模块化）
+# 舵机控制器
 servo = ServoController(uart, servo_count=SERVO_COUNT)
 
-# IMU 控制器（互补滤波）
+# IMU 控制器（高频版，角速度已修正为 deg/s）
 imu_ctrl = IMUController(i2c, addr=IMU_ADDR)
 try:
     if i2c is not None:
@@ -84,13 +88,16 @@ try:
 except Exception as e:
     print("imu controller init failed: {}".format(e))
 
-# 平衡控制器
+# 平衡控制器（双环 PID V2）
 balance_ctrl = BalanceController()
 global motion_sdk
 motion_sdk = MotionSDK(servo, balance_ctrl)
 
 # 起立控制器
 startup = StartupStandup(servo, imu_ctrl, balance_ctrl, motion_sdk)
+
+# 标记：起立是否完成（平衡任务等待此标志）
+_standup_done = False
 
 # 全局状态
 state = {
@@ -102,8 +109,7 @@ _last_wifi_state = {"wifi_ok": False, "ip": None, "ap_mode": False}
 _ble_status_ctx = {"ble": None, "status_handle": None}
 _ble_adv_ctx = {"adv_data": None, "resp_data": None, "interval_us": 100000, "name": None}
 
-# 设备发现注册表：仅存储设备信息，不中继视频流
-_device_registry = {}  # {client_id: {"ip": str, "port": int, "name": str, "has_camera": bool, "last_seen": ticks}}
+_device_registry = {}
 _device_counter = 0
 
 
@@ -191,7 +197,7 @@ def update_ble_wifi_status(info=None):
 
 #  IMU 读取 
 def read_mpu6050():
-    """使用 IMU 控制器更新姿态（互补滤波）。"""
+    """使用 IMU 控制器更新姿态。"""
     try:
         result = imu_ctrl.update()
         if result:
@@ -641,44 +647,68 @@ async def ble_status_task():
 
 
 async def imu_task():
-    """10ms IMU 采样 + 互补滤波更新。"""
+    """高频 IMU 采样（125Hz / 8ms）。
+
+    只读取姿态角 + 陀螺仪角速度（跳过加速度计节省时间）。
+    每 50 次（~400ms）做一次完整读取含加速度计（用于遥测）。
+    """
+    _full_count = 0
     while True:
         try:
-            read_mpu6050()
+            _full_count += 1
+            if _full_count >= 50:
+                imu_ctrl.update_full()
+                state["imu"] = imu_ctrl.get_state_dict()
+                _full_count = 0
+            else:
+                imu_ctrl.update()
         except Exception as e:
-            # 增加异常保护防止死循环锁死 REPL 线程
             print("imu_task err:", e)
-        await asyncio.sleep_ms(10)
+        await asyncio.sleep_ms(IMU_PERIOD_MS)
 
 
 async def balance_task():
-    """平衡控制任务 —— 40ms 周期读取 IMU 姿态，PID 计算补偿并驱动舵机。
+    """高频平衡控制（50Hz / 20ms）。
 
-    安全策略：
-    - 倾倒检测：超过阈值自动触发渐进卸力
-    - 动作执行中暂停平衡输出（由 motion_sdk 自行管理 base_pose）
-    - 仅对有变化的关节发送指令（减少总线负载）
-    - 始终传递陀螺仪角速度用于前馈补偿
+    V2 架构：
+    - 无需等待网络，开机起立完成后立即运行
+    - 使用 set_positions_fast() 低延迟批量写入
+    - 双环 PID：外环姿态角 + 内环角速度前馈
+    - 仅发送有变化的关节（>3 位置单位），减少总线负载
+    - 连续倾倒检测 → 紧急卸力保护
     """
-    await asyncio.sleep_ms(5000)  # 等待系统初始化
+    global _standup_done
+
+    # 等待起立完成（无网络依赖）
+    while not _standup_done:
+        await asyncio.sleep_ms(100)
+
+    log("balance: V2 active, period={}ms".format(BALANCE_PERIOD_MS))
     _fall_count = 0
+    _perf_n = 0
+    _perf_t0 = time.ticks_ms()
+
     while True:
         if balance_ctrl.enabled:
             try:
-                # 动作执行中不叠加平衡（motion_sdk 内部已处理）
+                # 动作执行中：保持 PID 运算（积分器持续跟踪），但不写舵机（避免 UART 冲突）
                 if motion_sdk and motion_sdk.is_running():
-                    await asyncio.sleep_ms(40)
+                    balance_ctrl.compute(
+                        imu_ctrl.pitch, imu_ctrl.roll, imu_ctrl.yaw,
+                        imu_ctrl.gyro_pitch, imu_ctrl.gyro_roll
+                    )
+                    await asyncio.sleep_ms(BALANCE_PERIOD_MS)
                     continue
 
                 p = imu_ctrl.pitch
                 r = imu_ctrl.roll
                 y = imu_ctrl.yaw
 
-                # 倾倒检测：连续多帧超阈值才触发（防误判）
+                # 倾倒检测
                 if balance_ctrl.is_falling():
                     _fall_count += 1
-                    if _fall_count > 12:  # 连续 480ms 倾倒
-                        log("balance: FALL detected! Emergency release")
+                    if _fall_count > 8:  # 连续 160ms 倾倒
+                        log("balance: FALL! Emergency release")
                         balance_ctrl.enabled = False
                         try:
                             motion_sdk.gradual_torque_release()
@@ -690,30 +720,29 @@ async def balance_task():
                 else:
                     _fall_count = 0
 
-                # 获取陀螺仪角速度用于前馈补偿
-                gyro_p = getattr(imu_ctrl, 'gyro_pitch', None)
-                gyro_r = getattr(imu_ctrl, 'gyro_roll', None)
+                # 双环 PID 计算（含角速度前馈）
+                gyro_p = imu_ctrl.gyro_pitch
+                gyro_r = imu_ctrl.gyro_roll
 
-                # 始终使用完整 compute（含角速度前馈），然后做增量过滤
+                # 增量模式：只发送有变化的关节
                 current_pos = servo.get_cached_positions()
-                full_targets = balance_ctrl.compute(p, r, y, gyro_p, gyro_r)
-                targets = {}
-                for sid, target in full_targets.items():
-                    cur = current_pos.get(sid)
-                    if cur is None:
-                        continue
-                    diff = target - int(cur)
-                    if abs(diff) > 6:  # 降低死区阈值提高灵敏度
-                        targets[sid] = target
+                targets = balance_ctrl.compute_incremental(
+                    p, r, y, current_pos, gyro_p, gyro_r
+                )
 
                 if targets:
-                    servo.set_positions(
-                        {str(sid): pos for sid, pos in targets.items()},
-                        duration_ms=50,
-                    )
+                    servo.set_positions_fast(targets, duration_ms=BALANCE_SERVO_DUR)
             except Exception as e:
                 log("balance err: {}".format(e))
-        await asyncio.sleep_ms(40)
+
+        # 性能追踪（每 ~5 秒输出一次）
+        _perf_n += 1
+        if _perf_n >= 250:
+            _el = time.ticks_diff(time.ticks_ms(), _perf_t0)
+            log("balance perf: {:.1f}ms/cycle, imu_dt={}ms".format(_el / 250.0, imu_ctrl.dt_ms))
+            _perf_n = 0
+            _perf_t0 = time.ticks_ms()
+        await asyncio.sleep_ms(BALANCE_PERIOD_MS)
 
 
 last_cmd_ticks = 0
@@ -902,34 +931,78 @@ def ble_setup():
 
 #  主入口 
 async def main():
-    log("system: main loop starting")
-    wifi_state = await wifi_connect()
+    global _standup_done
 
-    # 起立流程（联网后、启动服务前执行）
-    log("system: starting standup sequence")
+    log("system: V2 main loop starting")
+    log("system: balance period={}ms, imu period={}ms".format(
+        BALANCE_PERIOD_MS, IMU_PERIOD_MS))
+
+    # ============================================================
+    # Phase 1: 启动 IMU 采样（立即开始，无需网络）
+    # ============================================================
+    asyncio.create_task(imu_task())
+    log("system: IMU task started ({}Hz)".format(1000 // IMU_PERIOD_MS))
+
+    # 等 IMU 预热（~200ms 收集初始姿态数据）
+    await asyncio.sleep_ms(200)
+
+    # ============================================================
+    # Phase 2: 舵机检测 + 起立（无需网络）
+    # ============================================================
+    log("system: starting standup sequence (no network required)")
     try:
-        import _thread
-        _thread.start_new_thread(startup.execute, ())
-    except ImportError:
-        startup.execute()
+        standup_ok = startup.execute()
+        if standup_ok:
+            log("system: standup SUCCESS")
+        else:
+            log("system: standup FAILED, balance may be limited")
+    except Exception as e:
+        log("system: standup error: {}".format(e))
 
+    # 标记起立完成 → 平衡任务开始工作
+    _standup_done = True
+
+    # ============================================================
+    # Phase 3: 启动平衡控制（核心实时环，无需网络）
+    # ============================================================
+    asyncio.create_task(balance_task())
+    asyncio.create_task(interpolation_task())
+    log("system: balance + interpolation tasks started")
+
+    # ============================================================
+    # Phase 4: 网络层（并行启动，不阻塞平衡控制）
+    # ============================================================
+    # WiFi 连接在后台进行，失败不影响机器人平衡
+    asyncio.create_task(_wifi_connect_bg())
+
+    # 启动所有网络服务（即使 WiFi 未连接也启动，等连接后自动工作）
     asyncio.create_task(udp_server())
     asyncio.create_task(telemetry_task())
-    asyncio.create_task(imu_task())
-    asyncio.create_task(balance_task())
     asyncio.create_task(servo_poll_task())
-    asyncio.create_task(interpolation_task())
     asyncio.create_task(ws_task())
     asyncio.create_task(http_server())
     asyncio.create_task(device_cleanup_task())
 
+    # BLE 配网（始终启动，即使 WiFi 已连接）
     ble_setup()
     asyncio.create_task(ble_status_task())
-    update_ble_wifi_status(wifi_state)
 
-    log("system: all services started")
+    log("system: all services started (balance runs independently of network)")
     while True:
         await asyncio.sleep_ms(1000)
+
+
+async def _wifi_connect_bg():
+    """后台 WiFi 连接 — 不阻塞核心控制环。"""
+    try:
+        wifi_state = await wifi_connect()
+        update_ble_wifi_status(wifi_state)
+        if wifi_state.get("wifi_ok"):
+            log("network: WiFi connected ip={}".format(wifi_state.get("ip")))
+        else:
+            log("network: WiFi not connected (balance still active)")
+    except Exception as e:
+        log("network: WiFi connect error: {} (balance still active)".format(e))
 
 
 if __name__ == "__main__":

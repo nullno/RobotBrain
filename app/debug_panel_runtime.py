@@ -268,11 +268,11 @@ def refresh_servo_status(owner):
 
     app = App.get_running_app()
 
-    # 通过 wifi_servo 获取状态，始终构建全部 25 张卡片
+    # V2: 直接读取后台遥测缓存（零阻塞），不再调用 request_status(timeout=1.0)
     try:
         ctrl = getattr(app, "wifi_servo", None) or get_wifi_servo()
         if ctrl and ctrl.is_connected:
-            st = ctrl.request_status(timeout=1.0)
+            st = ctrl.get_cached_status()
             if st and "servos" in st:
                 online_servos = st.get("servos", {})
                 cards = []
@@ -308,14 +308,14 @@ def refresh_servo_status(owner):
     try:
         runtime_profile = str(getattr(app, "_runtime_profile", "") or "").lower()
         if runtime_profile == "mobile":
-            owner._status_cache_ttl = float(max(1.8, getattr(owner, "_status_cache_ttl", 1.2) or 1.2))
+            owner._status_cache_ttl = float(max(1.2, getattr(owner, "_status_cache_ttl", 0.8) or 0.8))
     except Exception:
         pass
 
     if (
         owner._status_cards_cache is not None
         and (now - float(getattr(owner, "_status_cards_cache_time", 0.0) or 0.0))
-        < float(getattr(owner, "_status_cache_ttl", 1.2) or 1.2)
+        < float(getattr(owner, "_status_cache_ttl", 0.8) or 0.8)
     ):
         cards = list(owner._status_cards_cache)
 

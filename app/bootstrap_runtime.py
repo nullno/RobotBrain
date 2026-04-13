@@ -161,7 +161,7 @@ def init_runtime_loops(app):
         runtime_profile = "mobile" if platform == "android" else "desktop"
     app._runtime_profile = runtime_profile
 
-    update_interval = 0.12 if runtime_profile == "mobile" else 0.1
+    update_interval = 0.12 if runtime_profile == "mobile" else 0.08
     Clock.schedule_interval(app._update_loop, update_interval)
 
     # 连续硬件同步默认随 wifi_servo 连接状态自动开启
@@ -182,12 +182,12 @@ def init_runtime_loops(app):
             getattr(app, "_sync_compute_idle_period", 0.35) or 0.35
         )
     else:
-        app._gyro_ui_period = float(getattr(app, "_gyro_ui_period", 0.12) or 0.12)
+        app._gyro_ui_period = float(getattr(app, "_gyro_ui_period", 0.08) or 0.08)
         app._sync_compute_pose_threshold_deg = float(
-            getattr(app, "_sync_compute_pose_threshold_deg", 0.16) or 0.16
+            getattr(app, "_sync_compute_pose_threshold_deg", 0.12) or 0.12
         )
         app._sync_compute_idle_period = float(
-            getattr(app, "_sync_compute_idle_period", 0.22) or 0.22
+            getattr(app, "_sync_compute_idle_period", 0.18) or 0.18
         )
 
     # 发布/移动端默认关闭演示表情循环，减少主线程和 GPU 抢占
