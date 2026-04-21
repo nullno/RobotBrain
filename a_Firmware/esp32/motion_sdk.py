@@ -507,11 +507,12 @@ class MotionSDK:
         pose[11] = 1500
         self._execute_smooth([pose], [600], steps_per_frame=4)
 
-    def wave(self):
-        """挥手"""
+    def wave_right(self):
+        """右臂挥手"""
         base = dict(self.base_positions)
         # 抬起右臂
         p1 = dict(base)
+        p1[8] = 1200   # 右肩前后（前伸）
         p1[9] = 1200   # 右肩侧举（高举）
         p1[10] = 2048
         p1[11] = 2200  # 右肘微屈
@@ -528,6 +529,35 @@ class MotionSDK:
             [400, 250, 250, 250, 250, 400],
             steps_per_frame=3
         )
+
+    def wave_left(self):
+        """左臂挥手"""
+        base = dict(self.base_positions)
+        # 使用镜像映射生成左臂动作
+        p1_right = {
+            8: 1200,   # 右肩前后
+            9: 1200,   # 右肩侧举
+            10: 2048,
+            11: 2200,  # 右肘微屈
+        }
+        p1 = dict(base)
+        p1.update(_mirror_pose(p1_right, ARM_MIRROR))
+
+        p2 = dict(p1)
+        p2[7] = 2400  # 左腕（镜像右腕的2400）
+
+        p3 = dict(p1)
+        p3[7] = 1700  # 左腕（镜像右腕的1700）
+
+        self._execute_smooth(
+            [p1, p2, p3, p2, p3, dict(base)],
+            [400, 250, 250, 250, 250, 400],
+            steps_per_frame=3
+        )
+
+    def wave(self):
+        """挥手（右臂，向后兼容）"""
+        self.wave_right()
 
     def shake_head(self):
         """摇头"""
@@ -598,13 +628,29 @@ class MotionSDK:
             steps_per_frame=2
         )
 
-    def think(self):
-        """思考（手托下巴）"""
+    def think_right(self):
+        """思考（右手托下巴）"""
         pose = dict(self.base_positions)
-        pose[9] = 1400   # 右肩侧举
+        pose[8] = 1400   # 右肩侧举
         pose[11] = 2600  # 右肘深屈
-        pose[2] = 1850   # 微低头
+        pose[2] = 1850   # 低下巴
         self._execute_smooth([pose], [700], steps_per_frame=4)
+
+    def think_left(self):
+        """思考（左手托下巴）"""
+        pose = dict(self.base_positions)
+        # 使用镜像映射生成左手托下巴的动作
+        pose_right = {
+            8: 1400,   # 右肩侧举
+            11: 2600,  # 右肘深屈
+        }
+        pose.update(_mirror_pose(pose_right, ARM_MIRROR))
+        pose[2] = 1850   # 低下巴
+        self._execute_smooth([pose], [700], steps_per_frame=4)
+
+    def think(self):
+        """思考（右手，向后兼容）"""
+        self.think_right()
 
     def make_heart(self):
         """比爱心（双手在头顶合拢成心形）"""
@@ -662,6 +708,30 @@ class MotionSDK:
 
         self._execute_smooth([p1, p2], [500, 600], steps_per_frame=5)
 
+    def golden_rooster_right(self):
+        """金鸡独立（右脚站立，左腿抬起）"""
+        base = dict(self.base_positions)
+
+        # 重心先移到右脚（加大侧移）
+        p1 = dict(base)
+        p1[18] = 1850   # 踝侧移到右
+        p1[24] = 1850
+        # 双臂展开保持平衡
+        p1[4] = 1400    # 左臂扬起
+        p1[9] = 2600    # 右臂内收
+        # 支撑腿微弯膝增加稳定性
+        p1[23] = _safe_pos(23, base.get(23, 2048) - 50)
+        p1[21] = _safe_pos(21, base.get(21, 2048) + 30)
+        p1[25] = _safe_pos(25, base.get(25, 2048) + 20)
+
+        # 抬起左腿
+        p2 = dict(p1)
+        p2[15] = 2600   # 左髋前屈
+        p2[17] = 1400   # 左膝弯曲
+        p2[19] = 2400   # 左踝
+
+        self._execute_smooth([p1, p2], [600, 800], steps_per_frame=5)
+
     def golden_rooster(self):
         """金鸡独立（左脚站立，右腿抬起）"""
         base = dict(self.base_positions)
@@ -701,14 +771,27 @@ class MotionSDK:
 
         self._execute_smooth([pose], [800], steps_per_frame=5)
 
-    def one_hand_handstand(self):
-        """单手倒立（安全演示：单臂高举）"""
+    def one_hand_handstand_left(self):
+        """单手倒立（左臂高举）"""
         base = dict(self.base_positions)
         pose = dict(base)
         pose[4] = 2900   # 左臂高举
         pose[6] = 2048
         pose[9] = 1500   # 右臂自然
         self._execute_smooth([pose], [800], steps_per_frame=5)
+
+    def one_hand_handstand_right(self):
+        """单手倒立（右臂高举）"""
+        base = dict(self.base_positions)
+        pose = dict(base)
+        pose[4] = 1500   # 左臂自然
+        pose[9] = 2900   # 右臂高举
+        pose[11] = 2048
+        self._execute_smooth([pose], [800], steps_per_frame=5)
+
+    def one_hand_handstand(self):
+        """单手倒立（左臂，向后兼容）"""
+        self.one_hand_handstand_left()
 
     def crawl(self):
         """爬行姿态（深蹲 + 双臂前伸）"""
@@ -809,12 +892,12 @@ class MotionSDK:
         """左脚踢"""
         base = dict(self.base_positions)
 
-        # 重心移右
+        # 重心移右（支撑右脚）
         p1 = dict(base)
         p1[18] = _safe_pos(18, 2048 + 70)
         p1[24] = _safe_pos(24, 2048 + 70)
-        p1[4] = 2600  # 展臂平衡
-        p1[9] = 1400
+        p1[4] = 1600   # 左肩侧举（展开）
+        p1[9] = 2400   # 右肩侧举（收缩）
 
         # 抬左腿
         p2 = dict(p1)
@@ -836,19 +919,20 @@ class MotionSDK:
         """右脚踢"""
         base = dict(self.base_positions)
 
+        # 重心移左（支撑左脚）
         p1 = dict(base)
         p1[18] = _safe_pos(18, 2048 - 70)
         p1[24] = _safe_pos(24, 2048 - 70)
-        p1[4] = 2600
-        p1[9] = 1400
+        p1[4] = 2400   # 左肩侧举（收缩）
+        p1[9] = 1600   # 右肩侧举（展开）
 
         p2 = dict(p1)
-        p2[21] = 2500
-        p2[23] = 1800
+        p2[21] = 2500  # 右髋前屈
+        p2[23] = 1800  # 右膝屈膝蓄力
 
         p3 = dict(p2)
-        p3[21] = 2700
-        p3[23] = 2048
+        p3[21] = 2700  # 右髋大幅前屈
+        p3[23] = 2048  # 右膝伸膝踢出
 
         self._execute_smooth(
             [p1, p2, p3, p1, dict(base)],
