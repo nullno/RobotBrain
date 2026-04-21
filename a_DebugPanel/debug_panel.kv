@@ -301,6 +301,34 @@
                                 valign: 'middle'
                                 text_size: self.size
                                 font_name: root.font_path if root.font_path else ''
+                            Label:
+                                text: '电流(mA)'
+                                color: 0.78, 0.9, 1, 1
+                                halign: 'left'
+                                valign: 'middle'
+                                text_size: self.size
+                                font_name: root.font_path if root.font_path else ''
+                            Label:
+                                text: root.servo_torque_display
+                                color: 0.95, 1, 1, 1
+                                halign: 'left'
+                                valign: 'middle'
+                                text_size: self.size
+                                font_name: root.font_path if root.font_path else ''
+                            Label:
+                                text: '最大扭矩'
+                                color: 0.78, 0.9, 1, 1
+                                halign: 'left'
+                                valign: 'middle'
+                                text_size: self.size
+                                font_name: root.font_path if root.font_path else ''
+                            Label:
+                                text: root.servo_torque_upperb_display
+                                color: 0.95, 1, 1, 1
+                                halign: 'left'
+                                valign: 'middle'
+                                text_size: self.size
+                                font_name: root.font_path if root.font_path else ''
 
         # 右上：设置操作
         BoxLayout:
@@ -451,6 +479,38 @@
                         size_hint_y: None
                         height: dp(40)
                         spacing: dp(8)
+                        Label:
+                            text: '扭矩上限'
+                            size_hint_x: 0.3
+                            halign: 'left'
+                            valign: 'middle'
+                            text_size: self.size
+                            color: 0.78, 0.88, 1, 1
+                            font_name: root.font_path if root.font_path else ''
+                        TextInput:
+                            id: torque_input
+                            text: '1000'
+                            hint_text: '0 - 3000'
+                            input_filter: 'int'
+                            multiline: False
+                            halign: 'center'
+                            padding: [dp(8), (self.height - self.line_height) / 2]
+                            background_normal: ''
+                            background_color: 0.14, 0.18, 0.22, 1
+                            foreground_color: 0.9, 0.96, 1, 1
+                            cursor_color: 0.35, 0.78, 1, 1
+                            font_name: root.font_path if root.font_path else ''
+                            on_parent: root.torque_input = self
+                        BaseButton:
+                            text: '设置扭矩'
+                            size_hint_x: 0.38
+                            font_name: root.font_path if root.font_path else ''
+                            on_release: root.on_set_torque()
+
+                    BoxLayout:
+                        size_hint_y: None
+                        height: dp(40)
+                        spacing: dp(8)
                         BaseButton:
                             text: '位置归零'
                             font_name: root.font_path if root.font_path else ''
@@ -459,6 +519,31 @@
                             text: '设置中位'
                             font_name: root.font_path if root.font_path else ''
                             on_release: root.on_set_mid()
+
+                    BoxLayout:
+                        size_hint_y: None
+                        height: dp(40)
+                        spacing: dp(8)
+                        Button:
+                            text: '恢复出厂设置'
+                            font_name: root.font_path if root.font_path else ''
+                            background_normal: ''
+                            background_down: ''
+                            background_color: 0, 0, 0, 0
+                            color: 1, 1, 1, 1
+                            on_release: root.on_factory_reset()
+                            canvas.before:
+                                Color:
+                                    rgba: 0.18, 0.06, 0.06, 1
+                                RoundedRectangle:
+                                    pos: self.pos
+                                    size: self.size
+                                    radius: [10]
+                                Color:
+                                    rgba: 1.0, 0.25, 0.2, 0.75
+                                Line:
+                                    rounded_rectangle: (self.x, self.y, self.width, self.height, 10)
+                                    width: 1.1
 
         # 左下：日志
         BoxLayout:

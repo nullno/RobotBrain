@@ -67,6 +67,7 @@ class DebugPanelRoot(BoxLayout):
     log_container = ObjectProperty(None)
     torque_btn = ObjectProperty(None, allownone=True)
     mode_btn = ObjectProperty(None, allownone=True)
+    torque_input = ObjectProperty(None, allownone=True)
 
     font_path = StringProperty('')
     accent = ListProperty([0.0, 0.9, 1.0, 0.85])
@@ -79,6 +80,8 @@ class DebugPanelRoot(BoxLayout):
     servo_temp_display = StringProperty('--')
     servo_voltage_display = StringProperty('--')
     servo_speed_display = StringProperty('--')
+    servo_torque_display = StringProperty('--')
+    servo_torque_upperb_display = StringProperty('--')
     connection_text = StringProperty('未连接')
     servo_type_display = StringProperty('360°')
     servo_scan_display = StringProperty('未扫描')
@@ -175,7 +178,7 @@ class DebugPanelRoot(BoxLayout):
         if self.status_label:
             self.status_label.text = reason
         self.connection_text = '未连接'
-        self._update_status_fields(angle='--', voltage='--', temp='--', speed='--')
+        self._update_status_fields(angle='--', voltage='--', temp='--', speed='--', torque='--', torque_upperb='--')
         self._torque_enabled = None
         self._servo_mode_servo = None
         self._update_toggle_labels()
@@ -340,6 +343,47 @@ class DebugPanelRoot(BoxLayout):
         finally:
             self._update_toggle_labels()
 
+    def on_set_torque(self):
+        """设置最大扭矩上限，范围 [0, 3000]"""
+        sid = self._require_selected_id()
+        if sid is None:
+            return
+        try:
+            raw = (self.torque_input.text or '').strip() if self.torque_input else ''
+            value = int(raw)
+            if not (0 <= value <= 3000):
+                raise ValueError('扭矩上限须在 0~3000 范围内')
+        except ValueError as e:
+            self.status_label.text = f'扭矩值无效: {e}'
+            UniversalTip(message=f'扭矩值无效：{e}').open()
+            return
+        try:
+            if hasattr(self.uart_mgr, 'set_torque_upperb'):
+                self.uart_mgr.set_torque_upperb(sid, value)
+            self.status_label.text = f'ID {sid} 扭矩上限 -> {value}'
+            RuntimeStatusLogger.log_action('设置扭矩上限', f'ID={sid} 值={value}')
+            UniversalTip(message=f'ID {sid} 扭矩上限已设为 {value}').open()
+        except Exception as e:
+            self.status_label.text = f'扭矩设置错误: {e}'
+            RuntimeStatusLogger.log_error(e)
+
+    def on_factory_reset(self):
+        """恢复出厂设置"""
+        sid = self._require_selected_id()
+        if sid is None:
+            return
+        try:
+            if hasattr(self.uart_mgr, 'reset'):
+                self.uart_mgr.reset(sid)
+            self.status_label.text = f'ID {sid} 已恢复出厂设置'
+            RuntimeStatusLogger.log_action('恢复出厂设置', f'ID={sid}')
+            UniversalTip(message=f'ID {sid} 恢复出厂设置指令已发送', title='出厂设置').open()
+            # 重新扫描以获取新状态
+            self.scan_servos(max_id=30)
+        except Exception as e:
+            self.status_label.text = f'恢复出厂设置失败: {e}'
+            RuntimeStatusLogger.log_error(e)
+
 
     def on_set_mid(self):
         sid = self._require_selected_id()
@@ -384,6 +428,7 @@ class DebugPanelRoot(BoxLayout):
                 temp = None
                 volt = None
                 vel = None
+                torque_ma = None
                 try:
                     if hasattr(self.uart_mgr, 'get_temperature'):
                         temp = self.uart_mgr.get_temperature(sid)
@@ -399,6 +444,17 @@ class DebugPanelRoot(BoxLayout):
                         vel = self.uart_mgr.get_velocity(sid)
                 except Exception:
                     vel = None
+                try:
+                    if hasattr(self.uart_mgr, 'read_data_by_name'):
+                        torque_ma = self.uart_mgr.read_data_by_name(sid, 'ELECTRIC_CURRENT_MA')
+                except Exception:
+                    torque_ma = None
+                torque_upperb = None
+                try:
+                    if hasattr(self.uart_mgr, 'read_data_by_name'):
+                        torque_upperb = self.uart_mgr.read_data_by_name(sid, 'TORQUE_UPPERB')
+                except Exception:
+                    torque_upperb = None
                 # keep torque/mode state unknown unless explicitly toggled
 
                 ang_int = int(round(angle))
@@ -418,6 +474,8 @@ class DebugPanelRoot(BoxLayout):
                     voltage=self._format_voltage(volt),
                     temp=self._format_temp(temp),
                     speed=self._format_speed(vel),
+                    torque=self._format_torque(torque_ma),
+                    torque_upperb=self._format_torque_upperb(torque_upperb),
                 )
         except Exception as e:
             self.status_label.text = f'错误: {e}'
@@ -511,7 +569,7 @@ class DebugPanelRoot(BoxLayout):
             self.angle_input.hint_text = f'0 - {int(cap)}'
         self.servo_type_display = f"{int(cap)}°"
 
-    def _update_status_fields(self, servo_id=None, angle=None, voltage=None, temp=None, speed=None):
+    def _update_status_fields(self, servo_id=None, angle=None, voltage=None, temp=None, speed=None, torque=None, torque_upperb=None):
         if servo_id is not None:
             self.servo_id_display = str(servo_id)
         if angle is not None:
@@ -525,6 +583,10 @@ class DebugPanelRoot(BoxLayout):
             self.servo_temp_display = str(temp)
         if speed is not None:
             self.servo_speed_display = str(speed)
+        if torque is not None:
+            self.servo_torque_display = str(torque)
+        if torque_upperb is not None:
+            self.servo_torque_upperb_display = str(torque_upperb)
 
     def _update_toggle_labels(self):
         torque_state = getattr(self, '_torque_enabled', None)
@@ -567,6 +629,20 @@ class DebugPanelRoot(BoxLayout):
         except Exception:
             return '--'
         return f'{v:.1f}°/s'
+
+    def _format_torque(self, raw):
+        try:
+            v = float(raw)
+        except Exception:
+            return '--'
+        return f'{v:.0f}mA'
+
+    def _format_torque_upperb(self, raw):
+        try:
+            v = int(raw)
+        except Exception:
+            return '--'
+        return str(v)
 
     def _angle_to_position(self, angle, cap):
         try:
@@ -663,7 +739,7 @@ class DebugPanelRoot(BoxLayout):
         self.servo_id_display = '--'
         if self.angle_input:
             self.angle_input.text = ''
-        self._update_status_fields(angle='--', voltage='--', temp='--', speed='--')
+        self._update_status_fields(angle='--', voltage='--', temp='--', speed='--', torque='--', torque_upperb='--')
         self.servo_scan_display = '未扫描'
         self.servo_scan_count = '0'
         if self.new_id_input:
