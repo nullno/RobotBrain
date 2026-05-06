@@ -979,3 +979,421 @@ class MotionSDK:
     def bow(self):
         """鞠躬致敬"""
         self.bend_over()
+
+    # =================================================================
+    #  扩展动作库：Greetings / Social
+    # =================================================================
+
+    def salute(self):
+        """敬礼（右臂举至太阳穴）"""
+        base = dict(self.base_positions)
+        # 右臂上举至头侧
+        p1 = dict(base)
+        p1[8] = _safe_pos(8, 1350)   # 右肩前伸
+        p1[9] = _safe_pos(9, 1150)   # 右肩举高（手近头侧）
+        p1[10] = _safe_pos(10, 2100) # 上臂微旋
+        p1[11] = _safe_pos(11, 2550) # 肘深屈（手在太阳穴附近）
+        p1[12] = _safe_pos(12, 2100) # 腕直（敬礼手型）
+
+        # 微微抬头，保持敬礼姿态
+        p2 = dict(p1)
+        p2[2] = _safe_pos(2, 1900)   # 头微抬
+
+        self._execute_smooth(
+            [p1, p2, p1, dict(base)],
+            [400, 600, 600, 500],
+            steps_per_frame=4
+        )
+
+    def clap(self):
+        """拍手（双手在胸前合拢拍击）"""
+        base = dict(self.base_positions)
+        # 双臂张开
+        p_open = dict(base)
+        p_open[3] = _safe_pos(3, 1500)   # 左肩前
+        p_open[4] = _safe_pos(4, 2100)   # 左臂胸前高度
+        p_open[6] = _safe_pos(6, 1750)   # 左肘微屈
+        p_open[8] = _safe_pos(8, 2600)   # 右肩后展
+        p_open[9] = _safe_pos(9, 2000)   # 右臂胸前高度
+        p_open[11] = _safe_pos(11, 1750) # 右肘微屈
+
+        # 双手合拢（拍击）
+        p_clap = dict(base)
+        p_clap[3] = _safe_pos(3, 1700)   # 左臂向中线
+        p_clap[8] = _safe_pos(8, 2400)   # 右臂向中线
+        p_clap[6] = _safe_pos(6, 2200)   # 左肘屈（双手靠拢）
+        p_clap[11] = _safe_pos(11, 2200) # 右肘屈
+        p_clap[4] = _safe_pos(4, 2048)
+        p_clap[9] = _safe_pos(9, 2048)
+
+        self._execute_smooth(
+            [p_open, p_clap, p_open, p_clap, p_open, p_clap, dict(base)],
+            [300, 200, 200, 200, 200, 200, 400],
+            steps_per_frame=3
+        )
+
+    def greeting(self):
+        """问候（鞠躬+手放胸前+点头）"""
+        base = dict(self.base_positions)
+
+        # 阶段1：微鞠躬
+        p1 = dict(base)
+        p1[15] = _safe_pos(15, 1980) # 髋微前倾
+        p1[21] = _safe_pos(21, 1980)
+        p1[2] = _safe_pos(2, 2150)   # 头微低
+
+        # 阶段2：深鞠躬 + 右手放胸前
+        p2 = dict(p1)
+        p2[15] = _safe_pos(15, 1900)
+        p2[21] = _safe_pos(21, 1900)
+        p2[8] = _safe_pos(8, 2400)   # 右手移至胸前
+        p2[9] = _safe_pos(9, 2100)
+        p2[11] = _safe_pos(11, 2500) # 肘屈（手贴心口）
+
+        # 阶段3：起身 + 抬头致意
+        p3 = dict(base)
+        p3[2] = _safe_pos(2, 1900)   # 头微抬
+        p3[8] = _safe_pos(8, 2400)
+        p3[9] = _safe_pos(9, 2100)
+        p3[11] = _safe_pos(11, 2500)
+
+        # 阶段4：点头
+        p4 = dict(p3)
+        p4[2] = _safe_pos(2, 2200)   # 头低
+
+        self._execute_smooth(
+            [p1, p2, p3, p4, p3, dict(base)],
+            [400, 500, 400, 250, 250, 400],
+            steps_per_frame=4
+        )
+
+    def point_right(self):
+        """右手指向"""
+        base = dict(self.base_positions)
+        pose = dict(base)
+        pose[8] = _safe_pos(8, 1350)   # 右肩前伸
+        pose[9] = _safe_pos(9, 1980)   # 右臂齐肩高（水平指向）
+        pose[10] = _safe_pos(10, 2048) # 上臂中位
+        pose[11] = _safe_pos(11, 1450) # 肘近伸直（手指远方）
+        pose[12] = _safe_pos(12, 2048) # 腕中位
+        pose[2] = _safe_pos(2, 2000)   # 头微微转向指向方向
+
+        self._execute_smooth([pose], [600], steps_per_frame=4)
+
+    def point_left(self):
+        """左手指向（使用镜像映射）"""
+        base = dict(self.base_positions)
+        right_pose = {
+            8: 1350,   # 右肩前伸
+            9: 1980,   # 右臂齐肩高
+            10: 2048,
+            11: 1450,  # 肘近伸直
+        }
+        pose = dict(base)
+        pose.update(_mirror_pose(right_pose, ARM_MIRROR))
+        pose[2] = _safe_pos(2, 2000)   # 头微微转向
+
+        self._execute_smooth([pose], [600], steps_per_frame=4)
+
+    def point(self):
+        """指向（右手，向后兼容）"""
+        self.point_right()
+
+    # =================================================================
+    #  扩展动作库：Exercises（运动健身）
+    # =================================================================
+
+    def stretch(self):
+        """伸懒腰（双臂上举，全身伸展）"""
+        base = dict(self.base_positions)
+
+        # 阶段1：双臂开始上举
+        p1 = dict(base)
+        p1[4] = _safe_pos(4, 2600)   # 左臂上举中段
+        p1[9] = _safe_pos(9, 1400)   # 右臂上举中段
+        p1[6] = _safe_pos(6, 1600)   # 左肘伸展
+        p1[11] = _safe_pos(11, 1600) # 右肘伸展
+        p1[2] = _safe_pos(2, 1800)   # 仰头
+        p1[15] = _safe_pos(15, 2020) # 微挺髋
+        p1[21] = _safe_pos(21, 2020)
+
+        # 阶段2：完全伸展（手臂打直朝天）
+        p2 = dict(p1)
+        p2[4] = _safe_pos(4, 2900)   # 左臂最高
+        p2[9] = _safe_pos(9, 1100)   # 右臂最高
+        p2[6] = _safe_pos(6, 1400)   # 左肘近直
+        p2[11] = _safe_pos(11, 1300) # 右肘近直
+        p2[2] = _safe_pos(2, 1700)   # 头完全后仰
+        p2[13] = _safe_pos(13, 2080) # 腰微伸展
+
+        # 阶段3：保持伸展
+        p3 = dict(p2)
+
+        self._execute_smooth(
+            [p1, p2, p3, p1, dict(base)],
+            [500, 600, 800, 500, 500],
+            steps_per_frame=5
+        )
+
+    def head_exercise(self):
+        """头部运动（颈部绕环）"""
+        base = dict(self.base_positions)
+
+        p1 = dict(base); p1[1] = _safe_pos(1, 1750)                     # 头左
+        p2 = dict(base); p2[1] = _safe_pos(1, 1850); p2[2] = _safe_pos(2, 2220)  # 头左下
+        p3 = dict(base); p3[2] = _safe_pos(2, 2280)                     # 头正下
+        p4 = dict(base); p4[1] = _safe_pos(1, 2280); p4[2] = _safe_pos(2, 2220)  # 头右下
+        p5 = dict(base); p5[1] = _safe_pos(1, 2380)                     # 头右
+        p6 = dict(base); p6[1] = _safe_pos(1, 2280); p6[2] = _safe_pos(2, 1850)  # 头右上
+        p7 = dict(base); p7[2] = _safe_pos(2, 1750)                     # 头正上
+        p8 = dict(base); p8[1] = _safe_pos(1, 1850); p8[2] = _safe_pos(2, 1850)  # 头左上
+
+        self._execute_smooth(
+            [p1, p2, p3, p4, p5, p6, p7, p8, dict(base)],
+            [250, 250, 250, 250, 250, 250, 250, 250, 250],
+            steps_per_frame=3
+        )
+
+    def waist_twist(self):
+        """扭腰（左右转腰 + 手臂随摆）"""
+        base = dict(self.base_positions)
+
+        # 左转：腰左旋，臂右摆
+        p_left = dict(base)
+        p_left[13] = _safe_pos(13, 1800)  # 腰左旋
+        p_left[3] = _safe_pos(3, 2200)    # 左肩后（臂右摆）
+        p_left[8] = _safe_pos(8, 2400)    # 右肩前
+        p_left[4] = _safe_pos(4, 2150)    # 左臂微外展
+        p_left[9] = _safe_pos(9, 1800)    # 右臂微外展
+
+        # 右转：腰右旋，臂左摆
+        p_right = dict(base)
+        p_right[13] = _safe_pos(13, 2300) # 腰右旋
+        p_right[3] = _safe_pos(3, 1800)   # 左肩前（臂左摆）
+        p_right[8] = _safe_pos(8, 1800)   # 右肩后
+        p_right[4] = _safe_pos(4, 1800)   # 左臂内收
+        p_right[9] = _safe_pos(9, 2100)   # 右臂内收
+
+        self._execute_smooth(
+            [p_left, p_right, p_left, p_right, p_left, p_right, dict(base)],
+            [300, 300, 300, 300, 300, 300, 400],
+            steps_per_frame=3
+        )
+
+    # =================================================================
+    #  扩展动作库：Emotional Expressions（情绪表达）
+    # =================================================================
+
+    def cheer(self):
+        """欢呼（双臂上举 + 身体微弹）"""
+        base = dict(self.base_positions)
+
+        # 双臂高举
+        p_up = dict(base)
+        p_up[4] = _safe_pos(4, 2800)   # 左臂高举
+        p_up[9] = _safe_pos(9, 1150)   # 右臂高举
+        p_up[6] = _safe_pos(6, 1400)   # 左肘近直
+        p_up[11] = _safe_pos(11, 1250) # 右肘近直
+        p_up[2] = _safe_pos(2, 1750)   # 仰头
+        p_up[15] = _safe_pos(15, 2020) # 挺身
+        p_up[21] = _safe_pos(21, 2020)
+
+        # 微蹲弹动（欢呼跳跃感）
+        p_down = dict(p_up)
+        p_down[17] = _safe_pos(17, 1850) # 微屈膝
+        p_down[23] = _safe_pos(23, 1850)
+        p_down[15] = _safe_pos(15, 2150) # 髋微屈
+        p_down[21] = _safe_pos(21, 2150)
+
+        # 弹起
+        p_bounce = dict(p_up)
+        p_bounce[17] = _safe_pos(17, 2000)
+        p_bounce[23] = _safe_pos(23, 2000)
+        p_bounce[15] = _safe_pos(15, 2020)
+        p_bounce[21] = _safe_pos(21, 2020)
+
+        self._execute_smooth(
+            [p_up, p_down, p_bounce, p_down, p_bounce, dict(base)],
+            [300, 200, 200, 200, 200, 400],
+            steps_per_frame=3
+        )
+
+    def sad(self):
+        """悲伤（垂头、塌肩、微蹲）"""
+        base = dict(self.base_positions)
+
+        # 垂头塌肩
+        p1 = dict(base)
+        p1[2] = _safe_pos(2, 2300)   # 头深深低下
+        p1[3] = _safe_pos(3, 2400)   # 左肩前塌
+        p1[8] = _safe_pos(8, 2400)   # 右肩前塌
+        p1[4] = _safe_pos(4, 1950)   # 左臂低频下垂
+        p1[9] = _safe_pos(9, 2100)   # 右臂低频下垂
+        p1[6] = _safe_pos(6, 2400)   # 左肘内收
+        p1[11] = _safe_pos(11, 2400) # 右肘内收
+
+        # 更进一步的低落姿态
+        p2 = dict(p1)
+        p2[2] = _safe_pos(2, 2380)   # 头更低
+        p2[15] = _safe_pos(15, 1950) # 髋微沉
+        p2[21] = _safe_pos(21, 1950)
+        p2[17] = _safe_pos(17, 1950) # 膝微弯（无力感）
+        p2[23] = _safe_pos(23, 1950)
+
+        self._execute_smooth([p1, p2], [600, 400], steps_per_frame=4)
+
+    def shrug(self):
+        """耸肩（双肩耸起 + 手臂外旋摊手）"""
+        base = dict(self.base_positions)
+
+        # 耸肩摊手
+        p1 = dict(base)
+        p1[3] = _safe_pos(3, 2200)   # 左肩耸
+        p1[8] = _safe_pos(8, 2200)   # 右肩耸
+        p1[4] = _safe_pos(4, 2100)   # 左臂微外展
+        p1[9] = _safe_pos(9, 1900)   # 右臂微外展
+        p1[5] = _safe_pos(5, 2350)   # 左上臂外旋（掌心朝外）
+        p1[10] = _safe_pos(10, 1700) # 右上臂外旋（镜像）
+        p1[7] = _safe_pos(7, 2300)   # 左腕翻
+        p1[12] = _safe_pos(12, 1700) # 右腕翻
+        p1[2] = _safe_pos(2, 1950)   # 头微偏
+        p1[1] = _safe_pos(1, 2100)   # 头微侧
+
+        # 保持
+        p2 = dict(p1)
+
+        self._execute_smooth([p1, p2, dict(base)], [400, 500, 400], steps_per_frame=4)
+
+    def proud(self):
+        """骄傲挺胸（昂首、挺胸、叉腰）"""
+        base = dict(self.base_positions)
+
+        pose = dict(base)
+        pose[2] = _safe_pos(2, 1850)   # 昂首（下巴抬高）
+        pose[4] = _safe_pos(4, 1650)   # 左臂叉腰（下压后展）
+        pose[9] = _safe_pos(9, 2450)   # 右臂叉腰（镜像）
+        pose[6] = _safe_pos(6, 2550)   # 左肘外展（气势）
+        pose[11] = _safe_pos(11, 1550) # 右肘外展（镜像）
+        pose[15] = _safe_pos(15, 2050) # 挺身收髋
+        pose[21] = _safe_pos(21, 2050)
+        pose[17] = _safe_pos(17, 2050) # 腿微直（挺拔）
+        pose[23] = _safe_pos(23, 2050)
+        pose[13] = _safe_pos(13, 2048) # 腰正
+
+        self._execute_smooth([pose], [600], steps_per_frame=4)
+
+    # =================================================================
+    #  扩展动作库：Performance / Demo
+    # =================================================================
+
+    def march(self):
+        """原地踏步（交替抬腿 + 摆臂）"""
+        base = dict(self.base_positions)
+
+        # 左腿抬 + 右臂前摆
+        p1 = dict(base)
+        p1[15] = _safe_pos(15, 2500)  # 左髋屈（抬左腿）
+        p1[17] = _safe_pos(17, 1550)  # 左膝屈
+        p1[19] = _safe_pos(19, 2350)  # 左踝背屈
+        p1[3] = _safe_pos(3, 1500)    # 右臂前摆（与左腿对侧）
+        p1[8] = _safe_pos(8, 2500)    # 左臂后摆
+
+        # 中立
+        p_center = dict(base)
+
+        # 右腿抬 + 左臂前摆
+        p3 = dict(base)
+        p3[21] = _safe_pos(21, 2500)  # 右髋屈（抬右腿）
+        p3[23] = _safe_pos(23, 1550)  # 右膝屈
+        p3[25] = _safe_pos(25, 2350)  # 右踝背屈
+        p3[8] = _safe_pos(8, 1500)    # 左臂前摆（与右腿对侧）
+        p3[3] = _safe_pos(3, 2500)    # 右臂后摆
+
+        self._execute_smooth(
+            [p1, p_center, p3, p_center, p1, p_center, p3, p_center, dict(base)],
+            [250, 250, 250, 250, 250, 250, 250, 250, 300],
+            steps_per_frame=3
+        )
+
+    def dance2(self):
+        """第二套舞蹈（侧摆+挥臂+抖胯+身体wave）"""
+        base = dict(self.base_positions)
+
+        # 节拍1-2：左右侧摆
+        p1 = dict(base)
+        p1[13] = _safe_pos(13, 1900)  # 腰左
+        p1[18] = _safe_pos(18, 2200)  # 踝左倾
+        p1[24] = _safe_pos(24, 2200)
+        p1[4] = _safe_pos(4, 2700)    # 左臂上扫
+        p1[9] = _safe_pos(9, 2000)    # 右臂下
+
+        p2 = dict(base)
+        p2[13] = _safe_pos(13, 2200)  # 腰右
+        p2[18] = _safe_pos(18, 1900)  # 踝右倾
+        p2[24] = _safe_pos(24, 1900)
+        p2[4] = _safe_pos(4, 2000)    # 左臂下
+        p2[9] = _safe_pos(9, 1200)    # 右臂上扫
+
+        # 节拍3：双臂过头wave
+        p3 = dict(base)
+        p3[4] = _safe_pos(4, 2900)    # 左臂最高
+        p3[9] = _safe_pos(9, 1150)    # 右臂最高
+        p3[6] = _safe_pos(6, 1600)    # 肘微屈
+        p3[11] = _safe_pos(11, 1600)
+        p3[13] = _safe_pos(13, 2048)  # 腰回正
+
+        # 节拍4：蹲弹
+        p4 = dict(base)
+        p4[17] = _safe_pos(17, 1800)  # 屈膝
+        p4[23] = _safe_pos(23, 1800)
+        p4[15] = _safe_pos(15, 2250)  # 髋屈
+        p4[21] = _safe_pos(21, 2250)
+
+        # 节拍5-6：抖胯
+        p5 = dict(base)
+        p5[13] = _safe_pos(13, 1800)  # 腰左
+        p5[18] = _safe_pos(18, 2250)
+        p5[24] = _safe_pos(24, 2250)
+
+        p6 = dict(base)
+        p6[13] = _safe_pos(13, 2300)  # 腰右
+        p6[18] = _safe_pos(18, 1850)
+        p6[24] = _safe_pos(24, 1850)
+
+        # 节拍7-8：身体wave（腰回旋 + 头配合）
+        p7 = dict(base)
+        p7[13] = _safe_pos(13, 1900)  # 腰左前
+        p7[2] = _safe_pos(2, 2100)    # 头低
+
+        p8 = dict(base)
+        p8[13] = _safe_pos(13, 2200)  # 腰右后
+        p8[2] = _safe_pos(2, 1900)    # 头抬
+
+        self._execute_smooth(
+            [p1, p2, p1, p2, p3, p4, p5, p6, p7, p8, dict(base)],
+            [250, 250, 250, 250, 300, 300, 250, 250, 300, 300, 400],
+            steps_per_frame=3
+        )
+
+    def push_up_pose(self):
+        """俯卧撑准备姿势（身体前倾、双臂前撑）"""
+        base = dict(self.base_positions)
+
+        # 前倾 + 双臂前伸（模拟俯卧撑起始位）
+        p1 = dict(base)
+        p1[3] = _safe_pos(3, 2600)   # 左臂前伸
+        p1[8] = _safe_pos(8, 2600)   # 右臂前伸
+        p1[6] = _safe_pos(6, 1350)   # 左肘近直
+        p1[11] = _safe_pos(11, 1350) # 右肘近直
+        p1[15] = _safe_pos(15, 1850) # 髋伸展（身体前倾）
+        p1[21] = _safe_pos(21, 1850)
+        p1[17] = _safe_pos(17, 2050) # 腿打直
+        p1[23] = _safe_pos(23, 2050)
+        p1[19] = _safe_pos(19, 2200) # 踝背屈
+        p1[25] = _safe_pos(25, 2200)
+
+        # 保持 + 抬头
+        p2 = dict(p1)
+        p2[2] = _safe_pos(2, 1900)   # 头抬目视前方
+
+        self._execute_smooth([p1, p2], [600, 500], steps_per_frame=5)

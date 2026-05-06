@@ -52,6 +52,25 @@ MOTION_ACTIONS = [
     ("右移", "side_right", "4"),
     ("跳舞", "dance", "5"),
     ("鞠躬", "bow", "6"),
+    # -- Greetings / Social --
+    ("敬礼", "salute", "R"),
+    ("拍手", "clap", "7"),
+    ("问候", "greeting", "8"),
+    ("右指", "point_right", "9"),
+    ("左指", "point_left", "q"),
+    # -- Exercises --
+    ("伸懒腰", "stretch", "0"),
+    ("头部运动", "head_exercise", "-"),
+    ("扭腰", "waist_twist", "="),
+    # -- Emotional --
+    ("欢呼", "cheer", "["),
+    ("悲伤", "sad", "]"),
+    ("耸肩", "shrug", "\\"),
+    ("骄傲", "proud", ";"),
+    # -- Performance --
+    ("踏步", "march", "'"),
+    ("舞蹈2", "dance2", ","),
+    ("俯卧撑", "push_up_pose", "."),
 ]
 
 # 键盘→动作 映射
