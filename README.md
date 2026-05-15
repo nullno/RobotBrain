@@ -76,3 +76,32 @@ python main.py --mode phone #手机应用调试
 运行日志输出到 `logs/robot_dashboard.log`。
 
 
+## urdf tree
+world (仿真世界大地坐标系)
+  │
+  └── [floating 关节] (允许机器人在三维空间自由移动和旋转)
+        │
+        └── base_link (通常位于 Pelvis 几何中心，Z上, X前, Y左)
+              │
+              ├── [fixed 关节] ── imu_link (惯性传感器，方向与 base_link 完全对齐)
+              │
+              ├── [腰部关节] (Yaw/Pitch/Roll)
+              │     └── torso_link (躯干/胸腔)
+              │           │
+              │           ├── [左肩关节] ── left_shoulder_link ── [左肘关节] ── left_arm_link ...
+              │           ├── [右肩关节] ── right_shoulder_link ── [右肘关节] ── right_arm_link ...
+              │           └── [颈部关节] ── head_link (头部)
+              │
+              ├── [左髋关节] (Left Hip Joints: Yaw/Roll/Pitch)
+              │     └── left_thigh_link (左大腿)
+              │           └── [左膝关节] (Pitch)
+              │                 └── left_shank_link (左小腿)
+              │                       └── [左踝关节] (Pitch/Roll)
+              │                             └── left_foot_link (左脚掌)
+              │
+              └── [右髋关节] (Right Hip Joints: Yaw/Roll/Pitch)
+                    └── right_thigh_link (右大腿)
+                          └── [右膝关节] (Pitch)
+                                └── right_shank_link (右小腿)
+                                      └── [右踝关节] (Pitch/Roll)
+                                            └── right_foot_link (右脚掌)
